@@ -153,7 +153,9 @@ desktop.ini
 *.pth
 *.onnx
 *.model
-models/
+# ML model weight files (not Python source code)
+# Use specific path to avoid blocking backend/app/models/ (Python package)
+/models/
 !app/ml/
 mlruns/
 wandb/
