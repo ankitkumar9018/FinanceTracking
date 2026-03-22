@@ -79,52 +79,51 @@ pub fn run() {
             ];
             if is_first_launch {
                 sidecar_args.push("--seed".to_string());
-                println!("First launch detected — will seed demo user");
+                println!("First launch detected -- will seed demo user");
             }
 
-            let sidecar = app
+            // Try to spawn the sidecar -- don't crash the app if it fails
+            let sidecar_result = app
                 .shell()
                 .sidecar("financetracker-backend")
-                .expect("failed to create sidecar command")
-                .args(&sidecar_args);
+                .map(|cmd| cmd.args(&sidecar_args))
+                .and_then(|cmd| cmd.spawn().map_err(|e| e.into()));
 
-            let (mut rx, child) = sidecar.spawn().expect("failed to spawn backend sidecar");
-
-            // Log sidecar stdout/stderr in a background thread
-            tauri::async_runtime::spawn(async move {
-                use tauri_plugin_shell::process::CommandEvent;
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        CommandEvent::Stdout(line) => {
-                            println!("[backend] {}", String::from_utf8_lossy(&line));
+            let child = match sidecar_result {
+                Ok((mut rx, child)) => {
+                    // Log sidecar stdout/stderr in a background thread
+                    tauri::async_runtime::spawn(async move {
+                        use tauri_plugin_shell::process::CommandEvent;
+                        while let Some(event) = rx.recv().await {
+                            match event {
+                                CommandEvent::Stdout(line) => {
+                                    println!("[backend] {}", String::from_utf8_lossy(&line));
+                                }
+                                CommandEvent::Stderr(line) => {
+                                    eprintln!("[backend] {}", String::from_utf8_lossy(&line));
+                                }
+                                CommandEvent::Terminated(payload) => {
+                                    eprintln!(
+                                        "[backend] process terminated with code: {:?}, signal: {:?}",
+                                        payload.code, payload.signal
+                                    );
+                                    break;
+                                }
+                                _ => {}
+                            }
                         }
-                        CommandEvent::Stderr(line) => {
-                            eprintln!("[backend] {}", String::from_utf8_lossy(&line));
-                        }
-                        CommandEvent::Terminated(payload) => {
-                            eprintln!(
-                                "[backend] process terminated with code: {:?}, signal: {:?}",
-                                payload.code, payload.signal
-                            );
-                            break;
-                        }
-                        _ => {}
-                    }
+                    });
+                    Some(child)
                 }
-            });
+                Err(e) => {
+                    eprintln!("WARNING: Failed to spawn backend sidecar: {}", e);
+                    eprintln!("The app will open but API calls will fail.");
+                    None
+                }
+            };
 
-            // Wait for the backend to be ready
-            println!("Waiting for backend to start...");
-            if wait_for_backend(port, 30) {
-                println!("Backend is ready on port {}", port);
-            } else {
-                eprintln!("WARNING: Backend did not respond within 30 seconds");
-            }
-
-            // Create the main window with an initialization script that sets the
-            // API port BEFORE any page JavaScript runs. This avoids the race
-            // condition where eval() runs after the page JS has already resolved
-            // the API base URL to the wrong default port.
+            // Create the main window IMMEDIATELY (don't wait for backend)
+            // This ensures the user sees the app window right away.
             let init_script = format!(
                 "window.__FINANCETRACKER_API_PORT__ = {};",
                 port
@@ -145,10 +144,21 @@ pub fn run() {
             .build()
             .expect("failed to create main window");
 
+            // Wait for backend in a background thread (don't block the UI)
+            std::thread::spawn(move || {
+                println!("Waiting for backend to start...");
+                if wait_for_backend(port, 30) {
+                    println!("Backend is ready on port {}", port);
+                } else {
+                    eprintln!("WARNING: Backend did not respond within 30 seconds");
+                    eprintln!("Try running the sidecar binary manually to see errors.");
+                }
+            });
+
             // Store state for the get_api_port command
             app.manage(AppState {
                 api_port: port,
-                sidecar_child: Mutex::new(Some(child)),
+                sidecar_child: Mutex::new(child),
             });
 
             #[cfg(debug_assertions)]
