@@ -1,12 +1,11 @@
 """PyInstaller entry point for FinanceTracker backend sidecar.
 
-This wrapper forces PyInstaller to include every app module by importing
-them explicitly. PyInstaller traces imports from the entry point file,
-so listing them here guarantees they end up in the frozen binary.
+IMPORTANT: Import order matters! Models and base deps must be imported
+BEFORE app.main/app.api, because those trigger cascading imports that
+depend on app.models being available.
 
-Previous approaches (collect_submodules, hiddenimports, runtime hooks,
-noarchive) all failed on Windows. Explicit imports are the nuclear option
-that cannot fail — if Python can parse this file, the modules are included.
+Do NOT add 'import app.main' here — it cascades through the entire
+router/deps chain. It gets imported at the bottom via app.__main__.
 """
 import sys
 import os
@@ -17,17 +16,15 @@ if base not in sys.path:
     sys.path.insert(0, base)
 
 # ---------------------------------------------------------------------------
-# Force-import every app subpackage so PyInstaller MUST include them.
-# Without this, PyInstaller's analysis misses app.models on Windows.
+# PHASE 1: Base packages (no heavy dependencies)
 # ---------------------------------------------------------------------------
-
-# Core
 import app  # noqa: F401, E402
 import app.config  # noqa: F401, E402
 import app.database  # noqa: F401, E402
-import app.main  # noqa: F401, E402
 
-# Models (the package that was failing)
+# ---------------------------------------------------------------------------
+# PHASE 2: Models FIRST — these must be loaded before anything in app.api
+# ---------------------------------------------------------------------------
 import app.models  # noqa: F401, E402
 import app.models.user  # noqa: F401, E402
 import app.models.portfolio  # noqa: F401, E402
@@ -49,7 +46,9 @@ import app.models.goal  # noqa: F401, E402
 import app.models.asset  # noqa: F401, E402
 import app.models.fno_position  # noqa: F401, E402
 
-# Schemas
+# ---------------------------------------------------------------------------
+# PHASE 3: Schemas (depend on models)
+# ---------------------------------------------------------------------------
 import app.schemas  # noqa: F401, E402
 import app.schemas.auth  # noqa: F401, E402
 import app.schemas.holding  # noqa: F401, E402
@@ -71,45 +70,45 @@ import app.schemas.whatif  # noqa: F401, E402
 import app.schemas.earnings  # noqa: F401, E402
 import app.schemas.fno  # noqa: F401, E402
 
-# API
-import app.api  # noqa: F401, E402
-import app.api.deps  # noqa: F401, E402
-import app.api.v1  # noqa: F401, E402
-import app.api.v1.router  # noqa: F401, E402
-import app.api.v1.auth  # noqa: F401, E402
-import app.api.v1.portfolio  # noqa: F401, E402
-import app.api.v1.holdings  # noqa: F401, E402
-import app.api.v1.transactions  # noqa: F401, E402
-import app.api.v1.import_export  # noqa: F401, E402
-import app.api.v1.market_data  # noqa: F401, E402
-import app.api.v1.charts  # noqa: F401, E402
-import app.api.v1.alerts  # noqa: F401, E402
-import app.api.v1.watchlist  # noqa: F401, E402
-import app.api.v1.settings  # noqa: F401, E402
-import app.api.v1.tax  # noqa: F401, E402
-import app.api.v1.dividends  # noqa: F401, E402
-import app.api.v1.mutual_funds  # noqa: F401, E402
-import app.api.v1.forex  # noqa: F401, E402
-import app.api.v1.indicators  # noqa: F401, E402
-import app.api.v1.broker  # noqa: F401, E402
-import app.api.v1.ai_chat  # noqa: F401, E402
-import app.api.v1.goals  # noqa: F401, E402
-import app.api.v1.backtest  # noqa: F401, E402
-import app.api.v1.comparison  # noqa: F401, E402
-import app.api.v1.columns  # noqa: F401, E402
-import app.api.v1.net_worth  # noqa: F401, E402
-import app.api.v1.esg  # noqa: F401, E402
-import app.api.v1.whatif  # noqa: F401, E402
-import app.api.v1.earnings  # noqa: F401, E402
-import app.api.v1.fno  # noqa: F401, E402
-import app.api.v1.analytics  # noqa: F401, E402
-import app.api.v1.ipo  # noqa: F401, E402
-import app.api.ws  # noqa: F401, E402
-import app.api.ws.price_stream  # noqa: F401, E402
-import app.api.ws.alert_stream  # noqa: F401, E402
-import app.api.ws.connection_manager  # noqa: F401, E402
+# ---------------------------------------------------------------------------
+# PHASE 4: Utils, tasks, brokers, ML (leaf modules, no circular deps)
+# ---------------------------------------------------------------------------
+import app.utils  # noqa: F401, E402
+import app.utils.security  # noqa: F401, E402
+import app.utils.audit  # noqa: F401, E402
+import app.utils.rate_limiter  # noqa: F401, E402
 
-# Services
+import app.tasks  # noqa: F401, E402
+import app.tasks.celery_app  # noqa: F401, E402
+import app.tasks.fetch_prices  # noqa: F401, E402
+import app.tasks.check_alerts  # noqa: F401, E402
+import app.tasks.scheduler  # noqa: F401, E402
+
+import app.brokers  # noqa: F401, E402
+import app.brokers.base  # noqa: F401, E402
+import app.brokers.zerodha  # noqa: F401, E402
+import app.brokers.icici_direct  # noqa: F401, E402
+import app.brokers.groww  # noqa: F401, E402
+import app.brokers.angel_one  # noqa: F401, E402
+import app.brokers.upstox  # noqa: F401, E402
+import app.brokers.fivepaisa  # noqa: F401, E402
+import app.brokers.german  # noqa: F401, E402
+import app.brokers.german.deutsche_bank  # noqa: F401, E402
+import app.brokers.german.comdirect  # noqa: F401, E402
+
+import app.ml  # noqa: F401, E402
+import app.ml.technical_indicators  # noqa: F401, E402
+import app.ml.risk_calculator  # noqa: F401, E402
+import app.ml.backtester  # noqa: F401, E402
+import app.ml.portfolio_optimizer  # noqa: F401, E402
+import app.ml.price_predictor  # noqa: F401, E402
+import app.ml.anomaly_detector  # noqa: F401, E402
+import app.ml.sentiment_analyzer  # noqa: F401, E402
+import app.ml.llm_assistant  # noqa: F401, E402
+
+# ---------------------------------------------------------------------------
+# PHASE 5: Services (depend on models + schemas)
+# ---------------------------------------------------------------------------
 import app.services  # noqa: F401, E402
 import app.services.portfolio_service  # noqa: F401, E402
 import app.services.market_data_service  # noqa: F401, E402
@@ -144,45 +143,50 @@ import app.services.sheets_export_service  # noqa: F401, E402
 import app.services.xirr_service  # noqa: F401, E402
 import app.services.ipo_service  # noqa: F401, E402
 
-# Brokers
-import app.brokers  # noqa: F401, E402
-import app.brokers.base  # noqa: F401, E402
-import app.brokers.zerodha  # noqa: F401, E402
-import app.brokers.icici_direct  # noqa: F401, E402
-import app.brokers.groww  # noqa: F401, E402
-import app.brokers.angel_one  # noqa: F401, E402
-import app.brokers.upstox  # noqa: F401, E402
-import app.brokers.fivepaisa  # noqa: F401, E402
-import app.brokers.german  # noqa: F401, E402
-import app.brokers.german.deutsche_bank  # noqa: F401, E402
-import app.brokers.german.comdirect  # noqa: F401, E402
-
-# ML (graceful degradation — these use try/except internally)
-import app.ml  # noqa: F401, E402
-import app.ml.technical_indicators  # noqa: F401, E402
-import app.ml.risk_calculator  # noqa: F401, E402
-import app.ml.backtester  # noqa: F401, E402
-import app.ml.portfolio_optimizer  # noqa: F401, E402
-import app.ml.price_predictor  # noqa: F401, E402
-import app.ml.anomaly_detector  # noqa: F401, E402
-import app.ml.sentiment_analyzer  # noqa: F401, E402
-import app.ml.llm_assistant  # noqa: F401, E402
-
-# Tasks
-import app.tasks  # noqa: F401, E402
-import app.tasks.celery_app  # noqa: F401, E402
-import app.tasks.fetch_prices  # noqa: F401, E402
-import app.tasks.check_alerts  # noqa: F401, E402
-import app.tasks.scheduler  # noqa: F401, E402
-
-# Utils
-import app.utils  # noqa: F401, E402
-import app.utils.security  # noqa: F401, E402
-import app.utils.audit  # noqa: F401, E402
-import app.utils.rate_limiter  # noqa: F401, E402
+# ---------------------------------------------------------------------------
+# PHASE 6: API (depends on models + schemas + services)
+# These are imported LAST because they trigger the full dependency chain.
+# ---------------------------------------------------------------------------
+import app.api  # noqa: F401, E402
+import app.api.deps  # noqa: F401, E402
+import app.api.v1  # noqa: F401, E402
+import app.api.v1.auth  # noqa: F401, E402
+import app.api.v1.portfolio  # noqa: F401, E402
+import app.api.v1.holdings  # noqa: F401, E402
+import app.api.v1.transactions  # noqa: F401, E402
+import app.api.v1.import_export  # noqa: F401, E402
+import app.api.v1.market_data  # noqa: F401, E402
+import app.api.v1.charts  # noqa: F401, E402
+import app.api.v1.alerts  # noqa: F401, E402
+import app.api.v1.watchlist  # noqa: F401, E402
+import app.api.v1.settings  # noqa: F401, E402
+import app.api.v1.tax  # noqa: F401, E402
+import app.api.v1.dividends  # noqa: F401, E402
+import app.api.v1.mutual_funds  # noqa: F401, E402
+import app.api.v1.forex  # noqa: F401, E402
+import app.api.v1.indicators  # noqa: F401, E402
+import app.api.v1.broker  # noqa: F401, E402
+import app.api.v1.ai_chat  # noqa: F401, E402
+import app.api.v1.goals  # noqa: F401, E402
+import app.api.v1.backtest  # noqa: F401, E402
+import app.api.v1.comparison  # noqa: F401, E402
+import app.api.v1.columns  # noqa: F401, E402
+import app.api.v1.net_worth  # noqa: F401, E402
+import app.api.v1.esg  # noqa: F401, E402
+import app.api.v1.whatif  # noqa: F401, E402
+import app.api.v1.earnings  # noqa: F401, E402
+import app.api.v1.fno  # noqa: F401, E402
+import app.api.v1.analytics  # noqa: F401, E402
+import app.api.v1.ipo  # noqa: F401, E402
+import app.api.v1.router  # noqa: F401, E402
+import app.api.ws  # noqa: F401, E402
+import app.api.ws.price_stream  # noqa: F401, E402
+import app.api.ws.alert_stream  # noqa: F401, E402
+import app.api.ws.connection_manager  # noqa: F401, E402
 
 # ---------------------------------------------------------------------------
-# Now run the actual entry point
+# PHASE 7: Run the app (app.main gets imported here via __main__)
+# Do NOT add 'import app.main' above — it cascades through everything.
 # ---------------------------------------------------------------------------
 from app.__main__ import main  # noqa: E402
 
