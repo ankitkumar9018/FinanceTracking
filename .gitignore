@@ -1,0 +1,187 @@
+# =============================================================================
+# FinanceTracker .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+eggs/
+*.whl
+.Python
+develop-eggs/
+lib/
+lib64/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# uv
+.python-version
+
+# PyInstaller build output (but keep the .spec file)
+*.manifest
+
+# Cython
+cython_debug/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Jupyter
+.ipynb_checkpoints
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# -----------------------------------------------------------------------------
+# Node.js / JavaScript / TypeScript
+# -----------------------------------------------------------------------------
+node_modules/
+.pnpm-store/
+.turbo/
+.next/
+out/
+.nuxt/
+*.tsbuildinfo
+
+# -----------------------------------------------------------------------------
+# Tauri / Rust
+# -----------------------------------------------------------------------------
+target/
+*.rs.bk
+
+# Sidecar binaries (built by PyInstaller, platform-specific)
+apps/desktop/src-tauri/binaries/financetracker-backend-*
+!apps/desktop/src-tauri/binaries/.gitkeep
+apps/desktop/financetracker-backend
+
+# Desktop frontend dist (copied from web build)
+apps/desktop/dist/
+
+# -----------------------------------------------------------------------------
+# PyInstaller output
+# -----------------------------------------------------------------------------
+backend/dist/
+backend/build/
+
+# -----------------------------------------------------------------------------
+# Database
+# -----------------------------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+
+# -----------------------------------------------------------------------------
+# Environment & Secrets
+# -----------------------------------------------------------------------------
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+*.pem
+*.key
+*.cert
+credentials.json
+service-account.json
+
+# -----------------------------------------------------------------------------
+# IDE & Editors
+# -----------------------------------------------------------------------------
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# -----------------------------------------------------------------------------
+# OS Files
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# -----------------------------------------------------------------------------
+# ML / Data Science
+# -----------------------------------------------------------------------------
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.joblib
+*.pt
+*.pth
+*.onnx
+*.model
+models/
+!app/ml/
+mlruns/
+wandb/
+
+# -----------------------------------------------------------------------------
+# Logs
+# -----------------------------------------------------------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# -----------------------------------------------------------------------------
+# Build artifacts / Installers
+# -----------------------------------------------------------------------------
+*.dmg
+*.msi
+*.AppImage
+*.deb
+*.rpm
+*.snap
+
+# -----------------------------------------------------------------------------
+# Uploads & Generated Files
+# -----------------------------------------------------------------------------
+uploads/
+temp/
+tmp/
+*.xlsx.tmp
+generated-reports/

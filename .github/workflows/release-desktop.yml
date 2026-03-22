@@ -1,0 +1,118 @@
+name: Release Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: '--target aarch64-apple-darwin'
+            target_triple: aarch64-apple-darwin
+          - platform: macos-latest
+            args: '--target x86_64-apple-darwin'
+            target_triple: x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            args: ''
+            target_triple: x86_64-unknown-linux-gnu
+          - platform: windows-latest
+            args: ''
+            target_triple: x86_64-pc-windows-msvc
+          - platform: windows-latest
+            args: '--target aarch64-pc-windows-msvc'
+            target_triple: aarch64-pc-windows-msvc
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || (matrix.target_triple == 'aarch64-pc-windows-msvc' && 'aarch64-pc-windows-msvc' || '') }}
+
+      - name: Install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      # --- Backend sidecar build ---
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync
+
+      - name: Install PyInstaller
+        working-directory: backend
+        run: uv pip install pyinstaller
+
+      - name: Build backend sidecar (Unix)
+        if: runner.os != 'Windows'
+        working-directory: backend
+        run: |
+          uv run pyinstaller financetracker.spec --clean --noconfirm
+          mkdir -p ../apps/desktop/src-tauri/binaries
+          cp dist/financetracker-backend ../apps/desktop/src-tauri/binaries/financetracker-backend-${{ matrix.target_triple }}
+          chmod +x ../apps/desktop/src-tauri/binaries/financetracker-backend-${{ matrix.target_triple }}
+
+      - name: Build backend sidecar (Windows)
+        if: runner.os == 'Windows'
+        working-directory: backend
+        run: |
+          uv run pyinstaller financetracker.spec --clean --noconfirm
+          New-Item -ItemType Directory -Force -Path ../apps/desktop/src-tauri/binaries
+          Copy-Item dist/financetracker-backend.exe ../apps/desktop/src-tauri/binaries/financetracker-backend-${{ matrix.target_triple }}.exe
+
+      # --- Frontend static export ---
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      - name: Build static frontend for desktop
+        run: STATIC_EXPORT=true pnpm --filter @finance-tracker/web build
+        env:
+          STATIC_EXPORT: 'true'
+
+      - name: Copy static frontend to desktop dist
+        shell: bash
+        run: |
+          rm -rf apps/desktop/dist
+          cp -r apps/web/out apps/desktop/dist
+
+      # --- Tauri build + release ---
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: v__VERSION__
+          releaseName: 'FinanceTracker v__VERSION__'
+          releaseBody: 'See the assets to download this version and install.'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

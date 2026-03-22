@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        working-directory: backend
+        run: uv sync --extra dev
+
+      - name: Lint with ruff
+        working-directory: backend
+        run: uv run ruff check app/
+
+      - name: Type check with mypy
+        working-directory: backend
+        run: uv run mypy app/ --ignore-missing-imports
+
+      - name: Run tests
+        working-directory: backend
+        run: uv run pytest -v --cov=app --cov-report=xml
+
+  frontend-tests:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm --filter @finance-tracker/web build
+
+  e2e-tests:
+    name: E2E Tests
+    needs: [backend-tests, frontend-tests]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Install all dependencies
+        run: |
+          cd backend && uv sync
+          cd .. && pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm --filter @finance-tracker/web exec playwright install --with-deps chromium
+
+      - name: Setup database
+        working-directory: backend
+        run: |
+          cp .env.example .env
+          uv run alembic upgrade head
+
+      - name: Start backend
+        working-directory: backend
+        run: uv run uvicorn app.main:app --port 8000 &
+        env:
+          DATABASE_URL: "sqlite+aiosqlite:///./test_e2e.db"
+          SECRET_KEY: "e2e-test-secret-key-not-for-production"
+
+      - name: Start frontend
+        run: pnpm --filter @finance-tracker/web dev --port 3000 &
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for backend..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "Backend is ready (attempt $i)"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "Backend failed to start after 60 seconds"
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "Waiting for frontend..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3000 > /dev/null 2>&1; then
+              echo "Frontend is ready (attempt $i)"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "Frontend failed to start after 60 seconds"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Run E2E tests
+        run: pnpm --filter @finance-tracker/web test:e2e
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000

@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+/* ── Finance Tracker Design Tokens ─────────────────────────────── */
+:root {
+  /* Base palette */
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
+  --primary: 221.2 83.2% 53.3%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 221.2 83.2% 53.3%;
+  --radius: 0.5rem;
+
+  /* Alert zone colors */
+  --alert-light-red-bg: 0 86% 80%;
+  --alert-light-red-text: 0 72% 51%;
+  --alert-light-green-bg: 142 69% 73%;
+  --alert-light-green-text: 142 76% 36%;
+  --alert-dark-red-bg: 0 63% 35%;
+  --alert-dark-red-text: 0 93% 94%;
+  --alert-dark-green-bg: 142 64% 24%;
+  --alert-dark-green-text: 138 76% 94%;
+  --alert-neutral-bg: 210 40% 96.1%;
+  --alert-neutral-text: 215.4 16.3% 46.9%;
+
+  /* RSI colors */
+  --rsi-oversold: 0 84.2% 60.2%;
+  --rsi-neutral: 215.4 16.3% 46.9%;
+  --rsi-overbought: 142 76% 36%;
+
+  /* P&L colors */
+  --profit: 142 76% 36%;
+  --loss: 0 84.2% 60.2%;
+}
+
+.dark {
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+  --card: 222.2 84% 4.9%;
+  --card-foreground: 210 40% 98%;
+  --popover: 222.2 84% 4.9%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 217.2 91.2% 59.8%;
+  --primary-foreground: 222.2 47.4% 11.2%;
+  --secondary: 217.2 32.6% 17.5%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%;
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 217.2 32.6% 17.5%;
+  --input: 217.2 32.6% 17.5%;
+  --ring: 224.3 76.3% 48%;
+
+  /* Alert zone colors (dark mode) */
+  --alert-light-red-bg: 0 50% 20%;
+  --alert-light-red-text: 0 86% 80%;
+  --alert-light-green-bg: 142 40% 18%;
+  --alert-light-green-text: 142 69% 73%;
+  --alert-dark-red-bg: 0 63% 35%;
+  --alert-dark-red-text: 0 93% 94%;
+  --alert-dark-green-bg: 142 64% 24%;
+  --alert-dark-green-text: 138 76% 94%;
+
+  --rsi-oversold: 0 86% 80%;
+  --rsi-neutral: 215 20.2% 65.1%;
+  --rsi-overbought: 142 69% 73%;
+
+  --profit: 142 69% 73%;
+  --loss: 0 86% 80%;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
