@@ -338,50 +338,48 @@ echo [OK] Sidecar binary: financetracker-backend-%TARGET%.exe
 
 REM -------------------------------------------------------------------------
 REM Step 4b: Smoke-test the sidecar binary
-REM Run it with --help or a quick import test to catch module errors early.
-REM If this fails, the binary is broken and there's no point building the installer.
+REM Start it in background, wait 8 seconds, check if it's still running.
+REM If it crashed (import error), it exits immediately and we catch it.
+REM If it's still alive after 8s, imports worked and the server started.
 REM -------------------------------------------------------------------------
 echo.
-echo [Step 4b] Smoke-testing sidecar binary...
-echo   Running: dist\financetracker-backend.exe (import test)
+echo [Step 4b] Smoke-testing sidecar binary ^(~8 seconds^)...
 
-REM Create a small test: start the binary, wait 5 seconds, check if it's alive
-REM We use --port 0 which will fail to bind, but the import errors happen before that
 set "SMOKE_DB=%TEMP%\ft_smoke_test_%RANDOM%.db"
-start /b /wait dist\financetracker-backend.exe --port 59999 --host 127.0.0.1 --db-path "!SMOKE_DB!" --seed 2>"!TEMP!\ft_smoke_stderr.txt" 1>"!TEMP!\ft_smoke_stdout.txt"
-set "SMOKE_EXIT=!ERRORLEVEL!"
 
-REM Check if it exited immediately with an error (import failures exit with code 1)
-if !SMOKE_EXIT! NEQ 0 (
+REM Start in background (no /wait), redirect stderr to file
+start "" /b dist\financetracker-backend.exe --port 59999 --host 127.0.0.1 --db-path "!SMOKE_DB!" --seed 2>"!TEMP!\ft_smoke_stderr.txt"
+
+REM Wait 8 seconds for imports to load (crash happens in first 1-2 seconds)
+ping -n 9 127.0.0.1 >nul 2>&1
+
+REM Check if the process is still running (good = imports worked, server started)
+tasklist /fi "imagename eq financetracker-backend.exe" 2>nul | findstr /i "financetracker-backend" >nul
+if errorlevel 1 (
+    REM Process died -- check stderr for the error
     echo.
     echo =====================================================
-    echo   SIDECAR BINARY SMOKE TEST FAILED ^(exit code !SMOKE_EXIT!^)
+    echo   SIDECAR BINARY SMOKE TEST FAILED
     echo =====================================================
     echo.
-    echo   The backend binary crashed. Error output:
+    echo   The backend binary crashed during startup:
     echo   -------------------------------------------
-    type "!TEMP!\ft_smoke_stderr.txt"
+    type "!TEMP!\ft_smoke_stderr.txt" 2>nul
     echo   -------------------------------------------
     echo.
-    echo   This usually means PyInstaller did not bundle all Python modules.
-    echo   Check the error above for "ModuleNotFoundError" or "ImportError".
-    echo.
-    echo   Debug steps:
-    echo     1. cd "%BACKEND_DIR%"
-    echo     2. dist\financetracker-backend.exe --port 8000 --db-path test.db
-    echo     3. Read the traceback
+    echo   Debug: cd "%BACKEND_DIR%" ^&^& dist\financetracker-backend.exe --port 8000 --db-path test.db
     echo.
     del /q "!SMOKE_DB!" 2>nul
     del /q "!TEMP!\ft_smoke_stderr.txt" 2>nul
-    del /q "!TEMP!\ft_smoke_stdout.txt" 2>nul
     exit /b 1
+) else (
+    REM Process is alive -- kill it and continue
+    taskkill /f /im financetracker-backend.exe >nul 2>&1
+    echo [OK] Sidecar binary starts successfully
 )
 
-REM Clean up smoke test files
 del /q "!SMOKE_DB!" 2>nul
 del /q "!TEMP!\ft_smoke_stderr.txt" 2>nul
-del /q "!TEMP!\ft_smoke_stdout.txt" 2>nul
-echo [OK] Sidecar binary starts successfully
 
 REM -------------------------------------------------------------------------
 REM Step 5: Build static frontend

@@ -34,21 +34,22 @@ if not exist "dist\financetracker-backend.exe" (
     exit /b 1
 )
 
-REM Smoke test -- catch module errors before copying
+REM Smoke test -- start binary, wait 8s, check if alive
 echo.
-echo Smoke-testing sidecar binary...
+echo Smoke-testing sidecar binary ^(~8 seconds^)...
 set "SMOKE_DB=%TEMP%\ft_smoke_%RANDOM%.db"
-start /b /wait dist\financetracker-backend.exe --port 59999 --host 127.0.0.1 --db-path "!SMOKE_DB!" --seed 2>"!TEMP!\ft_smoke_err.txt"
-set "SMOKE_EXIT=!ERRORLEVEL!"
-if !SMOKE_EXIT! NEQ 0 (
-    echo.
-    echo ERROR: Sidecar binary crashed ^(exit code !SMOKE_EXIT!^)
-    echo --- Error output ---
-    type "!TEMP!\ft_smoke_err.txt"
-    echo --------------------
+start "" /b dist\financetracker-backend.exe --port 59999 --host 127.0.0.1 --db-path "!SMOKE_DB!" --seed 2>"!TEMP!\ft_smoke_err.txt"
+ping -n 9 127.0.0.1 >nul 2>&1
+tasklist /fi "imagename eq financetracker-backend.exe" 2>nul | findstr /i "financetracker-backend" >nul
+if errorlevel 1 (
+    echo ERROR: Sidecar binary crashed during startup:
+    type "!TEMP!\ft_smoke_err.txt" 2>nul
     del /q "!SMOKE_DB!" 2>nul
     del /q "!TEMP!\ft_smoke_err.txt" 2>nul
     exit /b 1
+) else (
+    taskkill /f /im financetracker-backend.exe >nul 2>&1
+    echo [OK] Sidecar binary starts successfully
 )
 del /q "!SMOKE_DB!" 2>nul
 del /q "!TEMP!\ft_smoke_err.txt" 2>nul
