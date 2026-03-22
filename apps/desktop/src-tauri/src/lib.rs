@@ -122,27 +122,22 @@ pub fn run() {
                 }
             };
 
-            // Create the main window IMMEDIATELY (don't wait for backend)
-            // This ensures the user sees the app window right away.
+            // Inject the API port into the config-created window.
+            // The window is auto-created by Tauri from tauri.conf.json "windows" array.
+            // We use eval() to set the port BEFORE any page JS runs.
             let init_script = format!(
                 "window.__FINANCETRACKER_API_PORT__ = {};",
                 port
             );
 
-            let _window = WebviewWindowBuilder::new(
-                app,
-                "main",
-                WebviewUrl::default(),
-            )
-            .title("FinanceTracker")
-            .inner_size(1280.0, 800.0)
-            .min_inner_size(900.0, 600.0)
-            .resizable(true)
-            .fullscreen(false)
-            .decorations(true)
-            .initialization_script(&init_script)
-            .build()
-            .expect("failed to create main window");
+            // Get the auto-created window and inject the port
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval(&init_script);
+                #[cfg(debug_assertions)]
+                {
+                    window.open_devtools();
+                }
+            }
 
             // Wait for backend in a background thread (don't block the UI)
             std::thread::spawn(move || {
@@ -160,11 +155,6 @@ pub fn run() {
                 api_port: port,
                 sidecar_child: Mutex::new(child),
             });
-
-            #[cfg(debug_assertions)]
-            {
-                _window.open_devtools();
-            }
 
             Ok(())
         })
