@@ -47,7 +47,7 @@ for dirpath, dirnames, filenames in os.walk(str(root / "app")):
             app_data.append((src, dst))
 
 a = Analysis(
-    [str(root / "app" / "__main__.py")],
+    [str(root / "sidecar_entry.py")],
     pathex=[str(root), venv_site],
     binaries=[],
     datas=[
@@ -270,7 +270,7 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(root / "pyinstaller_runtime_hook.py")],
     cipher=block_cipher,
     noarchive=False,
 )
