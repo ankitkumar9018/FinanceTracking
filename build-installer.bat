@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 REM ============================================================================
-REM  FinanceTracker — Build Installer (Windows)
+REM  FinanceTracker -- Build Installer (Windows)
 REM  Creates a native .msi and .exe (NSIS) installer
 REM
 REM  Usage: build-installer.bat
@@ -31,7 +31,7 @@ if "%PROCESSOR_ARCHITECTURE%"=="AMD64" (
 
 echo.
 echo ========================================
-echo   FinanceTracker — Installer Builder
+echo   FinanceTracker - Installer Builder
 echo   Platform: Windows ^(%ARCH%^)
 echo ========================================
 echo.
@@ -63,7 +63,7 @@ goto :skip_add_to_path
     for /f "tokens=2*" %%A in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "CUR_USR_PATH=%%B"
     echo !CUR_USR_PATH! | findstr /i /c:"!NEW_DIR!" >nul 2>&1
     if errorlevel 1 (
-        REM Not found — append it
+        REM Not found -- append it
         if defined CUR_USR_PATH (
             setx PATH "!CUR_USR_PATH!;!NEW_DIR!" >nul 2>&1
         ) else (
@@ -83,9 +83,22 @@ echo [Step 1/7] Checking prerequisites ^(will auto-install if missing^)...
 echo.
 
 REM --- Node.js ---
+set "NODE_NEED_INSTALL=0"
 where node >nul 2>&1
 if errorlevel 1 (
-    echo [MISSING] Node.js — installing via winget...
+    set "NODE_NEED_INSTALL=1"
+) else (
+    REM Node exists -- check version >= 20
+    for /f "usebackq tokens=*" %%a in (`node -v`) do set "NODE_VER=%%a"
+    set "NODE_VER=!NODE_VER:v=!"
+    for /f "tokens=1 delims=." %%a in ("!NODE_VER!") do set "NODE_MAJOR=%%a"
+    if !NODE_MAJOR! LSS 20 (
+        echo [OUTDATED] Node.js v!NODE_VER! found -- upgrading to 20+...
+        set "NODE_NEED_INSTALL=1"
+    )
+)
+if "!NODE_NEED_INSTALL!"=="1" (
+    echo [INSTALLING] Node.js LTS via winget...
     winget install --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements -e
     if errorlevel 1 (
         echo [FALLBACK] winget failed. Trying fnm ^(Fast Node Manager^)...
@@ -99,7 +112,6 @@ if errorlevel 1 (
         fnm install --lts
         fnm use lts-latest
     )
-    REM winget installs Node.js to Program Files — add to session PATH
     call :add_to_path "%ProgramFiles%\nodejs"
     call :refresh_path
 )
@@ -110,12 +122,14 @@ if errorlevel 1 (
     goto :check_restart
 )
 
-REM Check Node.js version >= 20
+REM Verify Node.js version after install/upgrade
 for /f "usebackq tokens=*" %%a in (`node -v`) do set "NODE_VER=%%a"
 set "NODE_VER=!NODE_VER:v=!"
 for /f "tokens=1 delims=." %%a in ("!NODE_VER!") do set "NODE_MAJOR=%%a"
 if !NODE_MAJOR! LSS 20 (
-    echo ERROR: Node.js 20+ required ^(found v!NODE_MAJOR!^). Please update.
+    echo ERROR: Node.js 20+ required but upgrade to LTS failed ^(still v!NODE_MAJOR!^).
+    echo   Please manually update from https://nodejs.org
+    echo   Or run: winget upgrade --id OpenJS.NodeJS.LTS
     exit /b 1
 )
 echo [OK] Node.js v!NODE_VER!
@@ -123,14 +137,14 @@ echo [OK] Node.js v!NODE_VER!
 REM --- pnpm ---
 where pnpm >nul 2>&1
 if errorlevel 1 (
-    echo [MISSING] pnpm — installing via npm...
+    echo [MISSING] pnpm -- installing via npm...
     call npm install -g pnpm
     if errorlevel 1 (
         echo [FALLBACK] Trying standalone install...
         powershell -Command "iwr https://get.pnpm.io/install.ps1 -useb | iex"
         call :add_to_path "%LOCALAPPDATA%\pnpm"
     )
-    REM npm global installs go to the npm prefix — add to session PATH
+    REM npm global installs go to the npm prefix -- add to session PATH
     for /f "usebackq tokens=*" %%a in (`npm config get prefix 2^>nul`) do call :add_to_path "%%a"
     call :refresh_path
 )
@@ -143,16 +157,25 @@ if errorlevel 1 (
 echo [OK] pnpm found
 
 REM --- Python 3.12+ ---
+set "PY_NEED_INSTALL=0"
 where python >nul 2>&1
 if errorlevel 1 (
-    echo [MISSING] Python — installing via winget...
+    set "PY_NEED_INSTALL=1"
+) else (
+    python -c "import sys; exit(0 if sys.version_info >= (3,12) else 1)" 2>nul
+    if errorlevel 1 (
+        for /f "usebackq tokens=*" %%a in (`python --version 2^>^&1`) do echo [OUTDATED] %%a found -- installing Python 3.13...
+        set "PY_NEED_INSTALL=1"
+    )
+)
+if "!PY_NEED_INSTALL!"=="1" (
+    echo [INSTALLING] Python 3.13 via winget...
     winget install --id Python.Python.3.13 --accept-source-agreements --accept-package-agreements -e
     if errorlevel 1 (
         echo ERROR: Could not install Python automatically.
         echo   Please install manually from https://python.org ^(v3.12+, check "Add to PATH"^)
         exit /b 1
     )
-    REM winget Python installs here by default
     call :add_to_path "%LOCALAPPDATA%\Programs\Python\Python313"
     call :add_to_path "%LOCALAPPDATA%\Programs\Python\Python313\Scripts"
     call :refresh_path
@@ -165,8 +188,9 @@ if errorlevel 1 (
 )
 python -c "import sys; exit(0 if sys.version_info >= (3,12) else 1)" 2>nul
 if errorlevel 1 (
-    echo ERROR: Python 3.12+ is required. Found older version.
-    echo   Please install from https://python.org ^(check "Add to PATH"^)
+    echo ERROR: Python 3.12+ required but upgrade failed.
+    echo   Please manually install from https://python.org
+    echo   Or run: winget upgrade --id Python.Python.3.13
     exit /b 1
 )
 for /f "usebackq tokens=*" %%a in (`python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"`) do set "PY_VER=%%a"
@@ -175,7 +199,7 @@ echo [OK] Python !PY_VER!
 REM --- uv (Python package manager) ---
 where uv >nul 2>&1
 if errorlevel 1 (
-    echo [MISSING] uv — installing...
+    echo [MISSING] uv -- installing...
     powershell -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"
     if errorlevel 1 (
         echo ERROR: Could not install uv automatically.
@@ -198,7 +222,7 @@ echo [OK] uv found
 REM --- Rust (rustc + cargo) ---
 where rustc >nul 2>&1
 if errorlevel 1 (
-    echo [MISSING] Rust — installing via rustup ^(silent, default toolchain^)...
+    echo [MISSING] Rust -- installing via rustup ^(silent, default toolchain^)...
     powershell -Command "Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile '%TEMP%\rustup-init.exe'"
     "%TEMP%\rustup-init.exe" -y --default-toolchain stable
     if errorlevel 1 (
@@ -222,7 +246,7 @@ REM --- Visual Studio Build Tools (C++ workload for Rust) ---
 where cl >nul 2>&1
 if errorlevel 1 (
     if not exist "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" (
-        echo [MISSING] Visual Studio Build Tools — installing...
+        echo [MISSING] Visual Studio Build Tools -- installing...
         echo   Downloading installer ^(this may take several minutes^)...
         powershell -Command "Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_BuildTools.exe' -OutFile '%TEMP%\vs_BuildTools.exe'"
         "%TEMP%\vs_BuildTools.exe" --quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended
@@ -234,7 +258,7 @@ if errorlevel 1 (
             echo.
         ) else (
             echo [OK] VS Build Tools installed
-            REM VS Build Tools sets up vcvarsall.bat — refresh PATH to pick up cl.exe
+            REM VS Build Tools sets up vcvarsall.bat -- refresh PATH to pick up cl.exe
             call :refresh_path
         )
     ) else (
@@ -251,7 +275,7 @@ if "!WV2_FOUND!"=="0" (
     reg query "HKLM\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" >nul 2>&1 && set "WV2_FOUND=1"
 )
 if "!WV2_FOUND!"=="0" (
-    echo [NOTE] WebView2 not detected — the NSIS installer will auto-install it for end users.
+    echo [NOTE] WebView2 not detected -- the NSIS installer will auto-install it for end users.
 ) else (
     echo [OK] WebView2 found
 )
@@ -300,7 +324,7 @@ uv run pyinstaller financetracker.spec --clean --noconfirm
 if errorlevel 1 (echo ERROR: PyInstaller build failed && exit /b 1)
 
 if not exist "dist\financetracker-backend.exe" (
-    echo ERROR: PyInstaller build failed — binary not found
+    echo ERROR: PyInstaller build failed -- binary not found
     exit /b 1
 )
 
@@ -324,7 +348,7 @@ call pnpm --filter @finance-tracker/web build
 if errorlevel 1 (echo ERROR: Frontend build failed && exit /b 1)
 
 if not exist "%WEB_DIR%\out" (
-    echo ERROR: Static export failed — out\ directory not found
+    echo ERROR: Static export failed -- out\ directory not found
     exit /b 1
 )
 
