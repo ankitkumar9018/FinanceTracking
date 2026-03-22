@@ -275,7 +275,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=platform.system() != "Windows",  # Hide console on Windows to avoid flash
+    console=True,  # Show console for debugging — change to False once confirmed working
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
