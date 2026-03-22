@@ -7,6 +7,7 @@ Output:      dist/financetracker-backend
 
 import platform
 import sys
+import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
@@ -14,17 +15,36 @@ from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 block_cipher = None
 root = Path(SPECPATH)
 
-# Collect all submodules of the app package (uvicorn.run uses string import)
-app_hiddenimports = collect_submodules("app")
+# Ensure the backend root is on sys.path so collect_submodules can find 'app'
+sys.path.insert(0, str(root))
+os.chdir(str(root))
+
+# Collect all submodules of the app package
+# On Windows, collect_submodules can miss packages if the path isn't right,
+# so we also explicitly list all critical subpackages below.
+try:
+    app_hiddenimports = collect_submodules("app")
+except Exception:
+    app_hiddenimports = []
+
 uvicorn_hiddenimports = collect_submodules("uvicorn")
 
-import site
 # Include the venv site-packages so PyInstaller can find all dependencies
 # Windows uses .venv/Lib/site-packages, Unix uses .venv/lib/pythonX.Y/site-packages
 if platform.system() == "Windows":
     venv_site = str(root / ".venv" / "Lib" / "site-packages")
 else:
     venv_site = str(root / ".venv" / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
+
+# Collect the entire app/ directory as data files so all .py modules are bundled
+app_data = []
+for dirpath, dirnames, filenames in os.walk(str(root / "app")):
+    for f in filenames:
+        if f.endswith((".py", ".json", ".html", ".txt")):
+            src = os.path.join(dirpath, f)
+            # Destination path relative to the bundle root
+            dst = os.path.relpath(dirpath, str(root))
+            app_data.append((src, dst))
 
 a = Analysis(
     [str(root / "app" / "__main__.py")],
@@ -34,10 +54,133 @@ a = Analysis(
         # Include alembic config for DB migrations
         (str(root / "alembic.ini"), "."),
         (str(root / "alembic"), "alembic"),
-        # Include the entire app package as data (templates, etc.)
-    ],
+    ] + app_data,
     hiddenimports=[
-        # uvicorn — must include the package itself + internals
+        # --- Explicitly list ALL app subpackages (belt-and-suspenders) ---
+        "app",
+        "app.api",
+        "app.api.deps",
+        "app.api.v1",
+        "app.api.v1.router",
+        "app.api.v1.auth",
+        "app.api.v1.portfolio",
+        "app.api.v1.holdings",
+        "app.api.v1.transactions",
+        "app.api.v1.import_export",
+        "app.api.v1.market_data",
+        "app.api.v1.charts",
+        "app.api.v1.alerts",
+        "app.api.v1.watchlist",
+        "app.api.v1.settings",
+        "app.api.v1.tax",
+        "app.api.v1.dividends",
+        "app.api.v1.mutual_funds",
+        "app.api.v1.forex",
+        "app.api.v1.indicators",
+        "app.api.v1.broker",
+        "app.api.v1.ai_chat",
+        "app.api.v1.goals",
+        "app.api.v1.backtest",
+        "app.api.v1.comparison",
+        "app.api.v1.columns",
+        "app.api.v1.net_worth",
+        "app.api.v1.esg",
+        "app.api.v1.whatif",
+        "app.api.v1.earnings",
+        "app.api.v1.fno",
+        "app.api.v1.analytics",
+        "app.api.v1.ipo",
+        "app.api.ws",
+        "app.api.ws.price_stream",
+        "app.api.ws.alert_stream",
+        "app.api.ws.connection_manager",
+        "app.config",
+        "app.database",
+        "app.main",
+        "app.models",
+        "app.models.user",
+        "app.models.portfolio",
+        "app.models.holding",
+        "app.models.transaction",
+        "app.models.alert",
+        "app.models.watchlist",
+        "app.models.dividend",
+        "app.models.mutual_fund",
+        "app.models.tax_record",
+        "app.models.price_history",
+        "app.models.broker_connection",
+        "app.models.notification_log",
+        "app.models.user_preferences",
+        "app.models.app_settings",
+        "app.models.chat_session",
+        "app.models.forex_rates",
+        "app.models.goal",
+        "app.models.asset",
+        "app.models.fno_position",
+        "app.schemas",
+        "app.services",
+        "app.services.portfolio_service",
+        "app.services.market_data_service",
+        "app.services.alert_service",
+        "app.services.notification_service",
+        "app.services.excel_service",
+        "app.services.export_service",
+        "app.services.csv_import_service",
+        "app.services.backup_service",
+        "app.services.tax_service",
+        "app.services.dividend_service",
+        "app.services.mutual_fund_service",
+        "app.services.forex_service",
+        "app.services.goal_service",
+        "app.services.broker_service",
+        "app.services.account_aggregator",
+        "app.services.benchmark_service",
+        "app.services.comparison_service",
+        "app.services.stop_loss_service",
+        "app.services.net_worth_service",
+        "app.services.esg_service",
+        "app.services.whatif_service",
+        "app.services.earnings_service",
+        "app.services.fno_service",
+        "app.services.drift_service",
+        "app.services.sector_rotation_service",
+        "app.services.recurring_detection_service",
+        "app.services.sip_calendar_service",
+        "app.services.week52_service",
+        "app.services.freshness_service",
+        "app.services.sheets_export_service",
+        "app.services.xirr_service",
+        "app.services.ipo_service",
+        "app.brokers",
+        "app.brokers.base",
+        "app.brokers.zerodha",
+        "app.brokers.icici_direct",
+        "app.brokers.groww",
+        "app.brokers.angel_one",
+        "app.brokers.upstox",
+        "app.brokers.fivepaisa",
+        "app.brokers.german",
+        "app.brokers.german.deutsche_bank",
+        "app.brokers.german.comdirect",
+        "app.ml",
+        "app.ml.technical_indicators",
+        "app.ml.risk_calculator",
+        "app.ml.backtester",
+        "app.ml.portfolio_optimizer",
+        "app.ml.price_predictor",
+        "app.ml.anomaly_detector",
+        "app.ml.sentiment_analyzer",
+        "app.ml.llm_assistant",
+        "app.tasks",
+        "app.tasks.celery_app",
+        "app.tasks.fetch_prices",
+        "app.tasks.check_alerts",
+        "app.tasks.scheduler",
+        "app.utils",
+        "app.utils.security",
+        "app.utils.audit",
+        "app.utils.rate_limiter",
+        # --- uvicorn ---
         "uvicorn",
         "uvicorn.config",
         "uvicorn.main",
@@ -58,7 +201,7 @@ a = Analysis(
         "uvicorn.lifespan.on",
         "uvicorn.lifespan.off",
         "uvicorn.server",
-        # FastAPI + Starlette
+        # --- FastAPI + Starlette ---
         "fastapi",
         "starlette",
         "starlette.middleware",
@@ -68,36 +211,42 @@ a = Analysis(
         "anyio",
         "anyio._backends",
         "anyio._backends._asyncio",
-        # async SQLite
+        # --- async SQLite ---
         "aiosqlite",
-        # FastAPI / Pydantic
+        # --- FastAPI / Pydantic ---
         "email_validator",
         "multipart",
         "python_multipart",
-        # SQLAlchemy dialects
+        # --- SQLAlchemy ---
         "sqlalchemy",
         "sqlalchemy.dialects.sqlite",
         "sqlalchemy.ext.asyncio",
-        # Pandas / yfinance
+        # --- Data / Market ---
         "pandas",
         "yfinance",
         "pandas_ta",
-        # Auth
+        "openpyxl",
+        "numpy",
+        # --- Auth ---
         "passlib",
         "passlib.handlers",
         "passlib.handlers.bcrypt",
         "bcrypt",
         "jose",
         "jose.jwt",
-        # HTTP
+        # --- HTTP ---
         "httptools",
+        "httpx",
         "h11",
         "wsproto",
         "websockets",
-        # Other
+        # --- Other ---
         "apscheduler",
         "pyotp",
         "slowapi",
+        "cryptography",
+        "sendgrid",
+        "xhtml2pdf",
     ] + app_hiddenimports + uvicorn_hiddenimports,
     excludes=[
         # Exclude heavy ML dependencies (they degrade gracefully)
