@@ -8,14 +8,20 @@ use tauri_plugin_shell::process::CommandChild;
 
 struct AppState {
     api_port: u16,
-    #[allow(dead_code)]
     sidecar_child: Mutex<Option<CommandChild>>,
 }
 
-/// Find a free TCP port by binding to port 0.
-fn find_free_port() -> u16 {
+/// Try to bind to preferred ports in order. Use port 8000 by default
+/// so the frontend doesn't need dynamic port discovery.
+fn find_port() -> u16 {
+    for port in [8000, 8001, 8002, 8003, 8004, 8005] {
+        if TcpListener::bind(format!("127.0.0.1:{}", port)).is_ok() {
+            return port;
+        }
+    }
+    // All preferred ports taken — use random as last resort
     TcpListener::bind("127.0.0.1:0")
-        .expect("failed to bind to a free port")
+        .expect("failed to bind to any port")
         .local_addr()
         .expect("failed to get local addr")
         .port()
@@ -47,9 +53,19 @@ fn get_api_port(state: tauri::State<'_, AppState>) -> u16 {
     state.api_port
 }
 
+/// Kill the sidecar backend process
+fn kill_sidecar(state: &AppState) {
+    if let Ok(mut guard) = state.sidecar_child.lock() {
+        if let Some(child) = guard.take() {
+            let _ = child.kill();
+            println!("Backend sidecar killed");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
@@ -61,8 +77,8 @@ pub fn run() {
             std::fs::create_dir_all(&app_data_dir).ok();
             let db_path = app_data_dir.join("finance.db");
 
-            // Find a free port for the backend
-            let port = find_free_port();
+            // Use port 8000 by default (matches frontend fallback)
+            let port = find_port();
             println!("Starting backend sidecar on port {} with db: {:?}", port, db_path);
 
             // Seed demo user on first launch (when no DB exists yet)
@@ -91,7 +107,6 @@ pub fn run() {
 
             let child = match sidecar_result {
                 Ok((mut rx, child)) => {
-                    // Log sidecar stdout/stderr in a background thread
                     tauri::async_runtime::spawn(async move {
                         use tauri_plugin_shell::process::CommandEvent;
                         while let Some(event) = rx.recv().await {
@@ -104,7 +119,7 @@ pub fn run() {
                                 }
                                 CommandEvent::Terminated(payload) => {
                                     eprintln!(
-                                        "[backend] process terminated with code: {:?}, signal: {:?}",
+                                        "[backend] terminated: code={:?} signal={:?}",
                                         payload.code, payload.signal
                                     );
                                     break;
@@ -117,40 +132,31 @@ pub fn run() {
                 }
                 Err(e) => {
                     eprintln!("WARNING: Failed to spawn backend sidecar: {}", e);
-                    eprintln!("The app will open but API calls will fail.");
                     None
                 }
             };
 
-            // Inject the API port into the config-created window.
-            // The window is auto-created by Tauri from tauri.conf.json "windows" array.
-            // We use eval() to set the port BEFORE any page JS runs.
-            let init_script = format!(
-                "window.__FINANCETRACKER_API_PORT__ = {};",
-                port
-            );
-
-            // Get the auto-created window and inject the port
+            // Inject the API port into the window via eval
+            // Also set it as a global so the frontend can read it immediately
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.eval(&init_script);
-                #[cfg(debug_assertions)]
-                {
-                    window.open_devtools();
-                }
+                let script = format!(
+                    "window.__FINANCETRACKER_API_PORT__ = {}; \
+                     console.log('[tauri] API port set to {}');",
+                    port, port
+                );
+                let _ = window.eval(&script);
             }
 
-            // Wait for backend in a background thread (don't block the UI)
+            // Wait for backend in a background thread (don't block UI)
             std::thread::spawn(move || {
-                println!("Waiting for backend to start...");
                 if wait_for_backend(port, 30) {
                     println!("Backend is ready on port {}", port);
                 } else {
                     eprintln!("WARNING: Backend did not respond within 30 seconds");
-                    eprintln!("Try running the sidecar binary manually to see errors.");
                 }
             });
 
-            // Store state for the get_api_port command
+            // Store state
             app.manage(AppState {
                 api_port: port,
                 sidecar_child: Mutex::new(child),
@@ -158,20 +164,17 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                // Kill the sidecar when the window is destroyed
-                if let Some(state) = window.try_state::<AppState>() {
-                    if let Ok(mut guard) = state.sidecar_child.lock() {
-                        if let Some(child) = guard.take() {
-                            let _ = child.kill();
-                            println!("Backend sidecar killed on window close");
-                        }
-                    }
-                }
-            }
-        })
         .invoke_handler(tauri::generate_handler![get_api_port])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // Use run callback to handle app exit — this is more reliable than
+    // on_window_event for killing the sidecar on all platforms
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                kill_sidecar(&state);
+            }
+        }
+    });
 }
