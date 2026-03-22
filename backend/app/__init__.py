@@ -1,0 +1,1 @@
+"""FinanceTracker backend application."""

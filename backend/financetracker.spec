@@ -19,14 +19,8 @@ root = Path(SPECPATH)
 sys.path.insert(0, str(root))
 os.chdir(str(root))
 
-# Collect all submodules of the app package
-# On Windows, collect_submodules can miss packages if the path isn't right,
-# so we also explicitly list all critical subpackages below.
-try:
-    app_hiddenimports = collect_submodules("app")
-except Exception:
-    app_hiddenimports = []
-
+# Collect all submodules — do NOT swallow errors silently
+app_hiddenimports = collect_submodules("app")
 uvicorn_hiddenimports = collect_submodules("uvicorn")
 
 # Include the venv site-packages so PyInstaller can find all dependencies
@@ -36,16 +30,6 @@ if platform.system() == "Windows":
 else:
     venv_site = str(root / ".venv" / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
 
-# Collect the entire app/ directory as data files so all .py modules are bundled
-app_data = []
-for dirpath, dirnames, filenames in os.walk(str(root / "app")):
-    for f in filenames:
-        if f.endswith((".py", ".json", ".html", ".txt")):
-            src = os.path.join(dirpath, f)
-            # Destination path relative to the bundle root
-            dst = os.path.relpath(dirpath, str(root))
-            app_data.append((src, dst))
-
 a = Analysis(
     [str(root / "sidecar_entry.py")],
     pathex=[str(root), venv_site],
@@ -54,7 +38,7 @@ a = Analysis(
         # Include alembic config for DB migrations
         (str(root / "alembic.ini"), "."),
         (str(root / "alembic"), "alembic"),
-    ] + app_data,
+    ],
     hiddenimports=[
         # --- Explicitly list ALL app subpackages (belt-and-suspenders) ---
         "app",
@@ -272,7 +256,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[str(root / "pyinstaller_runtime_hook.py")],
     cipher=block_cipher,
-    noarchive=False,
+    noarchive=True,  # Extract .pyc to disk — fixes empty __init__.py namespace issues in PYZ
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
