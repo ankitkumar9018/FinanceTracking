@@ -11,7 +11,6 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -122,17 +121,37 @@ for candidate in [
 if _static_dir:
     logger.info("Serving static frontend from %s", _static_dir)
 
-    # Mount static files at /_app to avoid conflicting with API routes.
+    # Serve static files using middleware instead of app.mount("/").
     # app.mount("/") would swallow ALL requests including /api/v1/*.
-    # html=True serves index.html for SPA client-side routing.
-    app.mount("/_app", StaticFiles(directory=str(_static_dir), html=True), name="frontend")
+    # This middleware only serves static files for non-API paths.
+    from starlette.responses import FileResponse as _FileResponse, Response as _Response
 
-    # Redirect root to the frontend
-    from starlette.responses import RedirectResponse
+    @app.middleware("http")
+    async def serve_static_frontend(request, call_next):
+        path = request.url.path
 
-    @app.get("/", response_model=None)
-    async def root_redirect():
-        return RedirectResponse(url="/_app/")
+        # Let API, WebSocket, and health routes pass through to FastAPI
+        if path.startswith(("/api/", "/ws/", "/health")):
+            return await call_next(request)
+
+        # Try to serve a static file
+        # 1. Exact file match (e.g., /favicon.svg, /_next/static/...)
+        file_path = _static_dir / path.lstrip("/")
+        if file_path.is_file():
+            return _FileResponse(str(file_path))
+
+        # 2. Directory with index.html (Next.js trailingSlash: true)
+        index_path = _static_dir / path.lstrip("/") / "index.html"
+        if index_path.is_file():
+            return _FileResponse(str(index_path))
+
+        # 3. Root index.html for SPA routing (client-side navigation)
+        root_index = _static_dir / "index.html"
+        if root_index.is_file() and not path.startswith("/_next/"):
+            return _FileResponse(str(root_index))
+
+        # 4. Nothing matched — let FastAPI handle it (will 404)
+        return await call_next(request)
 else:
     logger.debug("No static frontend directory found -- API-only mode")
 
