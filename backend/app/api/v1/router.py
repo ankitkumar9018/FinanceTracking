@@ -41,7 +41,7 @@ api_v1_router.include_router(auth.router, prefix="/auth", tags=["Authentication"
 api_v1_router.include_router(portfolio.router, prefix="/portfolios", tags=["Portfolios"])
 api_v1_router.include_router(holdings.router, prefix="/holdings", tags=["Holdings"])
 api_v1_router.include_router(transactions.router, prefix="/transactions", tags=["Transactions"])
-api_v1_router.include_router(import_export.router, prefix="/import", tags=["Import/Export"])
+api_v1_router.include_router(import_export.router, prefix="/import-export", tags=["Import/Export"])
 api_v1_router.include_router(market_data.router, prefix="/market", tags=["Market Data"])
 api_v1_router.include_router(charts.router, prefix="/charts", tags=["Charts"])
 api_v1_router.include_router(alerts.router, prefix="/alerts", tags=["Alerts"])
