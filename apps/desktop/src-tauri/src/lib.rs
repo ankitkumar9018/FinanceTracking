@@ -58,8 +58,28 @@ fn kill_sidecar(state: &AppState) {
     if let Ok(mut guard) = state.sidecar_child.lock() {
         if let Some(child) = guard.take() {
             let _ = child.kill();
-            println!("Backend sidecar killed");
+            println!("Backend sidecar killed via child.kill()");
         }
+    }
+
+    // Belt-and-suspenders: on Windows, child.kill() may not kill the full
+    // process tree (PyInstaller creates a subprocess). Use taskkill /F /T
+    // to force-kill the process and all its children by image name.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/IM", "financetracker-backend.exe"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .output();
+        println!("Backend sidecar force-killed via taskkill");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", "financetracker-backend"])
+            .output();
     }
 }
 
