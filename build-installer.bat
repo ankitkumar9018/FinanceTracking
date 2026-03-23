@@ -314,10 +314,36 @@ if errorlevel 1 (
 echo [OK] PyInstaller ready
 
 REM -------------------------------------------------------------------------
-REM Step 4: Build backend sidecar binary
+REM Step 4: Build static frontend FIRST (needed by sidecar binary)
 REM -------------------------------------------------------------------------
 echo.
-echo [Step 4/7] Building backend sidecar binary ^(this may take a few minutes^)...
+echo [Step 4/7] Building static frontend...
+
+cd /d "%PROJECT_ROOT%"
+set "STATIC_EXPORT=true"
+call pnpm --filter @finance-tracker/web build
+if errorlevel 1 (echo ERROR: Frontend build failed && exit /b 1)
+
+if not exist "%WEB_DIR%\out" (
+    echo ERROR: Static export failed -- out\ directory not found
+    exit /b 1
+)
+
+REM Copy frontend to backend/static/ so PyInstaller bundles it into the sidecar
+if exist "%BACKEND_DIR%\static" rmdir /s /q "%BACKEND_DIR%\static"
+xcopy /E /I /Q "%WEB_DIR%\out" "%BACKEND_DIR%\static" >nul
+echo [OK] Static frontend copied to backend\static\
+
+REM Also copy to desktop/dist/ for Tauri fallback
+if exist "%DESKTOP_DIR%\dist" rmdir /s /q "%DESKTOP_DIR%\dist"
+xcopy /E /I /Q "%WEB_DIR%\out" "%DESKTOP_DIR%\dist" >nul
+echo [OK] Static frontend copied to desktop\dist\
+
+REM -------------------------------------------------------------------------
+REM Step 5: Build backend sidecar binary (includes bundled frontend)
+REM -------------------------------------------------------------------------
+echo.
+echo [Step 5/7] Building backend sidecar binary ^(this may take a few minutes^)...
 
 cd /d "%BACKEND_DIR%"
 uv run pyinstaller financetracker.spec --clean --noconfirm
@@ -337,69 +363,32 @@ if not exist "%BINARIES_DIR%\financetracker-backend-%TARGET%.exe" (
 echo [OK] Sidecar binary: financetracker-backend-%TARGET%.exe
 
 REM -------------------------------------------------------------------------
-REM Step 4b: Smoke-test the sidecar binary
-REM Start it in background, wait 8 seconds, check if it's still running.
-REM If it crashed (import error), it exits immediately and we catch it.
-REM If it's still alive after 8s, imports worked and the server started.
+REM Step 5b: Smoke-test the sidecar binary
 REM -------------------------------------------------------------------------
 echo.
-echo [Step 4b] Smoke-testing sidecar binary ^(~8 seconds^)...
+echo [Step 5b] Smoke-testing sidecar binary ^(~8 seconds^)...
 
 set "SMOKE_DB=%TEMP%\ft_smoke_test_%RANDOM%.db"
-
-REM Start in background (no /wait), redirect stderr to file
 start "" /b dist\financetracker-backend.exe --port 59999 --host 127.0.0.1 --db-path "!SMOKE_DB!" --seed 2>"!TEMP!\ft_smoke_stderr.txt"
-
-REM Wait 8 seconds for imports to load (crash happens in first 1-2 seconds)
 ping -n 9 127.0.0.1 >nul 2>&1
 
-REM Check if the process is still running (good = imports worked, server started)
 tasklist /fi "imagename eq financetracker-backend.exe" 2>nul | findstr /i "financetracker-backend" >nul
 if errorlevel 1 (
-    REM Process died -- check stderr for the error
     echo.
-    echo =====================================================
     echo   SIDECAR BINARY SMOKE TEST FAILED
-    echo =====================================================
-    echo.
-    echo   The backend binary crashed during startup:
     echo   -------------------------------------------
     type "!TEMP!\ft_smoke_stderr.txt" 2>nul
     echo   -------------------------------------------
-    echo.
-    echo   Debug: cd "%BACKEND_DIR%" ^&^& dist\financetracker-backend.exe --port 8000 --db-path test.db
-    echo.
     del /q "!SMOKE_DB!" 2>nul
     del /q "!TEMP!\ft_smoke_stderr.txt" 2>nul
     exit /b 1
 ) else (
-    REM Process is alive -- kill it and continue
     taskkill /f /im financetracker-backend.exe >nul 2>&1
     echo [OK] Sidecar binary starts successfully
 )
 
 del /q "!SMOKE_DB!" 2>nul
 del /q "!TEMP!\ft_smoke_stderr.txt" 2>nul
-
-REM -------------------------------------------------------------------------
-REM Step 5: Build static frontend
-REM -------------------------------------------------------------------------
-echo.
-echo [Step 5/7] Building static frontend...
-
-cd /d "%PROJECT_ROOT%"
-set "STATIC_EXPORT=true"
-call pnpm --filter @finance-tracker/web build
-if errorlevel 1 (echo ERROR: Frontend build failed && exit /b 1)
-
-if not exist "%WEB_DIR%\out" (
-    echo ERROR: Static export failed -- out\ directory not found
-    exit /b 1
-)
-
-if exist "%DESKTOP_DIR%\dist" rmdir /s /q "%DESKTOP_DIR%\dist"
-xcopy /E /I /Q "%WEB_DIR%\out" "%DESKTOP_DIR%\dist" >nul
-echo [OK] Static frontend copied
 
 REM -------------------------------------------------------------------------
 REM Step 6: Build Tauri installer

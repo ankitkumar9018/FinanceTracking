@@ -38,7 +38,12 @@ a = Analysis(
         # Include alembic config for DB migrations
         (str(root / "alembic.ini"), "."),
         (str(root / "alembic"), "alembic"),
-    ],
+    ] + (
+        # Include static frontend if it exists (copied by build-installer script)
+        [(str(root / "static"), "static")]
+        if (root / "static").is_dir()
+        else []
+    ),
     hiddenimports=[
         # --- Explicitly list ALL app subpackages (belt-and-suspenders) ---
         "app",

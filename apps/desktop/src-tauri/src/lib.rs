@@ -11,15 +11,13 @@ struct AppState {
     sidecar_child: Mutex<Option<CommandChild>>,
 }
 
-/// Try to bind to preferred ports in order. Use port 8000 by default
-/// so the frontend doesn't need dynamic port discovery.
+/// Try to bind to preferred ports in order.
 fn find_port() -> u16 {
     for port in [8000, 8001, 8002, 8003, 8004, 8005] {
         if TcpListener::bind(format!("127.0.0.1:{}", port)).is_ok() {
             return port;
         }
     }
-    // All preferred ports taken — use random as last resort
     TcpListener::bind("127.0.0.1:0")
         .expect("failed to bind to any port")
         .local_addr()
@@ -27,7 +25,7 @@ fn find_port() -> u16 {
         .port()
 }
 
-/// Wait for the backend health endpoint to respond (up to timeout_secs).
+/// Wait for the backend health endpoint to respond.
 fn wait_for_backend(port: u16, timeout_secs: u64) -> bool {
     let url = format!("http://127.0.0.1:{}/health", port);
     let start = Instant::now();
@@ -53,26 +51,20 @@ fn get_api_port(state: tauri::State<'_, AppState>) -> u16 {
     state.api_port
 }
 
-/// Kill the sidecar backend process
 fn kill_sidecar(state: &AppState) {
     if let Ok(mut guard) = state.sidecar_child.lock() {
         if let Some(child) = guard.take() {
             let _ = child.kill();
-            println!("Backend sidecar killed via child.kill()");
         }
     }
 
-    // Belt-and-suspenders: on Windows, child.kill() may not kill the full
-    // process tree (PyInstaller creates a subprocess). Use taskkill /F /T
-    // to force-kill the process and all its children by image name.
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
         let _ = std::process::Command::new("taskkill")
             .args(["/F", "/T", "/IM", "financetracker-backend.exe"])
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .creation_flags(0x08000000)
             .output();
-        println!("Backend sidecar force-killed via taskkill");
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -89,7 +81,6 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            // Determine app data directory for the SQLite database
             let app_data_dir = app
                 .path()
                 .app_data_dir()
@@ -97,14 +88,11 @@ pub fn run() {
             std::fs::create_dir_all(&app_data_dir).ok();
             let db_path = app_data_dir.join("finance.db");
 
-            // Use port 8000 by default (matches frontend fallback)
             let port = find_port();
-            println!("Starting backend sidecar on port {} with db: {:?}", port, db_path);
+            println!("Backend port: {}, DB: {:?}", port, db_path);
 
-            // Seed demo user on first launch (when no DB exists yet)
             let is_first_launch = !db_path.exists();
 
-            // Spawn the sidecar process
             let mut sidecar_args = vec![
                 "--port".to_string(),
                 port.to_string(),
@@ -115,10 +103,8 @@ pub fn run() {
             ];
             if is_first_launch {
                 sidecar_args.push("--seed".to_string());
-                println!("First launch detected -- will seed demo user");
             }
 
-            // Try to spawn the sidecar -- don't crash the app if it fails
             let sidecar_result = app
                 .shell()
                 .sidecar("financetracker-backend")
@@ -138,10 +124,7 @@ pub fn run() {
                                     eprintln!("[backend] {}", String::from_utf8_lossy(&line));
                                 }
                                 CommandEvent::Terminated(payload) => {
-                                    eprintln!(
-                                        "[backend] terminated: code={:?} signal={:?}",
-                                        payload.code, payload.signal
-                                    );
+                                    eprintln!("[backend] terminated: {:?}", payload.code);
                                     break;
                                 }
                                 _ => {}
@@ -151,35 +134,35 @@ pub fn run() {
                     Some(child)
                 }
                 Err(e) => {
-                    eprintln!("WARNING: Failed to spawn backend sidecar: {}", e);
+                    eprintln!("WARNING: Failed to spawn sidecar: {}", e);
                     None
                 }
             };
 
-            // Inject the API port into the window via eval
-            // Also set it as a global so the frontend can read it immediately
-            if let Some(window) = app.get_webview_window("main") {
-                let script = format!(
-                    "window.__FINANCETRACKER_API_PORT__ = {}; \
-                     console.log('[tauri] API port set to {}');",
-                    port, port
-                );
-                let _ = window.eval(&script);
-            }
-
-            // Wait for backend in a background thread (don't block UI)
-            std::thread::spawn(move || {
-                if wait_for_backend(port, 30) {
-                    println!("Backend is ready on port {}", port);
-                } else {
-                    eprintln!("WARNING: Backend did not respond within 30 seconds");
-                }
-            });
-
-            // Store state
             app.manage(AppState {
                 api_port: port,
                 sidecar_child: Mutex::new(child),
+            });
+
+            // Wait for backend to be ready, then navigate the window to it.
+            // This makes the frontend load from http://localhost:{port} (same origin
+            // as the API), which avoids the mixed-content blocking issue on Windows
+            // where Tauri serves from https://tauri.localhost but API is HTTP.
+            let window = app.get_webview_window("main").expect("no main window");
+            std::thread::spawn(move || {
+                if wait_for_backend(port, 30) {
+                    println!("Backend ready -- navigating window to http://localhost:{}", port);
+                    let url = format!("http://localhost:{}", port);
+                    let _ = window.eval(&format!(
+                        "window.location.replace('{}');",
+                        url
+                    ));
+                } else {
+                    eprintln!("WARNING: Backend did not respond within 30 seconds");
+                    let _ = window.eval(
+                        "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888\"><div style=\"text-align:center\"><h2>Backend failed to start</h2><p>Try running financetracker-backend.exe manually</p></div></div>';"
+                    );
+                }
             });
 
             Ok(())
@@ -188,8 +171,6 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    // Use run callback to handle app exit — this is more reliable than
-    // on_window_event for killing the sidecar on all platforms
     app.run(|app_handle, event| {
         if let tauri::RunEvent::Exit = event {
             if let Some(state) = app_handle.try_state::<AppState>() {

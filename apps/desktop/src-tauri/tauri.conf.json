@@ -18,8 +18,7 @@
         "minHeight": 600,
         "center": true,
         "resizable": true,
-        "fullscreen": false,
-        "useHttpScheme": true
+        "fullscreen": false
       }
     ]
   },
