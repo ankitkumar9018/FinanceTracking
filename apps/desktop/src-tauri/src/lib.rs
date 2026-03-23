@@ -151,8 +151,8 @@ pub fn run() {
             let window = app.get_webview_window("main").expect("no main window");
             std::thread::spawn(move || {
                 if wait_for_backend(port, 30) {
-                    println!("Backend ready -- navigating window to http://localhost:{}", port);
-                    let url = format!("http://localhost:{}", port);
+                    println!("Backend ready -- navigating window to http://localhost:{}/_app/", port);
+                    let url = format!("http://localhost:{}/_app/", port);
                     let _ = window.eval(&format!(
                         "window.location.replace('{}');",
                         url

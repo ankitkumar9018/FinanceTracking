@@ -122,11 +122,17 @@ for candidate in [
 if _static_dir:
     logger.info("Serving static frontend from %s", _static_dir)
 
-    # Mount the entire static directory as a fallback.
-    # html=True makes it serve index.html for directory requests (SPA routing).
-    # This MUST be the last mount — FastAPI checks explicit routes first,
-    # then falls back to mounts. So /api/v1/* routes take priority.
-    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="frontend")
+    # Mount static files at /_app to avoid conflicting with API routes.
+    # app.mount("/") would swallow ALL requests including /api/v1/*.
+    # html=True serves index.html for SPA client-side routing.
+    app.mount("/_app", StaticFiles(directory=str(_static_dir), html=True), name="frontend")
+
+    # Redirect root to the frontend
+    from starlette.responses import RedirectResponse
+
+    @app.get("/", response_model=None)
+    async def root_redirect():
+        return RedirectResponse(url="/_app/")
 else:
     logger.debug("No static frontend directory found -- API-only mode")
 
