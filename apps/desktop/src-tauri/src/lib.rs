@@ -92,7 +92,11 @@ pub fn run() {
             println!("Backend port: {}, DB: {:?}", port, db_path);
 
             let is_first_launch = !db_path.exists();
+            println!("DB path: {:?}, exists: {}, first_launch: {}", db_path, db_path.exists(), is_first_launch);
 
+            // Always pass --seed. The seed function checks if demo user exists
+            // and skips if already present. This ensures the demo user is always
+            // available even if the DB was created without seeding.
             let mut sidecar_args = vec![
                 "--port".to_string(),
                 port.to_string(),
@@ -101,9 +105,7 @@ pub fn run() {
                 "--db-path".to_string(),
                 db_path.to_string_lossy().to_string(),
             ];
-            if is_first_launch {
-                sidecar_args.push("--seed".to_string());
-            }
+            sidecar_args.push("--seed".to_string());
 
             let sidecar_result = app
                 .shell()

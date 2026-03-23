@@ -191,8 +191,8 @@ export default function AlertsPage() {
                         )}
                       </p>
                       <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                        Target: {formatPercent(drift.target_pct)} | Actual:{" "}
-                        {formatPercent(drift.actual_pct)}
+                        Target: {formatPercent(drift.target_pct ?? 0)} | Actual:{" "}
+                        {formatPercent(drift.actual_pct ?? 0)}
                       </p>
                     </div>
                   </div>
@@ -204,8 +204,8 @@ export default function AlertsPage() {
                           : "bg-orange-500/10 text-orange-500"
                       }`}
                     >
-                      {drift.drift > 0 ? "+" : ""}
-                      {formatPercent(drift.drift)} drift
+                      {(drift.drift ?? 0) > 0 ? "+" : ""}
+                      {formatPercent(drift.drift ?? 0)} drift
                     </span>
                     <p className="mt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]">
                       {severity === "major" ? "Major drift" : "Minor drift"}

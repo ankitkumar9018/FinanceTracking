@@ -5,7 +5,8 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatCurrency(value: number, currency = "INR", locale = "en-IN"): string {
+export function formatCurrency(value: number | null | undefined, currency = "INR", locale = "en-IN"): string {
+  if (value == null) return "—";
   return new Intl.NumberFormat(locale, {
     style: "currency",
     currency,
@@ -14,9 +15,10 @@ export function formatCurrency(value: number, currency = "INR", locale = "en-IN"
   }).format(value);
 }
 
-export function formatPercent(value: number, decimals = 2): string {
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(decimals)}%`;
+export function formatPercent(value: number | null | undefined, decimals = 2): string {
+  const v = value ?? 0;
+  const sign = v > 0 ? "+" : "";
+  return `${sign}${v.toFixed(decimals)}%`;
 }
 
 export function formatCompact(value: number): string {
