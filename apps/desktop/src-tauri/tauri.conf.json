@@ -18,10 +18,10 @@
         "minHeight": 600,
         "center": true,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "useHttpScheme": true
       }
-    ],
-    "security": {}
+    ]
   },
   "bundle": {
     "active": true,
