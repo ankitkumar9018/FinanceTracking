@@ -9,9 +9,8 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -123,39 +122,11 @@ for candidate in [
 if _static_dir:
     logger.info("Serving static frontend from %s", _static_dir)
 
-    # Serve static assets (_next/, icons/, etc.)
-    if (_static_dir / "_next").is_dir():
-        app.mount("/_next", StaticFiles(directory=str(_static_dir / "_next")), name="next-static")
-
-    # Serve root static files (favicon, manifest, sw.js, etc.)
-    @app.get("/favicon.svg", response_model=None)
-    @app.get("/manifest.json", response_model=None)
-    @app.get("/sw.js", response_model=None)
-    async def serve_root_static(request: Request):  # type: ignore[no-untyped-def]
-        file_path = _static_dir / request.url.path.lstrip("/")
-        if file_path.exists():
-            return FileResponse(str(file_path))
-        return FileResponse(str(_static_dir / "index.html"))
-
-    # Catch-all: serve index.html for any non-API route (SPA routing)
-    @app.get("/{path:path}", response_model=None)
-    async def serve_frontend(path: str):  # type: ignore[no-untyped-def]
-        # Don't serve frontend for API/WS routes
-        if path.startswith(("api/", "ws/", "health")):
-            return HTMLResponse(status_code=404, content="Not found")
-
-        # Try exact file first (e.g., /login/index.html)
-        file_path = _static_dir / path
-        if file_path.is_file():
-            return FileResponse(str(file_path))
-
-        # Try with index.html (Next.js trailingSlash: true)
-        index_path = _static_dir / path / "index.html"
-        if index_path.is_file():
-            return FileResponse(str(index_path))
-
-        # Fallback to root index.html (client-side routing)
-        return FileResponse(str(_static_dir / "index.html"))
+    # Mount the entire static directory as a fallback.
+    # html=True makes it serve index.html for directory requests (SPA routing).
+    # This MUST be the last mount — FastAPI checks explicit routes first,
+    # then falls back to mounts. So /api/v1/* routes take priority.
+    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="frontend")
 else:
     logger.debug("No static frontend directory found -- API-only mode")
 
