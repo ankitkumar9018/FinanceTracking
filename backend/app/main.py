@@ -136,12 +136,15 @@ if _static_dir:
 
         # Try to serve a static file
         # 1. Exact file match (e.g., /favicon.svg, /_next/static/...)
-        file_path = _static_dir / path.lstrip("/")
+        file_path = (_static_dir / path.lstrip("/")).resolve()
+        # Guard against path traversal (e.g., /../../../etc/passwd)
+        if not str(file_path).startswith(str(_static_dir.resolve())):
+            return await call_next(request)
         if file_path.is_file():
             return _FileResponse(str(file_path))
 
         # 2. Directory with index.html (Next.js trailingSlash: true)
-        index_path = _static_dir / path.lstrip("/") / "index.html"
+        index_path = (file_path / "index.html")
         if index_path.is_file():
             return _FileResponse(str(index_path))
 

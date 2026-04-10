@@ -13,6 +13,7 @@ import { api } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { formatPercent } from "@/lib/utils";
 import { motion } from "framer-motion";
+import toast from "react-hot-toast";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -118,6 +119,7 @@ export default function RiskPage() {
       setMetrics(riskData);
       setHoldingRisks(holdingsData);
     } catch {
+      toast.error("Failed to load risk metrics");
       setMetrics(null);
       setHoldingRisks([]);
     } finally {

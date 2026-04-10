@@ -87,6 +87,10 @@ export default function FnoPage() {
       toast.error("Please fill all required fields");
       return;
     }
+    if ((form.instrument_type === "CE" || form.instrument_type === "PE") && !form.strike_price) {
+      toast.error("Strike price is required for options (CE/PE)");
+      return;
+    }
     setSubmitting(true);
     try {
       const payload = {

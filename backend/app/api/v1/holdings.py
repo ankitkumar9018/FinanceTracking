@@ -110,6 +110,12 @@ async def create_holding(
     symbol = body.stock_symbol.upper().strip()
     exchange = body.exchange.upper().strip()
 
+    if not symbol:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Stock symbol cannot be empty",
+        )
+
     # Check if this stock already exists in the portfolio
     dup_result = await db.execute(
         select(Holding).where(
@@ -138,7 +144,7 @@ async def create_holding(
         total_qty = old_qty + new_qty
         if total_qty > 0:
             existing.average_price = round(
-                ((old_qty * old_avg) + (new_qty * new_avg)) / total_qty, 2
+                ((old_qty * old_avg) + (new_qty * new_avg)) / total_qty, 4
             )
         existing.cumulative_quantity = total_qty
 

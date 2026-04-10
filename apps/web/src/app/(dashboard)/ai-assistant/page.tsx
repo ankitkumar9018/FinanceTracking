@@ -178,6 +178,7 @@ export default function AIAssistantPage() {
 
   /* ---- Handle voice transcript ---- */
   function handleVoiceTranscript(text: string) {
+    if (!text.trim()) return;
     setInput(text);
     /* Auto-submit the voice transcription */
     const userMessage: ChatMessage = {

@@ -136,6 +136,9 @@ def parse_csv(file_bytes: bytes) -> list[dict]:
         row["stock_name"] = str(name).strip()
         row["exchange"] = str(exchange).strip().upper()
         row["transaction_type"] = str(tx_type).strip().upper()
+        if row["transaction_type"] not in ("BUY", "SELL"):
+            logger.warning("Invalid transaction type '%s' in CSV row, skipping", tx_type)
+            continue
 
         parsed_date = _parse_date(tx_date)
         if parsed_date is None:

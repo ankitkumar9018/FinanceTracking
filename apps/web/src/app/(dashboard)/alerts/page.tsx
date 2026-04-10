@@ -52,6 +52,7 @@ export default function AlertsPage() {
       const data = await api.get<Alert[]>("/alerts");
       setAlerts(data);
     } catch (err) {
+      toast.error("Failed to load alerts");
       console.error("Failed to load alerts:", err);
     } finally {
       setLoading(false);
@@ -75,6 +76,7 @@ export default function AlertsPage() {
         }))
       );
     } catch (err) {
+      toast.error("Failed to load drift alerts");
       console.error("Failed to load drift alerts:", err);
       setDriftAlerts([]);
     } finally {

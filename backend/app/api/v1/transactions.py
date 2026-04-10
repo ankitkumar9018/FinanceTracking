@@ -69,6 +69,41 @@ async def _get_user_transaction(
 # Routes
 # ---------------------------------------------------------------------------
 
+@router.post("/backfill", response_model=TransactionResponse | None, status_code=status.HTTP_200_OK)
+async def backfill_transaction(
+    holding_id: int = Query(description="Holding to backfill"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Transaction | None:
+    """Seed a BUY transaction if the holding has quantity but no transactions.
+
+    This is a one-time migration helper for holdings created before
+    transaction tracking was added.  It is idempotent — calling it when
+    transactions already exist is a no-op.
+    """
+    holding = await _verify_holding_ownership(holding_id, user, db)
+    count_result = await db.execute(
+        select(func.count()).select_from(Transaction).where(Transaction.holding_id == holding_id)
+    )
+    tx_count = count_result.scalar() or 0
+    if tx_count == 0 and float(holding.cumulative_quantity) > 0:
+        seed_tx = Transaction(
+            holding_id=holding_id,
+            transaction_type="BUY",
+            date=holding.created_at.date() if holding.created_at else date.today(),
+            quantity=float(holding.cumulative_quantity),
+            price=float(holding.average_price),
+            brokerage=0,
+            source="MANUAL",
+            notes="Auto-created from existing holding",
+        )
+        db.add(seed_tx)
+        await db.flush()
+        await db.refresh(seed_tx)
+        return seed_tx
+    return None
+
+
 @router.get("/", response_model=list[TransactionResponse])
 async def list_transactions(
     holding_id: int | None = Query(default=None, description="Filter by holding"),
@@ -78,27 +113,6 @@ async def list_transactions(
     db: AsyncSession = Depends(get_db),
 ) -> list[Transaction]:
     """List transactions, optionally filtered by holding_id."""
-
-    # Auto-backfill: if a specific holding has qty but no transactions, seed one
-    if holding_id is not None:
-        holding = await _verify_holding_ownership(holding_id, user, db)
-        count_result = await db.execute(
-            select(func.count()).select_from(Transaction).where(Transaction.holding_id == holding_id)
-        )
-        tx_count = count_result.scalar() or 0
-        if tx_count == 0 and float(holding.cumulative_quantity) > 0:
-            seed_tx = Transaction(
-                holding_id=holding_id,
-                transaction_type="BUY",
-                date=holding.created_at.date() if holding.created_at else date.today(),
-                quantity=float(holding.cumulative_quantity),
-                price=float(holding.average_price),
-                brokerage=0,
-                source="MANUAL",
-                notes="Auto-created from existing holding",
-            )
-            db.add(seed_tx)
-            await db.flush()
 
     stmt = (
         select(Transaction)

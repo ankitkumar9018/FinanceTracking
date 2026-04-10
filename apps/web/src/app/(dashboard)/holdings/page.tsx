@@ -252,7 +252,7 @@ export default function HoldingsPage() {
 
   async function handleAddStock(e: React.FormEvent) {
     e.preventDefault();
-    if (!addForm.stock_symbol || addForm.cumulative_quantity <= 0 || addForm.average_price <= 0) {
+    if (!addForm.stock_symbol.trim() || addForm.cumulative_quantity <= 0 || addForm.average_price <= 0) {
       toast.error("Please fill in all required fields");
       return;
     }
@@ -276,7 +276,7 @@ export default function HoldingsPage() {
       await api.post(`/holdings`, {
         portfolio_id: portfolioId,
         ...addForm,
-        stock_symbol: addForm.stock_symbol.toUpperCase(),
+        stock_symbol: addForm.stock_symbol.trim().toUpperCase(),
       });
       toast.success(`${addForm.stock_symbol.toUpperCase()} updated in portfolio`);
       setShowAddModal(false);
@@ -364,9 +364,12 @@ export default function HoldingsPage() {
     setShowTransactions(true);
     setTransLoading(true);
     try {
+      // Backfill seed transaction for legacy holdings with no transactions
+      await api.post(`/transactions/backfill?holding_id=${holdingId}`).catch(() => {});
       const data = await api.get<Transaction[]>(`/transactions?holding_id=${holdingId}`);
       setTransactions(data);
     } catch {
+      toast.error("Failed to load transactions");
       setTransactions([]);
     } finally {
       setTransLoading(false);
@@ -419,6 +422,19 @@ export default function HoldingsPage() {
       if (activePortfolioId) await fetchHoldings(activePortfolioId);
     } catch {
       toast.error("Failed to update transaction");
+    }
+  }
+
+  async function handleDeleteHolding(holdingId: number, symbol: string) {
+    if (!confirm(`Delete ${symbol} and all its transactions? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/holdings/${holdingId}`);
+      toast.success(`Deleted ${symbol}`);
+      setShowEditModal(false);
+      setEditingHoldingId(null);
+      if (activePortfolioId) await fetchHoldings(activePortfolioId);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete holding");
     }
   }
 
@@ -790,6 +806,13 @@ export default function HoldingsPage() {
                               >
                                 <List className="h-3.5 w-3.5" />
                               </button>
+                              <button
+                                onClick={() => handleDeleteHolding(holding.holding_id, holding.stock_symbol)}
+                                className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-red-500/20 hover:text-red-500 transition-colors"
+                                title="Delete holding"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
                             </div>
                           </td>
                         </tr>
@@ -857,16 +880,28 @@ export default function HoldingsPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     {!bulkEditMode && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openEditModal(holding);
-                        }}
-                        className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
-                        title="Edit holding"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </button>
+                      <>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEditModal(holding);
+                          }}
+                          className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
+                          title="Edit holding"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteHolding(holding.holding_id, holding.stock_symbol);
+                          }}
+                          className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-red-500/20 hover:text-red-500 transition-colors"
+                          title="Delete holding"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </>
                     )}
                     <ActionNeededCell action={holding.action_needed} />
                   </div>
@@ -1443,10 +1478,10 @@ export default function HoldingsPage() {
                     <input
                       type="number"
                       required
-                      min="1"
-                      step="1"
+                      min="0.000001"
+                      step="any"
                       value={editForm.cumulative_quantity || ""}
-                      onChange={(e) => setEditForm({ ...editForm, cumulative_quantity: parseInt(e.target.value) || 0 })}
+                      onChange={(e) => setEditForm({ ...editForm, cumulative_quantity: parseFloat(e.target.value) || 0 })}
                       className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
                     />
                   </div>
@@ -1554,28 +1589,38 @@ export default function HoldingsPage() {
                   </div>
                 </details>
 
-                <div className="flex justify-end gap-3 pt-2">
+                <div className="flex justify-between gap-3 pt-2">
                   <button
                     type="button"
-                    onClick={() => setShowEditModal(false)}
-                    className="rounded-md border border-[hsl(var(--border))] px-4 py-2 text-sm font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
+                    onClick={() => editingHoldingId && handleDeleteHolding(editingHoldingId, editForm.stock_symbol)}
+                    className="inline-flex items-center gap-2 rounded-md border border-red-500/30 px-4 py-2 text-sm font-medium text-red-500 hover:bg-red-500/10 transition-colors"
                   >
-                    Cancel
+                    <Trash2 className="h-4 w-4" />
+                    Delete
                   </button>
-                  <button
-                    type="submit"
-                    disabled={editingStock}
-                    className="inline-flex items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 transition-colors disabled:opacity-50"
-                  >
-                    {editingStock ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Saving...
-                      </>
-                    ) : (
-                      "Save Changes"
-                    )}
-                  </button>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowEditModal(false)}
+                      className="rounded-md border border-[hsl(var(--border))] px-4 py-2 text-sm font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={editingStock}
+                      className="inline-flex items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 transition-colors disabled:opacity-50"
+                    >
+                      {editingStock ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        "Save Changes"
+                      )}
+                    </button>
+                  </div>
                 </div>
               </form>
             </motion.div>

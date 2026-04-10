@@ -136,7 +136,10 @@ async def search_stocks(
                 timeout=5.0,
             )
             if resp.status_code == 200:
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except (ValueError, KeyError):
+                    data = {}
                 quotes = data.get("quotes", [])
 
                 # Map exchange names

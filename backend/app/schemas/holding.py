@@ -32,8 +32,8 @@ class HoldingPatch(BaseModel):
     stock_name: str | None = None
     exchange: str | None = None
     currency: str | None = None
-    cumulative_quantity: float | None = None
-    average_price: float | None = None
+    cumulative_quantity: float | None = Field(default=None, ge=0)
+    average_price: float | None = Field(default=None, ge=0)
     lower_mid_range_1: float | None = None
     lower_mid_range_2: float | None = None
     upper_mid_range_1: float | None = None

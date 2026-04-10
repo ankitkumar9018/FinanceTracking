@@ -98,6 +98,9 @@ def parse_excel(file_bytes: bytes) -> list[dict]:
         row_dict["stock_name"] = str(name).strip()
         row_dict["exchange"] = str(exchange).strip().upper()
         row_dict["transaction_type"] = str(tx_type).strip().upper()
+        if row_dict["transaction_type"] not in ("BUY", "SELL"):
+            logger.warning("Invalid transaction type '%s' in row, skipping", tx_type)
+            continue
 
         # Parse date
         if isinstance(tx_date, datetime):

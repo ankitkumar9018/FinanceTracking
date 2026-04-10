@@ -5,6 +5,7 @@ import { Receipt, TrendingDown, TrendingUp, ShieldCheck, Coins } from "lucide-re
 import { api } from "@/lib/api-client";
 import { formatCurrency } from "@/lib/utils";
 import { motion } from "framer-motion";
+import toast from "react-hot-toast";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -85,7 +86,7 @@ export default function TaxPage() {
       setSummary(sum);
       setHarvesting(harv);
     } catch {
-      // keep previous state on error
+      toast.error("Failed to load tax data");
     } finally {
       setLoading(false);
     }

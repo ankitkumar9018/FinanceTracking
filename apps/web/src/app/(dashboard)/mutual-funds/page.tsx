@@ -83,7 +83,7 @@ export default function MutualFundsPage() {
       setFunds(fundsList);
       setSummary(sum);
     } catch {
-      // keep existing state
+      toast.error("Failed to load mutual funds");
     } finally {
       setLoading(false);
     }

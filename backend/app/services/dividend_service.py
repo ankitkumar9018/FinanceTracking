@@ -75,7 +75,7 @@ async def create_dividend(
         old_qty = Decimal(str(float(holding.cumulative_quantity)))
         old_avg = Decimal(str(float(holding.average_price)))
         drip_shares = Decimal(str(data.reinvest_shares))
-        drip_price = Decimal(str(data.reinvest_price)) if data.reinvest_price else Decimal("0")
+        drip_price = Decimal(str(data.reinvest_price)) if data.reinvest_price else old_avg
 
         new_qty = old_qty + drip_shares
         if new_qty > 0:
@@ -251,7 +251,7 @@ async def delete_dividend(
         old_qty = Decimal(str(float(holding.cumulative_quantity)))
         old_avg = Decimal(str(float(holding.average_price)))
         drip_shares = Decimal(str(float(dividend.reinvest_shares)))
-        drip_price = Decimal(str(float(dividend.reinvest_price))) if dividend.reinvest_price else Decimal("0")
+        drip_price = Decimal(str(float(dividend.reinvest_price))) if dividend.reinvest_price else old_avg
 
         new_qty = old_qty - drip_shares
         if new_qty > 0:

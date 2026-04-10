@@ -76,6 +76,7 @@ export default function ReportsPage() {
         const html = await res.text();
         const win = window.open("", "_blank");
         if (win) { win.document.write(html); win.document.close(); }
+        else { throw new Error("Popup blocked — please allow popups for this site"); }
       }),
     },
     {

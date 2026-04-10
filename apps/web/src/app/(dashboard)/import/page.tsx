@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ChevronDown, FileText, Database, FileJson } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio-store";
@@ -70,10 +70,21 @@ export default function ImportPage() {
   const [typeOpen, setTypeOpen] = useState(false);
 
   const currentType = DATA_TYPES.find((t) => t.key === dataType)!;
+  const typeSelectorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!activePortfolioId) fetchPortfolios();
   }, [activePortfolioId, fetchPortfolios]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (typeSelectorRef.current && !typeSelectorRef.current.contains(e.target as Node)) {
+        setTypeOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const handleFile = useCallback(async (file: File) => {
     const ext = file.name.split(".").pop()?.toLowerCase();
@@ -131,7 +142,7 @@ export default function ImportPage() {
     if (!endpoint) return;
     try {
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1"}${endpoint}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("token") || ""}` },
+        headers: { Authorization: `Bearer ${localStorage.getItem("ft-access-token") || ""}` },
       });
       if (!res.ok) throw new Error("Download failed");
       const blob = await res.blob();
@@ -159,15 +170,7 @@ export default function ImportPage() {
       </div>
 
       {/* Data type selector */}
-      <div className="relative inline-block" ref={(el) => {
-        if (el) {
-          const handler = (e: MouseEvent) => {
-            if (!el.contains(e.target as Node)) setTypeOpen(false);
-          };
-          document.addEventListener("mousedown", handler);
-          return () => document.removeEventListener("mousedown", handler);
-        }
-      }}>
+      <div className="relative inline-block" ref={typeSelectorRef}>
         <button
           onClick={() => setTypeOpen(!typeOpen)}
           className="flex items-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-2.5 text-sm font-medium hover:bg-[hsl(var(--accent))] transition-colors"

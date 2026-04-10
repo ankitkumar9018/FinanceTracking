@@ -295,3 +295,67 @@ async def test_action_needed_no_ranges(client: AsyncClient, auth_headers: dict[s
     assert holding["action_needed"] == "N"
     assert holding["lower_mid_range_1"] is None
     assert holding["upper_mid_range_1"] is None
+
+
+# ---------------------------------------------------------------------------
+# Duplicate stock merge (weighted average)
+# ---------------------------------------------------------------------------
+
+async def test_duplicate_stock_merges_weighted_average(client: AsyncClient, auth_headers: dict[str, str]):
+    """Adding the same stock twice merges quantities and recalculates weighted average price."""
+    pid = await _create_portfolio(client, auth_headers)
+
+    # First add: 100 shares @ 2500
+    h1 = await _create_holding(client, auth_headers, pid, symbol="INFY", name="Infosys", quantity=100, avg_price=2500)
+    assert h1["cumulative_quantity"] == 100
+    assert h1["average_price"] == 2500
+
+    # Second add: same symbol+exchange, 50 shares @ 2600
+    resp = await client.post(
+        "/api/v1/holdings/",
+        json={
+            "portfolio_id": pid,
+            "stock_symbol": "INFY",
+            "stock_name": "Infosys",
+            "exchange": "NSE",
+            "cumulative_quantity": 50,
+            "average_price": 2600,
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201
+    merged = resp.json()
+
+    # Weighted avg: (100*2500 + 50*2600) / 150 = 380000/150 = 2533.3333
+    assert merged["cumulative_quantity"] == 150
+    assert abs(merged["average_price"] - 2533.3333) < 0.01
+
+    # Verify only one holding exists (not two)
+    list_resp = await client.get(f"/api/v1/holdings/?portfolio_id={pid}", headers=auth_headers)
+    holdings = [h for h in list_resp.json() if h["stock_symbol"] == "INFY"]
+    assert len(holdings) == 1
+
+
+async def test_same_stock_different_exchange_not_merged(client: AsyncClient, auth_headers: dict[str, str]):
+    """Same symbol on different exchanges creates separate holdings."""
+    pid = await _create_portfolio(client, auth_headers)
+
+    await _create_holding(client, auth_headers, pid, symbol="TCS", name="TCS NSE", exchange="NSE", quantity=10, avg_price=100)
+    await _create_holding(client, auth_headers, pid, symbol="TCS", name="TCS BSE", exchange="BSE", quantity=20, avg_price=200)
+
+    list_resp = await client.get(f"/api/v1/holdings/?portfolio_id={pid}", headers=auth_headers)
+    tcs_holdings = [h for h in list_resp.json() if h["stock_symbol"] == "TCS"]
+    assert len(tcs_holdings) == 2
+
+
+async def test_delete_holding(client: AsyncClient, auth_headers: dict[str, str]):
+    """Deleting a holding returns 204 and removes it from the portfolio."""
+    pid = await _create_portfolio(client, auth_headers)
+    holding = await _create_holding(client, auth_headers, pid, symbol="DEL", name="Delete Me", quantity=10, avg_price=100)
+
+    resp = await client.delete(f"/api/v1/holdings/{holding['id']}", headers=auth_headers)
+    assert resp.status_code == 204
+
+    # Verify it's gone
+    get_resp = await client.get(f"/api/v1/holdings/{holding['id']}", headers=auth_headers)
+    assert get_resp.status_code == 404

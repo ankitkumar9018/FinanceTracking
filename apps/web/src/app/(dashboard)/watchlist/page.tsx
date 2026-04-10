@@ -39,6 +39,7 @@ export default function WatchlistPage() {
       const data = await api.get<WatchlistItem[]>("/watchlist");
       setItems(data);
     } catch (err) {
+      toast.error("Failed to load watchlist");
       console.error("Failed to load watchlist:", err);
     } finally {
       setLoading(false);

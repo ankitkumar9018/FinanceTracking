@@ -108,6 +108,12 @@ export const api = {
     const token = await getToken();
     const headers: Record<string, string> = {};
     if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    // Clone FormData entries so we can rebuild it for a retry after 401.
+    // Once a FormData body is consumed by fetch, it cannot be reused.
+    const entries: [string, FormDataEntryValue][] = [];
+    formData.forEach((value, key) => entries.push([key, value]));
+
     const response = await fetch(`${apiBase}${path}`, {
       method: "POST",
       headers,
@@ -119,10 +125,13 @@ export const api = {
         const retryHeaders: Record<string, string> = {};
         const newToken = localStorage.getItem("ft-access-token");
         if (newToken) retryHeaders["Authorization"] = `Bearer ${newToken}`;
+        // Rebuild FormData from saved entries
+        const retryForm = new FormData();
+        for (const [key, value] of entries) retryForm.append(key, value);
         const retry = await fetch(`${apiBase}${path}`, {
           method: "POST",
           headers: retryHeaders,
-          body: formData,
+          body: retryForm,
         });
         if (!retry.ok) {
           const err = await retry.json().catch(() => ({ detail: "Upload failed" }));

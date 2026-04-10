@@ -7,7 +7,7 @@ import { PortfolioTable } from "@/components/dashboard/portfolio-table";
 import { ContextualHelp } from "@/components/shared/contextual-help";
 
 export default function DashboardPage() {
-  const { fetchPortfolios, holdings, isLoading } = usePortfolioStore();
+  const { fetchPortfolios, holdings, isLoading, error } = usePortfolioStore();
 
   useEffect(() => {
     fetchPortfolios();
@@ -24,6 +24,18 @@ export default function DashboardPage() {
           Track your investments across Indian and German markets
         </p>
       </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4">
+          <p className="text-sm font-medium text-red-500">{error}</p>
+          <button
+            onClick={() => fetchPortfolios()}
+            className="mt-2 text-sm font-medium text-red-500 underline hover:text-red-400"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <PortfolioSummaryCards holdings={holdings} isLoading={isLoading} />
       <PortfolioTable holdings={holdings} isLoading={isLoading} />

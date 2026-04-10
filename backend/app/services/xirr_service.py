@@ -45,8 +45,10 @@ def xirr(cash_flows: list[CashFlow], guess: float = 0.1, max_iter: int = 200, to
     def _dnpv(rate: float) -> float:
         return sum(-_days(cf.date) * cf.amount / (1 + rate) ** (_days(cf.date) + 1) for cf in flows)
 
-    rate = guess
+    rate = max(guess, -0.99)
     for _ in range(max_iter):
+        # Clamp rate before computing to avoid (1 + rate) ** x with rate <= -1
+        rate = max(rate, -0.99)
         try:
             npv = _npv(rate)
             dnpv = _dnpv(rate)
@@ -57,7 +59,6 @@ def xirr(cash_flows: list[CashFlow], guess: float = 0.1, max_iter: int = 200, to
                 return rate
             break
         new_rate = rate - npv / dnpv
-        # Clamp to avoid math domain errors from (1 + rate) ** x with rate <= -1
         new_rate = max(new_rate, -0.99)
         if abs(new_rate - rate) < tol:
             return new_rate

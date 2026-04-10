@@ -74,7 +74,7 @@ export default function DividendsPage() {
       setDividends(divs);
       setSummary(sum);
     } catch {
-      // keep existing state
+      toast.error("Failed to load dividends");
     } finally {
       setLoading(false);
     }
