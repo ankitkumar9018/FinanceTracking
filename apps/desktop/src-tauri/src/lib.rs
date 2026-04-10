@@ -162,7 +162,7 @@ pub fn run() {
                 } else {
                     eprintln!("WARNING: Backend did not respond within 30 seconds");
                     let _ = window.eval(
-                        "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888\"><div style=\"text-align:center\"><h2>Backend failed to start</h2><p>Try running financetracker-backend.exe manually</p></div></div>';"
+                        "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888;background:#09090b\"><div style=\"text-align:center\"><h2 style=\"color:#fafafa\">Backend failed to start</h2><p>The server did not respond within 30 seconds.</p><button onclick=\"window.location.reload()\" style=\"margin-top:16px;padding:8px 24px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px\">Retry</button></div></div>';"
                     );
                 }
             });
