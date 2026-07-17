@@ -286,9 +286,35 @@ uv run python -c "import PyInstaller" 2>/dev/null || uv add --dev pyinstaller
 log_success "PyInstaller ready"
 
 # -------------------------------------------------------------------------
-# Step 4: Build backend sidecar binary
+# Step 4: Build static frontend (MUST run before the sidecar build — the
+# PyInstaller spec bundles backend/static into the binary, and the installed
+# app serves the UI from there. Building in the old order shipped a sidecar
+# with no frontend at all → blank window after install.)
 # -------------------------------------------------------------------------
-log_step "Step 4/7: Building backend sidecar binary (this may take a few minutes)..."
+log_step "Step 4/7: Building static frontend..."
+
+cd "$PROJECT_ROOT"
+STATIC_EXPORT=true pnpm --filter @finance-tracker/web build 2>&1 | grep -E "(Route|First Load|Exporting|Error)" | head -5
+
+if [ ! -d "$WEB_DIR/out" ]; then
+    log_error "Static export failed — out/ directory not found"
+    exit 1
+fi
+
+rm -rf "$DESKTOP_DIR/dist"
+cp -r "$WEB_DIR/out" "$DESKTOP_DIR/dist"
+
+# Stage the frontend inside the backend so PyInstaller bundles it
+rm -rf "$BACKEND_DIR/static"
+cp -r "$WEB_DIR/out" "$BACKEND_DIR/static"
+
+FRONTEND_SIZE=$(du -sh "$DESKTOP_DIR/dist" | cut -f1)
+log_success "Static frontend: $FRONTEND_SIZE (staged into backend/static for sidecar)"
+
+# -------------------------------------------------------------------------
+# Step 5: Build backend sidecar binary
+# -------------------------------------------------------------------------
+log_step "Step 5/7: Building backend sidecar binary (this may take a few minutes)..."
 
 cd "$BACKEND_DIR"
 uv run pyinstaller financetracker.spec --clean --noconfirm 2>&1 | grep -E "^(INFO|WARNING|Building|$)" | head -20
@@ -305,25 +331,6 @@ chmod +x "$BINARIES_DIR/$BINARY_NAME"
 
 BINARY_SIZE=$(du -h "$BINARIES_DIR/$BINARY_NAME" | cut -f1)
 log_success "Sidecar binary: $BINARY_NAME ($BINARY_SIZE)"
-
-# -------------------------------------------------------------------------
-# Step 5: Build static frontend
-# -------------------------------------------------------------------------
-log_step "Step 5/7: Building static frontend..."
-
-cd "$PROJECT_ROOT"
-STATIC_EXPORT=true pnpm --filter @finance-tracker/web build 2>&1 | grep -E "(Route|First Load|Exporting|Error)" | head -5
-
-if [ ! -d "$WEB_DIR/out" ]; then
-    log_error "Static export failed — out/ directory not found"
-    exit 1
-fi
-
-rm -rf "$DESKTOP_DIR/dist"
-cp -r "$WEB_DIR/out" "$DESKTOP_DIR/dist"
-
-FRONTEND_SIZE=$(du -sh "$DESKTOP_DIR/dist" | cut -f1)
-log_success "Static frontend: $FRONTEND_SIZE"
 
 # -------------------------------------------------------------------------
 # Step 6: Build Tauri installer

@@ -150,20 +150,47 @@ pub fn run() {
             // This makes the frontend load from http://localhost:{port} (same origin
             // as the API), which avoids the mixed-content blocking issue on Windows
             // where Tauri serves from https://tauri.localhost but API is HTTP.
+            // The #ftport= hash tells the frontend which port the API is on
+            // (after navigation the Tauri IPC bridge is no longer available).
             let window = app.get_webview_window("main").expect("no main window");
+
+            // The window starts at about:blank — inject a loading screen
+            // IMMEDIATELY. The onefile sidecar can take 40-120s to boot
+            // (PyInstaller extraction + Gatekeeper/AV scan on first run);
+            // without feedback users see a blank window and assume the app
+            // is broken.
+            let _ = window.eval(
+                "document.documentElement.innerHTML = '<head><style>body{margin:0;font-family:system-ui;background:#09090b;color:#fafafa;display:flex;align-items:center;justify-content:center;height:100vh}.sp{width:40px;height:40px;border:3px solid #333;border-top-color:#6366f1;border-radius:50%;animation:r 1s linear infinite;margin:0 auto 16px}@keyframes r{to{transform:rotate(360deg)}}p{color:#888;font-size:14px}</style></head><body><div style=\"text-align:center\"><div class=\"sp\"></div><h2 style=\"margin:0 0 8px\">FinanceTracker</h2><p>Starting local server\\u2026<br>First launch can take a minute or two.</p></div></body>';"
+            );
+
             std::thread::spawn(move || {
-                if wait_for_backend(port, 30) {
-                    println!("Backend ready -- navigating window to http://localhost:{}", port);
-                    let url = format!("http://localhost:{}", port);
-                    let _ = window.eval(&format!(
-                        "window.location.replace('{}');",
-                        url
-                    ));
+                let url = format!("http://localhost:{}/#ftport={}", port, port);
+                // Onefile PyInstaller extracts the whole bundle on every launch;
+                // a cold start (or an antivirus scan on Windows) can take well
+                // over 30s, so wait generously before declaring failure.
+                if wait_for_backend(port, 120) {
+                    println!("Backend ready -- navigating window to {}", url);
+                    let _ = window.eval(&format!("window.location.replace('{}');", url));
                 } else {
-                    eprintln!("WARNING: Backend did not respond within 30 seconds");
-                    let _ = window.eval(
-                        "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888;background:#09090b\"><div style=\"text-align:center\"><h2 style=\"color:#fafafa\">Backend failed to start</h2><p>The server did not respond within 30 seconds.</p><button onclick=\"window.location.reload()\" style=\"margin-top:16px;padding:8px 24px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px\">Retry</button></div></div>';"
+                    eprintln!("WARNING: Backend did not respond within 120 seconds");
+                    // Self-healing error page: keeps polling /health in the
+                    // webview and navigates as soon as the backend comes up —
+                    // a plain reload would return to the static shell with no
+                    // monitor thread left to navigate, stranding the user.
+                    let recovery = format!(
+                        "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888;background:#09090b\"><div style=\"text-align:center\"><h2 style=\"color:#fafafa\">Backend is taking longer than expected</h2><p id=\"ft-status\">Still trying to reach the local server\\u2026</p><button onclick=\"window.__ftCheck&&window.__ftCheck()\" style=\"margin-top:16px;padding:8px 24px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px\">Retry now</button></div></div>';\
+                        window.__ftCheck = function() {{\
+                            fetch('http://localhost:{port}/health').then(function(r) {{\
+                                if (r.ok) {{ window.location.replace('http://localhost:{port}/#ftport={port}'); }}\
+                            }}).catch(function() {{\
+                                var el = document.getElementById('ft-status');\
+                                if (el) {{ el.textContent = 'Server not reachable yet \\u2014 retrying\\u2026 (' + new Date().toLocaleTimeString() + ')'; }}\
+                            }});\
+                        }};\
+                        window.__ftTimer = setInterval(window.__ftCheck, 2000);",
+                        port = port
                     );
+                    let _ = window.eval(&recovery);
                 }
             });
 
