@@ -1,9 +1,19 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Receipt, TrendingDown, TrendingUp, ShieldCheck, Coins } from "lucide-react";
+import {
+  Receipt,
+  TrendingDown,
+  TrendingUp,
+  ShieldCheck,
+  Coins,
+  PiggyBank,
+  Landmark,
+  Info,
+} from "lucide-react";
 import { api } from "@/lib/api-client";
 import { formatCurrency } from "@/lib/utils";
+import { usePortfolioStore } from "@/stores/portfolio-store";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
 
@@ -47,6 +57,32 @@ interface HarvestingSuggestion {
   gain_type: string;
 }
 
+interface GermanAllowance {
+  total_allowance: number;
+  used: number;
+  remaining: number;
+  filing: "single" | "joint";
+}
+
+interface VorabFund {
+  holding_id: number;
+  stock_symbol: string;
+  fund_type: string | null;
+  taxable_vorabpauschale: number;
+  tax_amount: number;
+}
+
+interface VorabEstimate {
+  portfolio_id: number;
+  year: number;
+  basiszins_pct: number;
+  is_estimate: boolean;
+  funds: VorabFund[];
+  total_vorabpauschale: number;
+  total_taxable_vorabpauschale: number;
+  total_estimated_tax: number;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
@@ -65,6 +101,16 @@ export default function TaxPage() {
   const [summary, setSummary] = useState<TaxSummary | null>(null);
   const [harvesting, setHarvesting] = useState<HarvestingSuggestion[]>([]);
   const [loading, setLoading] = useState(true);
+
+  /* German advanced tax state */
+  const [allowance, setAllowance] = useState<GermanAllowance | null>(null);
+  const [vorab, setVorab] = useState<VorabEstimate | null>(null);
+  const [advLoading, setAdvLoading] = useState(false);
+  const [savingFiling, setSavingFiling] = useState(false);
+
+  const activePortfolioId = usePortfolioStore((s) => s.activePortfolioId);
+  const fetchPortfolios = usePortfolioStore((s) => s.fetchPortfolios);
+  const hasLoadedPortfolios = usePortfolioStore((s) => s.hasLoadedPortfolios);
 
   const fyOptions = jurisdiction === "IN" ? INDIA_FYS : GERMANY_FYS;
 
@@ -95,6 +141,56 @@ export default function TaxPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  /* Ensure the active portfolio is known (needed for the Vorabpauschale estimate) */
+  useEffect(() => {
+    if (!hasLoadedPortfolios) fetchPortfolios();
+  }, [hasLoadedPortfolios, fetchPortfolios]);
+
+  /* Load the German advanced-tax data (allowance + Vorabpauschale estimate) */
+  const loadGermanAdvanced = useCallback(async () => {
+    if (jurisdiction !== "DE") return;
+    setAdvLoading(true);
+    try {
+      const [allow, vp] = await Promise.all([
+        api.get<GermanAllowance>(
+          `/tax/allowance?jurisdiction=DE&financial_year=${financialYear}`
+        ),
+        activePortfolioId
+          ? api.get<VorabEstimate>(
+              `/tax/vorabpauschale/${activePortfolioId}?year=${financialYear}`
+            )
+          : Promise.resolve<VorabEstimate | null>(null),
+      ]);
+      setAllowance(allow);
+      setVorab(vp);
+    } catch {
+      toast.error("Failed to load German tax details");
+    } finally {
+      setAdvLoading(false);
+    }
+  }, [jurisdiction, financialYear, activePortfolioId]);
+
+  useEffect(() => {
+    loadGermanAdvanced();
+  }, [loadGermanAdvanced]);
+
+  /* Persist the single/joint filing election, then refresh the allowance */
+  async function handleFilingChange(filing: "single" | "joint") {
+    if (savingFiling || allowance?.filing === filing) return;
+    setSavingFiling(true);
+    try {
+      await api.put("/tax/settings", { filing });
+      toast.success(
+        filing === "joint" ? "Filing set to joint" : "Filing set to single"
+      );
+      await loadGermanAdvanced();
+    } catch {
+      toast.error("Failed to update filing status");
+    } finally {
+      setSavingFiling(false);
+    }
+  }
 
   /* When jurisdiction changes, reset the FY to the first option */
   function handleJurisdictionChange(j: "IN" | "DE") {
@@ -237,6 +333,169 @@ export default function TaxPage() {
             );
           })}
         </div>
+      )}
+
+      {/* ---- German advanced tax section ---- */}
+      {jurisdiction === "DE" && (
+        <section
+          aria-label="German advanced tax"
+          className="space-y-4 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5"
+        >
+          <div className="flex items-center gap-2">
+            <Landmark className="h-5 w-5 text-[hsl(var(--primary))]" />
+            <div>
+              <h2 className="font-semibold">German Tax (advanced)</h2>
+              <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                Sparer-Pauschbetrag usage and estimated Vorabpauschale for {financialYear}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            {/* Sparer-Pauschbetrag allowance */}
+            <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <PiggyBank className="h-4 w-4 text-[hsl(var(--profit))]" />
+                  <h3 className="text-sm font-semibold">Sparer-Pauschbetrag</h3>
+                </div>
+
+                {/* single / joint toggle */}
+                <div
+                  role="group"
+                  aria-label="Filing status"
+                  className="flex rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))] text-xs"
+                >
+                  {(["single", "joint"] as const).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => handleFilingChange(f)}
+                      disabled={savingFiling}
+                      aria-pressed={allowance?.filing === f}
+                      aria-label={`Set filing status to ${f}`}
+                      className={`px-3 py-1 font-medium transition-colors first:rounded-l-md last:rounded-r-md disabled:opacity-50 ${
+                        allowance?.filing === f
+                          ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]"
+                          : "text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                      }`}
+                    >
+                      {f === "single" ? "Single" : "Joint"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {advLoading && !allowance ? (
+                <div className="mt-4 h-16 animate-pulse rounded bg-[hsl(var(--muted))]" />
+              ) : allowance ? (
+                <>
+                  <div className="mt-4 flex items-baseline justify-between text-sm">
+                    <span className="text-[hsl(var(--muted-foreground))]">Used</span>
+                    <span className="font-mono font-semibold">
+                      {formatCurrency(allowance.used, "EUR", "de-DE")} /{" "}
+                      {formatCurrency(allowance.total_allowance, "EUR", "de-DE")}
+                    </span>
+                  </div>
+                  <div
+                    className="mt-2 h-3 w-full overflow-hidden rounded-full bg-[hsl(var(--muted))]"
+                    role="progressbar"
+                    aria-label="Allowance used"
+                    aria-valuenow={Math.round(allowance.used)}
+                    aria-valuemin={0}
+                    aria-valuemax={Math.round(allowance.total_allowance)}
+                  >
+                    <div
+                      className="h-full rounded-full bg-[hsl(var(--primary))] transition-all"
+                      style={{
+                        width: `${
+                          allowance.total_allowance > 0
+                            ? Math.min(
+                                100,
+                                (allowance.used / allowance.total_allowance) * 100
+                              )
+                            : 0
+                        }%`,
+                      }}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs text-[hsl(var(--muted-foreground))]">
+                    {formatCurrency(allowance.remaining, "EUR", "de-DE")} tax-free
+                    headroom remaining this year
+                  </p>
+                </>
+              ) : (
+                <p className="mt-4 text-sm text-[hsl(var(--muted-foreground))]">
+                  No allowance data available.
+                </p>
+              )}
+            </div>
+
+            {/* Vorabpauschale estimate */}
+            <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4">
+              <div className="flex items-center gap-2">
+                <Coins className="h-4 w-4 text-[hsl(var(--loss))]" />
+                <h3 className="text-sm font-semibold">Estimated Vorabpauschale</h3>
+                <span className="ml-auto rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600">
+                  Estimate
+                </span>
+              </div>
+
+              {advLoading && !vorab ? (
+                <div className="mt-4 h-16 animate-pulse rounded bg-[hsl(var(--muted))]" />
+              ) : !activePortfolioId ? (
+                <p className="mt-4 text-sm text-[hsl(var(--muted-foreground))]">
+                  Select a portfolio to estimate the advance lump-sum tax.
+                </p>
+              ) : vorab && vorab.funds.length > 0 ? (
+                <>
+                  <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-[hsl(var(--muted-foreground))]">
+                        Taxable Vorabpauschale
+                      </p>
+                      <p className="font-mono font-semibold">
+                        {formatCurrency(
+                          vorab.total_taxable_vorabpauschale,
+                          "EUR",
+                          "de-DE"
+                        )}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[hsl(var(--muted-foreground))]">
+                        Estimated tax
+                      </p>
+                      <p className="font-mono font-semibold text-[hsl(var(--loss))]">
+                        {formatCurrency(vorab.total_estimated_tax, "EUR", "de-DE")}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-xs text-[hsl(var(--muted-foreground))]">
+                    Basiszins {vorab.basiszins_pct}% for {vorab.year}, across{" "}
+                    {vorab.funds.length} fund
+                    {vorab.funds.length === 1 ? "" : "s"}. Uses current values as a
+                    proxy for year start/end.
+                  </p>
+                </>
+              ) : (
+                <p className="mt-4 text-sm text-[hsl(var(--muted-foreground))]">
+                  No German fund holdings with a fund type set. Set a fund type on
+                  XETRA holdings to see an estimate.
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Automatic-adjustments note */}
+          <div className="flex items-start gap-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 p-3 text-xs text-[hsl(var(--muted-foreground))]">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-[hsl(var(--primary))]" />
+            <p>
+              Teilfreistellung (fund partial exemption) and the 31-Jan-2018 LTCG
+              grandfathering are applied automatically in the capital-gains numbers
+              above. Vorabpauschale figures are estimates and not tax advice.
+            </p>
+          </div>
+        </section>
       )}
 
       {/* ---- Tax records table ---- */}

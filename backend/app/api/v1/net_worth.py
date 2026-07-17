@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -22,6 +22,15 @@ router = APIRouter()
 
 @router.get("/", response_model=NetWorthResponse)
 async def total_net_worth(
+    display_currency: str | None = Query(
+        None,
+        description=(
+            "Optional currency override (e.g. INR/EUR/USD). When set, totals are "
+            "converted into this currency for this response only; the user's "
+            "stored preferred_currency is left unchanged. Defaults to the stored "
+            "preference."
+        ),
+    ),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -30,7 +39,7 @@ async def total_net_worth(
     Includes stocks (from portfolio holdings), crypto, gold, fixed deposits,
     bonds, and real estate.
     """
-    return await get_net_worth(user.id, db)
+    return await get_net_worth(user.id, db, display_currency=display_currency)
 
 
 @router.post("/assets", response_model=AssetResponse, status_code=status.HTTP_201_CREATED)

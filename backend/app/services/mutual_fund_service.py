@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 from datetime import date
 
 import httpx
@@ -18,6 +20,18 @@ logger = logging.getLogger(__name__)
 
 MFAPI_BASE = "https://api.mfapi.in/mf"
 HTTP_TIMEOUT = 10.0
+
+# yfinance is the best-effort source for fund constituents / expense ratios.
+# It only resolves schemes whose ``scheme_code`` is an actual fund/ETF ticker
+# (e.g. a US ETF symbol or a Yahoo fund id like ``0P0000XXXX``). Numeric AMFI
+# scheme codes used by mfapi.in have no yfinance mapping, so those funds are
+# reported as unavailable rather than fabricated.
+_YF_FETCH_TIMEOUT = 12.0
+# Above this expense ratio (as a decimal fraction) a fund is flagged high-fee.
+_HIGH_FEE_THRESHOLD = 0.01  # 1.0% p.a.
+# Assumed gross annual return used to project fee drag over time. Documented
+# and returned to the caller so the projection is transparent, not implied fact.
+_DEFAULT_ASSUMED_RETURN = 0.10
 
 
 # ---------------------------------------------------------------------------
@@ -287,3 +301,398 @@ async def get_mf_summary(user_id: int, db: AsyncSession) -> dict:
         "xirr": xirr_pct,
         "fund_count": len(funds),
     }
+
+
+# ---------------------------------------------------------------------------
+# Best-effort yfinance helpers (constituents + expense ratio)
+# ---------------------------------------------------------------------------
+
+def _safe_float(val) -> float | None:
+    """Convert a value to float, returning None for NaN/Inf/invalid values."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        return None if math.isnan(f) or math.isinf(f) else f
+    except (ValueError, TypeError):
+        return None
+
+
+def _ticker_candidate(scheme_code: str, scheme_name: str) -> str | None:
+    """Return a plausible yfinance ticker for a scheme, or None.
+
+    mfapi.in uses purely-numeric AMFI scheme codes which have no yfinance
+    mapping, so those return None. Alphanumeric codes (US ETF symbols, Yahoo
+    fund ids like ``0P0000XXXX``) are passed through as best-effort candidates.
+    """
+    code = (scheme_code or "").strip()
+    if not code or code.isdigit():
+        return None
+    return code
+
+
+def _sync_fetch_constituents(ticker_str: str) -> list[dict] | None:
+    """Best-effort fetch of a fund/ETF's top equity holdings via yfinance.
+
+    Returns a list of ``{"symbol", "name", "weight"}`` (weight is a 0-1
+    fraction) or None if constituents cannot be determined. Runs in a thread.
+    """
+    try:
+        import yfinance as yf
+
+        ticker = yf.Ticker(ticker_str)
+        funds_data = getattr(ticker, "funds_data", None)
+        if funds_data is None:
+            return None
+
+        try:
+            top = funds_data.top_holdings
+        except Exception:
+            return None
+
+        if top is None or getattr(top, "empty", True):
+            return None
+
+        cols = list(top.columns)
+        pct_col = next(
+            (c for c in cols if str(c).lower().replace(" ", "") in ("holdingpercent", "percent", "weight")),
+            None,
+        )
+        name_col = next((c for c in cols if str(c).lower() == "name"), None)
+
+        holdings: list[dict] = []
+        for idx, row in top.iterrows():
+            weight = _safe_float(row[pct_col]) if pct_col is not None else None
+            if weight is None:
+                continue
+            # Some feeds express the weight as a percentage (0-100); normalise.
+            if weight > 1.5:
+                weight = weight / 100.0
+            symbol = str(idx).strip().upper()
+            name = str(row[name_col]).strip() if name_col is not None else symbol
+            holdings.append({"symbol": symbol, "name": name or symbol, "weight": weight})
+
+        return holdings or None
+    except Exception:
+        logger.warning("yfinance constituents fetch failed for %s", ticker_str, exc_info=True)
+        return None
+
+
+def _sync_fetch_expense_ratio(ticker_str: str) -> float | None:
+    """Best-effort fetch of a fund/ETF expense ratio (0-1 fraction) via yfinance.
+
+    Tries ``.info`` keys first, then ``funds_data.fund_operations``. Runs in a
+    thread. Returns None when the ratio cannot be determined.
+    """
+    try:
+        import yfinance as yf
+
+        ticker = yf.Ticker(ticker_str)
+
+        try:
+            info = ticker.info or {}
+        except Exception:
+            info = {}
+
+        for key in ("annualReportExpenseRatio", "netExpenseRatio", "expenseRatio"):
+            er = _safe_float(info.get(key))
+            if er is not None and er > 0:
+                # yfinance reports these as fractions (0.0018) but guard against
+                # feeds that return a percentage (0.18).
+                return er / 100.0 if er > 1.5 else er
+
+        # Fallback: fund_operations DataFrame carries an expense-ratio row.
+        funds_data = getattr(ticker, "funds_data", None)
+        if funds_data is not None:
+            try:
+                ops = funds_data.fund_operations
+            except Exception:
+                ops = None
+            if ops is not None and not getattr(ops, "empty", True):
+                for label in ops.index:
+                    if "expense" in str(label).lower():
+                        er = _safe_float(ops.loc[label].iloc[0])
+                        if er is not None and er > 0:
+                            return er / 100.0 if er > 1.5 else er
+        return None
+    except Exception:
+        logger.warning("yfinance expense-ratio fetch failed for %s", ticker_str, exc_info=True)
+        return None
+
+
+async def _fetch_constituents(ticker_str: str) -> list[dict] | None:
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_sync_fetch_constituents, ticker_str),
+            timeout=_YF_FETCH_TIMEOUT,
+        )
+    except Exception:
+        return None
+
+
+async def _fetch_expense_ratio(ticker_str: str) -> float | None:
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_sync_fetch_expense_ratio, ticker_str),
+            timeout=_YF_FETCH_TIMEOUT,
+        )
+    except Exception:
+        return None
+
+
+def _fund_value(fund: MutualFund) -> float:
+    """Current market value of a holding, falling back to invested amount."""
+    if fund.current_value is not None:
+        return float(fund.current_value)
+    return float(fund.invested_amount)
+
+
+# ---------------------------------------------------------------------------
+# Overlap X-Ray
+# ---------------------------------------------------------------------------
+
+async def get_overlap_xray(user_id: int, db: AsyncSession) -> dict:
+    """Portfolio overlap X-ray across a user's mutual fund holdings.
+
+    For each held scheme, attempts a best-effort fetch of its underlying equity
+    constituents (via yfinance when the scheme maps to a fund/ETF ticker). It
+    then computes a pairwise overlap matrix (sum of ``min(weight_a, weight_b)``
+    over common stocks) and a look-through single-stock concentration across
+    funds. Funds without constituent data are flagged and excluded from the
+    matrix; the response is always valid and never fabricates holdings.
+    """
+    funds = await list_mutual_funds(portfolio_id=None, user_id=user_id, db=db)
+
+    total_value = sum(_fund_value(f) for f in funds) or 0.0
+
+    # Fetch constituents concurrently (best-effort).
+    candidates = [_ticker_candidate(f.scheme_code, f.scheme_name) for f in funds]
+    fetched = await asyncio.gather(
+        *[
+            _fetch_constituents(c) if c is not None else _noop_none()
+            for c in candidates
+        ]
+    )
+
+    fund_infos: list[dict] = []
+    for fund, holdings in zip(funds, fetched, strict=True):
+        available = bool(holdings)
+        fund_infos.append(
+            {
+                "scheme_code": fund.scheme_code,
+                "scheme_name": fund.scheme_name,
+                "constituents_available": available,
+                "holdings_count": len(holdings) if holdings else 0,
+                "value": _fund_value(fund),
+                "_holdings": {h["symbol"]: h for h in holdings} if holdings else {},
+            }
+        )
+
+    covered = [fi for fi in fund_infos if fi["constituents_available"]]
+
+    # Pairwise overlap matrix (only between funds that both have constituents).
+    overlap_matrix: list[dict] = []
+    for i in range(len(covered)):
+        for j in range(i + 1, len(covered)):
+            a, b = covered[i], covered[j]
+            common = set(a["_holdings"]) & set(b["_holdings"])
+            overlap = sum(
+                min(a["_holdings"][s]["weight"], b["_holdings"][s]["weight"])
+                for s in common
+            )
+            overlap_matrix.append(
+                {
+                    "fund_a": a["scheme_name"],
+                    "fund_b": b["scheme_name"],
+                    "fund_a_code": a["scheme_code"],
+                    "fund_b_code": b["scheme_code"],
+                    "overlap_pct": round(overlap * 100, 2),
+                    "common_holdings": len(common),
+                }
+            )
+
+    # Look-through single-stock concentration across funds.
+    look_through: dict[str, dict] = {}
+    for fi in covered:
+        weight_share = (fi["value"] / total_value) if total_value > 0 else 0.0
+        for sym, h in fi["_holdings"].items():
+            entry = look_through.setdefault(
+                sym,
+                {"symbol": sym, "name": h["name"], "funds_holding": 0, "look_through_pct": 0.0},
+            )
+            entry["funds_holding"] += 1
+            entry["look_through_pct"] += h["weight"] * weight_share * 100.0
+
+    top_common = sorted(
+        (
+            {
+                "symbol": e["symbol"],
+                "name": e["name"],
+                "funds_holding": e["funds_holding"],
+                "look_through_pct": round(e["look_through_pct"], 2),
+            }
+            for e in look_through.values()
+        ),
+        key=lambda e: (e["funds_holding"], e["look_through_pct"]),
+        reverse=True,
+    )[:15]
+
+    coverage_note = _overlap_coverage_note(len(funds), len(covered))
+
+    return {
+        "funds": [
+            {
+                "scheme_code": fi["scheme_code"],
+                "scheme_name": fi["scheme_name"],
+                "constituents_available": fi["constituents_available"],
+                "holdings_count": fi["holdings_count"],
+            }
+            for fi in fund_infos
+        ],
+        "overlap_matrix": overlap_matrix,
+        "top_common_holdings": top_common,
+        "funds_with_constituents": len(covered),
+        "total_funds": len(funds),
+        "coverage_note": coverage_note,
+    }
+
+
+async def _noop_none() -> None:
+    """Awaitable that yields None (placeholder for un-mappable schemes)."""
+    return None
+
+
+def _overlap_coverage_note(total: int, covered: int) -> str:
+    if total < 2:
+        return (
+            "Overlap analysis needs at least two mutual fund holdings. "
+            "Add another fund to compare their underlying constituents."
+        )
+    if covered == 0:
+        return (
+            "No underlying constituent data could be retrieved for your funds. "
+            "mfapi.in provides NAV only, and none of your scheme codes map to a "
+            "fund/ETF holdings source (numeric AMFI codes have no such mapping). "
+            "Overlap cannot be computed for these schemes."
+        )
+    if covered < total:
+        return (
+            f"Constituents available for {covered} of {total} funds. mfapi.in "
+            "provides NAV only; holdings are sourced best-effort from yfinance "
+            "for schemes that map to a fund/ETF ticker, and cover only each "
+            "fund's top holdings. Overlap is computed among covered funds only."
+        )
+    return (
+        f"Constituents available for all {total} funds (best-effort via "
+        "yfinance top holdings). Overlap reflects each fund's top holdings, "
+        "so figures are a lower bound on true overlap."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Expense-ratio / fee-drag analysis
+# ---------------------------------------------------------------------------
+
+async def get_expense_analysis(
+    user_id: int,
+    db: AsyncSession,
+    assumed_return: float = _DEFAULT_ASSUMED_RETURN,
+) -> dict:
+    """Value-weighted expense ratio and multi-year fee-drag projection.
+
+    Expense ratios are read best-effort from yfinance (``.info`` expense-ratio
+    keys, then ``funds_data.fund_operations``) for schemes that map to a ticker.
+    Unknown ratios are surfaced clearly and excluded from the weighted average
+    and drag projection. Fee drag compares compounding at the assumed gross
+    return versus at (gross - expense ratio) over 5/10/20 years.
+    """
+    funds = await list_mutual_funds(portfolio_id=None, user_id=user_id, db=db)
+
+    candidates = [_ticker_candidate(f.scheme_code, f.scheme_name) for f in funds]
+    ratios = await asyncio.gather(
+        *[
+            _fetch_expense_ratio(c) if c is not None else _noop_none()
+            for c in candidates
+        ]
+    )
+
+    by_fund: list[dict] = []
+    weighted_sum = 0.0
+    covered_value = 0.0
+    horizons = (5, 10, 20)
+    projected_drag = {f"{h}y": 0.0 for h in horizons}
+    covered_count = 0
+
+    for fund, er in zip(funds, ratios, strict=True):
+        value = _fund_value(fund)
+        available = er is not None
+        annual_fee_cost = round(value * er, 2) if available else None
+        is_high_fee = bool(available and er >= _HIGH_FEE_THRESHOLD)
+
+        if available:
+            covered_count += 1
+            weighted_sum += er * value
+            covered_value += value
+            net = assumed_return - er
+            for h in horizons:
+                no_fee = value * (1 + assumed_return) ** h
+                with_fee = value * (1 + net) ** h
+                projected_drag[f"{h}y"] += no_fee - with_fee
+
+        by_fund.append(
+            {
+                "scheme_code": fund.scheme_code,
+                "scheme_name": fund.scheme_name,
+                "current_value": round(value, 2),
+                "expense_ratio": round(er, 6) if available else None,
+                "expense_ratio_pct": round(er * 100, 3) if available else None,
+                "expense_ratio_available": available,
+                "annual_fee_cost": annual_fee_cost,
+                "is_high_fee": is_high_fee,
+            }
+        )
+
+    weighted_expense_ratio = (
+        round(weighted_sum / covered_value, 6) if covered_value > 0 else None
+    )
+    projected_drag = {k: round(v, 2) for k, v in projected_drag.items()}
+
+    return {
+        "weighted_expense_ratio": weighted_expense_ratio,
+        "weighted_expense_ratio_pct": (
+            round(weighted_expense_ratio * 100, 3)
+            if weighted_expense_ratio is not None
+            else None
+        ),
+        "by_fund": by_fund,
+        "projected_drag": projected_drag,
+        "assumed_annual_return": assumed_return,
+        "high_fee_threshold_pct": round(_HIGH_FEE_THRESHOLD * 100, 2),
+        "funds_with_expense_data": covered_count,
+        "total_funds": len(funds),
+        "coverage_note": _expense_coverage_note(len(funds), covered_count),
+    }
+
+
+def _expense_coverage_note(total: int, covered: int) -> str:
+    if total == 0:
+        return "Add mutual funds to analyse their expense ratios and fee drag."
+    if covered == 0:
+        return (
+            "No expense-ratio data could be retrieved for your funds. mfapi.in "
+            "does not publish expense ratios, and none of your scheme codes map "
+            "to a yfinance fund/ETF ticker (numeric AMFI codes have no mapping). "
+            "Enter ratios from your fund fact sheet for an accurate estimate."
+        )
+    if covered < total:
+        return (
+            f"Expense ratios found for {covered} of {total} funds via yfinance. "
+            "Funds without data are excluded from the weighted average and drag "
+            "projection. Projections assume a constant gross annual return and "
+            "are illustrative, not guaranteed."
+        )
+    return (
+        f"Expense ratios found for all {total} funds via yfinance. Projections "
+        "assume a constant gross annual return and are illustrative estimates, "
+        "not guarantees."
+    )

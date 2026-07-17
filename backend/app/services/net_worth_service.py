@@ -83,7 +83,11 @@ class _RateCache:
 # Net worth calculation
 # ---------------------------------------------------------------------------
 
-async def get_net_worth(user_id: int, db: AsyncSession) -> dict:
+async def get_net_worth(
+    user_id: int,
+    db: AsyncSession,
+    display_currency: str | None = None,
+) -> dict:
     """Calculate total net worth with breakdown by asset type.
 
     Includes:
@@ -95,9 +99,14 @@ async def get_net_worth(user_id: int, db: AsyncSession) -> dict:
     - REAL_ESTATE: stored value
 
     All aggregate figures (breakdown ``total_value`` and ``total_net_worth``)
-    are converted into the user's preferred currency; per-item values stay in
-    their native currency (each item carries its own ``currency`` field) with
-    a ``value_in_base`` key added.
+    are converted into the base currency; per-item values stay in their native
+    currency (each item carries its own ``currency`` field) with a
+    ``value_in_base`` key added.
+
+    The base currency defaults to the user's stored ``preferred_currency``.
+    ``display_currency`` is an optional, additive override: when provided it is
+    used as the base currency for this response only (the returned ``currency``
+    field reflects it) — the user's stored preference is never changed.
 
     Returns a dict matching NetWorthResponse schema.
     """
@@ -105,7 +114,11 @@ async def get_net_worth(user_id: int, db: AsyncSession) -> dict:
 
     user_result = await db.execute(select(User).where(User.id == user_id))
     user = user_result.scalar_one_or_none()
-    base_currency = (user.preferred_currency if user else None) or "INR"
+    base_currency = (
+        display_currency
+        or (user.preferred_currency if user else None)
+        or "INR"
+    )
     rates = _RateCache(base_currency, db)
 
     # ── 1. Stocks from existing portfolio holdings ─────────────────

@@ -7,7 +7,7 @@ import { api, ApiError } from "@/lib/api-client";
 import { Menu, Moon, Sun, RefreshCw, LogOut, User, Plus, X, Loader2 } from "lucide-react";
 import { NotificationCenter } from "@/components/layout/notification-center";
 import { motion, AnimatePresence } from "framer-motion";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import toast from "react-hot-toast";
 
 interface NewPortfolioForm {
@@ -22,6 +22,14 @@ const EMPTY_PORTFOLIO_FORM: NewPortfolioForm = {
   is_default: false,
 };
 
+// Global "display currency" — an opt-in, client-side preference used to show
+// converted totals across pages. Persisted in localStorage; changes are
+// broadcast via a custom event so already-mounted pages can react in-tab
+// (the native `storage` event only fires in *other* tabs).
+const DISPLAY_CURRENCY_KEY = "ft-display-currency";
+const DISPLAY_CURRENCY_EVENT = "ft-display-currency-change";
+const DISPLAY_CURRENCIES = ["INR", "EUR", "USD"] as const;
+
 interface TopBarProps {
   onMenuClick?: () => void;
 }
@@ -35,6 +43,27 @@ export function TopBar({ onMenuClick }: TopBarProps) {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createForm, setCreateForm] = useState<NewPortfolioForm>(EMPTY_PORTFOLIO_FORM);
+
+  // Stored display-currency override (null until the user picks one). The
+  // effective selection falls back to the user's preferred currency, then INR.
+  const [displayCurrency, setDisplayCurrency] = useState<string | null>(null);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setDisplayCurrency(localStorage.getItem(DISPLAY_CURRENCY_KEY));
+    const sync = () => setDisplayCurrency(localStorage.getItem(DISPLAY_CURRENCY_KEY));
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, []);
+
+  const effectiveCurrency = displayCurrency ?? user?.preferred_currency ?? "INR";
+
+  function handleDisplayCurrencyChange(next: string) {
+    setDisplayCurrency(next);
+    if (typeof window !== "undefined") {
+      localStorage.setItem(DISPLAY_CURRENCY_KEY, next);
+      window.dispatchEvent(new CustomEvent(DISPLAY_CURRENCY_EVENT, { detail: next }));
+    }
+  }
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -99,6 +128,23 @@ export function TopBar({ onMenuClick }: TopBarProps) {
           {portfolios.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={effectiveCurrency}
+          onChange={(e) => handleDisplayCurrencyChange(e.target.value)}
+          aria-label="Select display currency"
+          title="Display currency — convert totals for viewing"
+          className="shrink-0 rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+        >
+          {(DISPLAY_CURRENCIES as readonly string[]).includes(effectiveCurrency)
+            ? null
+            : <option value={effectiveCurrency}>{effectiveCurrency}</option>}
+          {DISPLAY_CURRENCIES.map((c) => (
+            <option key={c} value={c}>
+              {c}
             </option>
           ))}
         </select>

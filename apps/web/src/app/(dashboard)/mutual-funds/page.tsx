@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import dynamic from "next/dynamic";
 import {
   Landmark,
   Plus,
@@ -11,12 +12,26 @@ import {
   TrendingDown,
   Wallet,
   Hash,
+  Layers,
+  Percent,
+  AlertTriangle,
+  Info,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import toast from "react-hot-toast";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { motion, AnimatePresence } from "framer-motion";
+
+const MfOverlapHeatmap = dynamic(
+  () => import("@/components/charts/mf-overlap-heatmap"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-40 w-full animate-pulse rounded-lg bg-[hsl(var(--muted))]/50" />
+    ),
+  },
+);
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -50,6 +65,61 @@ interface SchemeSearchResult {
   scheme_name: string;
 }
 
+interface OverlapFund {
+  scheme_code: string;
+  scheme_name: string;
+  constituents_available: boolean;
+  holdings_count: number;
+}
+
+interface OverlapCell {
+  fund_a: string;
+  fund_b: string;
+  fund_a_code: string;
+  fund_b_code: string;
+  overlap_pct: number;
+  common_holdings: number;
+}
+
+interface CommonHolding {
+  symbol: string;
+  name: string;
+  funds_holding: number;
+  look_through_pct: number;
+}
+
+interface OverlapXray {
+  funds: OverlapFund[];
+  overlap_matrix: OverlapCell[];
+  top_common_holdings: CommonHolding[];
+  funds_with_constituents: number;
+  total_funds: number;
+  coverage_note: string;
+}
+
+interface ExpenseByFund {
+  scheme_code: string;
+  scheme_name: string;
+  current_value: number;
+  expense_ratio: number | null;
+  expense_ratio_pct: number | null;
+  expense_ratio_available: boolean;
+  annual_fee_cost: number | null;
+  is_high_fee: boolean;
+}
+
+interface ExpenseAnalysis {
+  weighted_expense_ratio: number | null;
+  weighted_expense_ratio_pct: number | null;
+  by_fund: ExpenseByFund[];
+  projected_drag: { "5y": number; "10y": number; "20y": number };
+  assumed_annual_return: number;
+  high_fee_threshold_pct: number;
+  funds_with_expense_data: number;
+  total_funds: number;
+  coverage_note: string;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
@@ -61,6 +131,14 @@ export default function MutualFundsPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
+
+  /* Overlap X-Ray + Fee Analyzer state (best-effort, loaded separately) */
+  const [overlap, setOverlap] = useState<OverlapXray | null>(null);
+  const [overlapLoading, setOverlapLoading] = useState(false);
+  const [overlapError, setOverlapError] = useState(false);
+  const [expense, setExpense] = useState<ExpenseAnalysis | null>(null);
+  const [expenseLoading, setExpenseLoading] = useState(false);
+  const [expenseError, setExpenseError] = useState(false);
 
   /* Add Fund form state */
   const [showAddForm, setShowAddForm] = useState(false);
@@ -92,6 +170,37 @@ export default function MutualFundsPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  /* Best-effort overlap + fee analysis. Fetched separately so slow yfinance
+     look-ups never block the main table, and each degrades independently. */
+  const loadAnalysis = useCallback(async () => {
+    setOverlapLoading(true);
+    setExpenseLoading(true);
+    setOverlapError(false);
+    setExpenseError(false);
+    const [ov, ex] = await Promise.allSettled([
+      api.get<OverlapXray>("/mutual-funds/overlap"),
+      api.get<ExpenseAnalysis>("/mutual-funds/expense-analysis"),
+    ]);
+    if (ov.status === "fulfilled") setOverlap(ov.value);
+    else setOverlapError(true);
+    if (ex.status === "fulfilled") setExpense(ex.value);
+    else setExpenseError(true);
+    setOverlapLoading(false);
+    setExpenseLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    if (funds.length === 0) {
+      setOverlap(null);
+      setExpense(null);
+      return;
+    }
+    loadAnalysis();
+    // Re-run when the number of funds changes (add/delete/refresh).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, funds.length, loadAnalysis]);
 
   /* Scheme search debounce */
   useEffect(() => {
@@ -374,6 +483,255 @@ export default function MutualFundsPage() {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ---- Overlap X-Ray + Fee Analyzer ---- */}
+      {!loading && funds.length > 0 && (
+        <div className="grid gap-6 lg:grid-cols-2">
+          {/* ===== Overlap X-Ray ===== */}
+          <section
+            aria-label="Mutual fund overlap X-ray"
+            className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5"
+          >
+            <div className="flex items-center gap-2">
+              <Layers className="h-5 w-5 text-[hsl(var(--primary))]" />
+              <h2 className="text-lg font-semibold">Overlap X-Ray</h2>
+            </div>
+            <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
+              Shared underlying stocks across your funds (look-through).
+            </p>
+
+            {overlapLoading ? (
+              <div className="mt-4 h-40 w-full animate-pulse rounded-lg bg-[hsl(var(--muted))]/50" />
+            ) : overlapError ? (
+              <div className="mt-4 flex items-start gap-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 p-3 text-sm text-[hsl(var(--muted-foreground))]">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[hsl(var(--loss))]" />
+                <span>Could not load overlap analysis. Try refreshing.</span>
+              </div>
+            ) : overlap ? (
+              <div className="mt-4 space-y-4">
+                {/* Coverage note — shown prominently, especially when partial */}
+                <div
+                  className={`flex items-start gap-2 rounded-md border p-3 text-xs ${
+                    overlap.funds_with_constituents < overlap.total_funds
+                      ? "border-[hsl(var(--loss))]/30 bg-[hsl(var(--loss))]/5 text-[hsl(var(--foreground))]"
+                      : "border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 text-[hsl(var(--muted-foreground))]"
+                  }`}
+                >
+                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-[hsl(var(--primary))]" />
+                  <div>
+                    <p>{overlap.coverage_note}</p>
+                    <p className="mt-1 font-medium">
+                      Constituent data: {overlap.funds_with_constituents} /{" "}
+                      {overlap.total_funds} funds
+                    </p>
+                  </div>
+                </div>
+
+                {overlap.funds_with_constituents >= 2 ? (
+                  <>
+                    <MfOverlapHeatmap
+                      funds={overlap.funds}
+                      matrix={overlap.overlap_matrix}
+                    />
+
+                    {overlap.top_common_holdings.length > 0 && (
+                      <div>
+                        <h3 className="text-sm font-medium">
+                          Top look-through holdings
+                        </h3>
+                        <p className="mb-2 text-xs text-[hsl(var(--muted-foreground))]">
+                          Effective weight of each stock across all covered funds.
+                        </p>
+                        <ul className="space-y-1">
+                          {overlap.top_common_holdings.slice(0, 8).map((h) => (
+                            <li
+                              key={h.symbol}
+                              className="flex items-center justify-between rounded-md bg-[hsl(var(--muted))]/40 px-3 py-1.5 text-sm"
+                            >
+                              <span className="truncate" title={h.name}>
+                                <span className="font-medium">{h.symbol}</span>
+                                {h.funds_holding > 1 && (
+                                  <span className="ml-2 rounded bg-[hsl(var(--loss))]/15 px-1.5 py-0.5 text-xs text-[hsl(var(--loss))]">
+                                    in {h.funds_holding} funds
+                                  </span>
+                                )}
+                              </span>
+                              <span className="ml-2 shrink-0 font-mono tabular-nums text-[hsl(var(--muted-foreground))]">
+                                {h.look_through_pct.toFixed(2)}%
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-[hsl(var(--border))] py-8 text-center">
+                    <Layers className="h-8 w-8 text-[hsl(var(--muted-foreground))]/30" />
+                    <p className="mt-2 text-sm font-medium text-[hsl(var(--muted-foreground))]">
+                      Overlap unavailable
+                    </p>
+                    <p className="mt-1 max-w-xs text-xs text-[hsl(var(--muted-foreground))]">
+                      Underlying holdings could not be sourced for enough of your
+                      funds to compute overlap.
+                    </p>
+                  </div>
+                )}
+
+                {/* Funds flagged as unavailable */}
+                {overlap.funds.some((f) => !f.constituents_available) && (
+                  <div className="text-xs text-[hsl(var(--muted-foreground))]">
+                    <p className="font-medium">No constituent data:</p>
+                    <ul className="mt-1 list-inside list-disc">
+                      {overlap.funds
+                        .filter((f) => !f.constituents_available)
+                        .map((f) => (
+                          <li key={f.scheme_code} className="truncate">
+                            {f.scheme_name}
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </section>
+
+          {/* ===== Fee Analyzer ===== */}
+          <section
+            aria-label="Mutual fund fee analyzer"
+            className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5"
+          >
+            <div className="flex items-center gap-2">
+              <Percent className="h-5 w-5 text-[hsl(var(--primary))]" />
+              <h2 className="text-lg font-semibold">Fee Analyzer</h2>
+            </div>
+            <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
+              Expense ratios and projected fee drag over time.
+            </p>
+
+            {expenseLoading ? (
+              <div className="mt-4 h-40 w-full animate-pulse rounded-lg bg-[hsl(var(--muted))]/50" />
+            ) : expenseError ? (
+              <div className="mt-4 flex items-start gap-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 p-3 text-sm text-[hsl(var(--muted-foreground))]">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[hsl(var(--loss))]" />
+                <span>Could not load fee analysis. Try refreshing.</span>
+              </div>
+            ) : expense ? (
+              <div className="mt-4 space-y-4">
+                {/* Weighted expense ratio + drag */}
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <div className="rounded-md bg-[hsl(var(--muted))]/40 p-3">
+                    <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                      Weighted expense ratio
+                    </p>
+                    <p className="mt-1 text-lg font-bold">
+                      {expense.weighted_expense_ratio_pct !== null
+                        ? `${expense.weighted_expense_ratio_pct.toFixed(2)}%`
+                        : "Unknown"}
+                    </p>
+                  </div>
+                  {(["5y", "10y", "20y"] as const).map((k) => (
+                    <div key={k} className="rounded-md bg-[hsl(var(--muted))]/40 p-3">
+                      <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                        {k} fee drag
+                      </p>
+                      <p className="mt-1 text-lg font-bold text-[hsl(var(--loss))]">
+                        {expense.funds_with_expense_data > 0
+                          ? formatCurrency(expense.projected_drag[k])
+                          : "—"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                  Drag assumes a constant{" "}
+                  {(expense.assumed_annual_return * 100).toFixed(0)}% gross annual
+                  return; illustrative only.
+                </p>
+
+                {/* Per-fund table */}
+                <div className="overflow-x-auto rounded-md border border-[hsl(var(--border))]">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-[hsl(var(--border))] text-left text-xs text-[hsl(var(--muted-foreground))]">
+                        <th className="px-3 py-2 font-medium">Fund</th>
+                        <th className="px-3 py-2 text-right font-medium">
+                          Expense
+                        </th>
+                        <th className="px-3 py-2 text-right font-medium">
+                          Annual fee
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {expense.by_fund.map((f) => (
+                        <tr
+                          key={f.scheme_code}
+                          className="border-b border-[hsl(var(--border))] last:border-0"
+                        >
+                          <td className="px-3 py-2">
+                            <span className="flex items-center gap-2">
+                              <span
+                                className="truncate"
+                                title={f.scheme_name}
+                              >
+                                {f.scheme_name}
+                              </span>
+                              {f.is_high_fee && (
+                                <span className="shrink-0 rounded bg-[hsl(var(--loss))]/15 px-1.5 py-0.5 text-xs font-medium text-[hsl(var(--loss))]">
+                                  High fee
+                                </span>
+                              )}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums">
+                            {f.expense_ratio_available && f.expense_ratio_pct !== null ? (
+                              `${f.expense_ratio_pct.toFixed(2)}%`
+                            ) : (
+                              <span className="text-[hsl(var(--muted-foreground))]">
+                                unknown
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums">
+                            {f.annual_fee_cost !== null ? (
+                              formatCurrency(f.annual_fee_cost)
+                            ) : (
+                              <span className="text-[hsl(var(--muted-foreground))]">
+                                —
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Coverage note */}
+                <div
+                  className={`flex items-start gap-2 rounded-md border p-3 text-xs ${
+                    expense.funds_with_expense_data < expense.total_funds
+                      ? "border-[hsl(var(--loss))]/30 bg-[hsl(var(--loss))]/5 text-[hsl(var(--foreground))]"
+                      : "border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 text-[hsl(var(--muted-foreground))]"
+                  }`}
+                >
+                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-[hsl(var(--primary))]" />
+                  <div>
+                    <p>{expense.coverage_note}</p>
+                    <p className="mt-1 font-medium">
+                      Expense data: {expense.funds_with_expense_data} /{" "}
+                      {expense.total_funds} funds
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </section>
         </div>
       )}
 

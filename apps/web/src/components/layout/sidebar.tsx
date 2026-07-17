@@ -37,6 +37,9 @@ import {
   CalendarDays,
   LayoutGrid,
   Scale,
+  Split,
+  Filter,
+  CalendarClock,
 } from "lucide-react";
 
 interface NavItem {
@@ -58,6 +61,7 @@ const NAV_SECTIONS: NavSection[] = [
       { href: "/holdings", label: "Holdings", icon: Briefcase },
       { href: "/watchlist", label: "Watchlist", icon: Eye },
       { href: "/charts", label: "Charts", icon: BarChart3 },
+      { href: "/corporate-actions", label: "Corporate Actions", icon: Split },
       { href: "/import", label: "Import", icon: Upload },
     ],
   },
@@ -66,9 +70,11 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: "/visualizations", label: "Analytics", icon: BarChart2 },
       { href: "/compare", label: "Compare", icon: Scale },
+      { href: "/screener", label: "Screener", icon: Filter },
       { href: "/risk", label: "Risk", icon: ShieldAlert },
       { href: "/market-heatmap", label: "Market Map", icon: LayoutGrid },
       { href: "/earnings", label: "Earnings", icon: CalendarDays },
+      { href: "/economic-calendar", label: "Economic Calendar", icon: CalendarClock },
     ],
   },
   {

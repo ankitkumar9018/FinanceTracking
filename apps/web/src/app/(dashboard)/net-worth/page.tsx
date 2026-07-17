@@ -18,9 +18,14 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { api } from "@/lib/api-client";
+import { useAuthStore } from "@/stores/auth-store";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
+
+// Keep in sync with the top-bar's display-currency preference.
+const DISPLAY_CURRENCY_KEY = "ft-display-currency";
+const DISPLAY_CURRENCY_EVENT = "ft-display-currency-change";
 
 /* Recharts is heavy (~100kB gz) — load the donut chart lazily */
 const AllocationDonut = dynamic(() => import("@/components/charts/allocation-donut"), {
@@ -348,23 +353,44 @@ function AddAssetModal({
 /* ------------------------------------------------------------------ */
 
 export default function NetWorthPage() {
+  const { user } = useAuthStore();
   const [data, setData] = useState<NetWorthData | null>(null);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<number | null>(null);
 
+  // Chosen display currency (localStorage override → user preference → INR).
+  const [displayCurrency, setDisplayCurrency] = useState<string | null>(null);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sync = () => setDisplayCurrency(localStorage.getItem(DISPLAY_CURRENCY_KEY));
+    sync();
+    window.addEventListener(DISPLAY_CURRENCY_EVENT, sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener(DISPLAY_CURRENCY_EVENT, sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
+
+  const effectiveCurrency = displayCurrency ?? user?.preferred_currency ?? "INR";
+  const overrideActive = !!user && effectiveCurrency !== user.preferred_currency;
+
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await api.get<NetWorthData>("/net-worth");
+      // The override is additive: the endpoint converts totals to this currency
+      // for this response only, leaving the stored preference untouched.
+      const qs = `?display_currency=${encodeURIComponent(effectiveCurrency)}`;
+      const result = await api.get<NetWorthData>(`/net-worth${qs}`);
       setData(result);
     } catch {
       setData(null);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [effectiveCurrency]);
 
   useEffect(() => {
     loadData();
@@ -490,6 +516,11 @@ export default function NetWorthPage() {
               Across {data.breakdown?.length ?? 0} asset {(data.breakdown?.length ?? 0) === 1 ? "class" : "classes"} &middot;{" "}
               {allAssets.length} {allAssets.length === 1 ? "asset" : "assets"}
             </p>
+            {overrideActive && (
+              <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]/70">
+                Converted to {data.currency} for display &middot; your saved preference is unchanged
+              </p>
+            )}
           </motion.div>
 
           {/* ---- Chart + Asset Cards ---- */}

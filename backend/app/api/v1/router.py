@@ -14,6 +14,7 @@ from app.api.v1 import (
     charts,
     columns,
     comparison,
+    corporate_actions,
     dividends,
     earnings,
     esg,
@@ -68,6 +69,9 @@ api_v1_router.include_router(
     comparison.router, prefix="/comparison", tags=["Comparison"]
 )
 api_v1_router.include_router(columns.router, prefix="/columns", tags=["Columns"])
+api_v1_router.include_router(
+    corporate_actions.router, prefix="/corporate-actions", tags=["Corporate Actions"]
+)
 api_v1_router.include_router(
     net_worth.router, prefix="/net-worth", tags=["Net Worth"]
 )

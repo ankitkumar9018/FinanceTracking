@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.transaction import Transaction
+from app.services import forex_service
 from app.services.alert_service import determine_action_needed
 
 
@@ -82,11 +83,17 @@ async def calculate_cumulative_holding(holding_id: int, db: AsyncSession) -> Hol
 async def get_portfolio_summary(
     portfolio_id: int,
     db: AsyncSession,
+    display_currency: str | None = None,
 ) -> dict:
     """Build the main output table for a portfolio.
 
     Returns a dict matching ``PortfolioSummaryResponse`` with one
     ``HoldingSummaryRow`` per holding.
+
+    ``display_currency`` is an *optional, additive* convenience: when provided
+    and an actual conversion is needed, extra ``*_display`` fields are appended
+    (see ``_add_display_currency``). Every existing field is left untouched and
+    stays in its native currency — the display fields are purely additive.
     """
     result = await db.execute(
         select(Portfolio)
@@ -145,7 +152,7 @@ async def get_portfolio_summary(
             ((total_current_value - total_invested) / total_invested) * 100, 2
         )
 
-    return {
+    summary = {
         "portfolio_id": portfolio.id,
         "portfolio_name": portfolio.name,
         "currency": portfolio.currency,
@@ -154,3 +161,109 @@ async def get_portfolio_summary(
         "total_pnl_percent": total_pnl_percent,
         "holdings": rows,
     }
+
+    if display_currency:
+        # Additive only — never mutates the native fields above. Degrades
+        # gracefully: if forex is unavailable, the summary is returned as-is
+        # (no ``*_display`` fields) so callers transparently fall back.
+        summary = await _add_display_currency(
+            summary, portfolio.currency, display_currency, db
+        )
+
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# Optional display-currency conversion (additive convenience fields)
+# ---------------------------------------------------------------------------
+
+async def _add_display_currency(
+    summary: dict,
+    base_currency: str,
+    display_currency: str,
+    db: AsyncSession,
+) -> dict:
+    """Append converted ``*_display`` convenience fields to a summary dict.
+
+    Converts each holding row from its own native currency into
+    ``display_currency`` (so mixed-currency portfolios total correctly), then
+    adds portfolio-level ``total_*_display`` figures plus a headline
+    ``display_fx_rate`` (base currency -> display currency).
+
+    Returns the summary **unchanged** when no conversion is actually needed
+    (target already matches every currency) or when a rate lookup fails — in
+    both cases no ``*_display`` fields are added, so existing behaviour and
+    callers relying on native values are unaffected.
+    """
+    target = (display_currency or "").upper()
+    base = (base_currency or "INR").upper()
+    if not target:
+        return summary
+
+    rows = summary.get("holdings", [])
+    source_currencies = {
+        (row.get("currency") or base).upper() for row in rows
+    }
+    source_currencies.add(base)
+
+    # Nothing to convert — every value is already in the target currency.
+    if source_currencies == {target}:
+        return summary
+
+    rate_cache: dict[str, float] = {}
+
+    async def rate_for(src: str) -> float:
+        src = (src or base).upper()
+        if src == target:
+            return 1.0
+        if src not in rate_cache:
+            rate_cache[src] = await forex_service.get_exchange_rate(
+                src, target, None, db
+            )
+        return rate_cache[src]
+
+    try:
+        total_invested_display = 0.0
+        total_current_value_display = 0.0
+
+        for row in rows:
+            src = (row.get("currency") or base).upper()
+            rate = await rate_for(src)
+            qty = float(row.get("quantity") or 0.0)
+            avg = float(row.get("avg_price") or 0.0)
+            current = row.get("current_price")
+            current = float(current) if current is not None else avg
+
+            invested_display = qty * avg * rate
+            value_display = qty * current * rate
+            total_invested_display += invested_display
+            total_current_value_display += value_display
+
+            # Per-row convenience values (additive; safe to ignore).
+            row["invested_display"] = round(invested_display, 2)
+            row["current_value_display"] = round(value_display, 2)
+
+        headline_rate = await rate_for(base)
+    except Exception:
+        # Forex unavailable — strip any partial per-row display fields so the
+        # response stays consistently native, and return unchanged.
+        for row in rows:
+            row.pop("invested_display", None)
+            row.pop("current_value_display", None)
+        return summary
+
+    pnl_percent_display: float | None = None
+    if total_invested_display > 0:
+        pnl_percent_display = round(
+            ((total_current_value_display - total_invested_display)
+             / total_invested_display) * 100,
+            2,
+        )
+
+    summary["display_currency"] = target
+    summary["display_base_currency"] = base
+    summary["display_fx_rate"] = round(headline_rate, 6)
+    summary["total_invested_display"] = round(total_invested_display, 2)
+    summary["total_current_value_display"] = round(total_current_value_display, 2)
+    summary["total_pnl_percent_display"] = pnl_percent_display
+    return summary

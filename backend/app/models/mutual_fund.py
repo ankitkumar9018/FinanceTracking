@@ -20,6 +20,9 @@ class MutualFund(Base):
     scheme_code: Mapped[str] = mapped_column(String(50), nullable=False)
     scheme_name: Mapped[str] = mapped_column(String(255), nullable=False)
     folio_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Fund class for German Teilfreistellung partial-exemption:
+    # EQUITY_ETF (30%), MIXED_ETF (15%), BOND_ETF (0%), REAL_ESTATE_ETF (60/80%)
+    fund_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
     units: Mapped[float] = mapped_column(
         Numeric(precision=18, scale=6), nullable=False

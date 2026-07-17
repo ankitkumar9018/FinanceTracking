@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -115,24 +117,44 @@ async def get_portfolio(
 @router.get("/{portfolio_id}/summary", response_model=PortfolioSummaryResponse)
 async def get_portfolio_summary_endpoint(
     portfolio_id: int,
+    display_currency: str | None = Query(
+        None,
+        description=(
+            "Optional target currency (e.g. INR/EUR/USD). When set and different "
+            "from the native currency, additive *_display convenience fields are "
+            "included alongside the unchanged native fields."
+        ),
+    ),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+):
     """THE MAIN OUTPUT TABLE.
 
     Returns a list of holdings with: stock, quantity, avg_price, current_price,
     action_needed, rsi, pnl_percent for all holdings in the portfolio.
+
+    Passing ``?display_currency=`` layers additive ``*_display`` fields on top of
+    the native response — existing fields are never altered.
     """
     # Verify ownership
     await _get_user_portfolio(portfolio_id, user, db)
 
     try:
-        summary = await get_portfolio_summary(portfolio_id, db)
+        summary = await get_portfolio_summary(
+            portfolio_id, db, display_currency=display_currency
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         )
+
+    # When conversion actually happened, the summary carries extra *_display
+    # fields. Return it directly (bypassing response_model filtering) so those
+    # additive fields survive; otherwise fall through to the validated model so
+    # the default response is byte-for-byte identical to before.
+    if "display_currency" in summary:
+        return JSONResponse(content=jsonable_encoder(summary))
 
     return summary
 

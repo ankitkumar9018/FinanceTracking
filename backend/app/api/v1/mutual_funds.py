@@ -17,7 +17,9 @@ from app.schemas.mutual_fund import (
 from app.services.mutual_fund_service import (
     create_mutual_fund,
     delete_mutual_fund,
+    get_expense_analysis,
     get_mf_summary,
+    get_overlap_xray,
     list_mutual_funds,
     refresh_all_navs,
     search_schemes,
@@ -121,3 +123,41 @@ async def search_schemes_endpoint(
 ) -> list[dict]:
     """Search mutual fund schemes by name on mfapi.in."""
     return await search_schemes(query=q)
+
+
+@router.get("/overlap")
+async def overlap_xray_endpoint(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Portfolio overlap X-ray across the user's mutual fund holdings.
+
+    Best-effort: attempts to fetch each fund's underlying constituents (via
+    yfinance when a scheme maps to a fund/ETF ticker) and returns a pairwise
+    overlap matrix plus look-through single-stock concentration. Funds without
+    constituent data are flagged; the response always degrades gracefully and
+    never fabricates holdings.
+    """
+    return await get_overlap_xray(user_id=user.id, db=db)
+
+
+@router.get("/expense-analysis")
+async def expense_analysis_endpoint(
+    assumed_return: float = Query(
+        default=0.10,
+        ge=0.0,
+        le=0.5,
+        description="Assumed gross annual return used to project fee drag",
+    ),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Value-weighted expense ratio and multi-year fee-drag projection.
+
+    Best-effort: reads expense ratios from yfinance for schemes that map to a
+    ticker. Unknown ratios are surfaced clearly and excluded from the weighted
+    average and projection.
+    """
+    return await get_expense_analysis(
+        user_id=user.id, db=db, assumed_return=assumed_return
+    )

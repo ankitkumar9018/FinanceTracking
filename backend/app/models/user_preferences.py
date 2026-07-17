@@ -33,6 +33,11 @@ class UserPreferences(Base):
     theme: Mapped[str] = mapped_column(
         String(20), default="dark", server_default="dark"
     )
+    # German tax election + misc tax settings (e.g. {"filing": "single"|"joint",
+    # "church_tax": bool}) used by the Sparer-Pauschbetrag / Vorabpauschale logic.
+    tax_settings: Mapped[dict] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
 
     updated_at: Mapped[datetime | None] = mapped_column(
         onupdate=func.now(), server_default=func.now(), nullable=True

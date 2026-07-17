@@ -22,6 +22,7 @@ from app.models.portfolio import Portfolio
 from app.models.user import User
 from app.services.concentration_service import analyze_concentration
 from app.services.drift_service import check_drift, set_target_allocation
+from app.services.economic_calendar_service import get_economic_calendar
 from app.services.freshness_service import get_data_freshness
 from app.services.market_data_service import _EXCHANGE_SUFFIX, fetch_historical_data
 from app.services.recurring_detection_service import detect_recurring
@@ -581,3 +582,31 @@ async def get_drawdown(
     except Exception:
         logger.debug("Drawdown computation failed", exc_info=True)
         return {"drawdown": []}
+
+
+# ---------------------------------------------------------------------------
+# 12. Economic / Macro & Catalysts Calendar
+# ---------------------------------------------------------------------------
+
+@router.get("/economic-calendar/{portfolio_id}")
+async def economic_calendar(
+    portfolio_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Get a unified upcoming-catalysts feed for a portfolio.
+
+    Merges, over a forward ~3-month window:
+
+    * upcoming **earnings** dates for held symbols (yfinance),
+    * upcoming **ex-dividend** dates for held symbols (yfinance, best-effort),
+    * a curated static set of key **macro** events (RBI / ECB rate decisions,
+      US / India CPI prints, US jobs report).
+
+    Each event is tagged with a ``type`` (EARNINGS / EX_DIV / MACRO) and a
+    ``region``; macro events also carry an ``importance``. Events are sorted by
+    date. yfinance failures degrade gracefully.
+    """
+    await _verify_portfolio_ownership(portfolio_id, user, db)
+    feed = await get_economic_calendar(portfolio_id, db)
+    return {"portfolio_id": portfolio_id, **feed}

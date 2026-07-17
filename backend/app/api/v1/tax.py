@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+from datetime import date
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_db
+from app.models.holding import Holding
+from app.models.portfolio import Portfolio
 from app.models.tax_record import TaxRecord
 from app.models.user import User
+from app.models.user_preferences import UserPreferences
 from app.schemas.tax import (
     TaxHarvestingSuggestion,
-    TaxRecordCreate,
     TaxRecordResponse,
     TaxSummary,
 )
@@ -22,12 +28,34 @@ from app.services.export_service import (
     generate_tax_report_html,
 )
 from app.services.tax_service import (
+    compute_german_allowance,
     compute_tax_for_transaction,
+    estimate_portfolio_vorabpauschale,
     generate_tax_summary,
     get_harvesting_suggestions,
 )
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Request schemas for the German advanced-tax settings
+# ---------------------------------------------------------------------------
+
+FundType = Literal["STOCK", "EQUITY_ETF", "MIXED_ETF", "BOND_ETF", "REAL_ESTATE_ETF"]
+
+
+class TaxSettingsUpdate(BaseModel):
+    """German tax election written to ``user_preferences.tax_settings``."""
+
+    filing: Literal["single", "joint"] | None = None
+    church_tax: bool | None = None
+
+
+class FundTypeUpdate(BaseModel):
+    """Set a holding's fund class for German Teilfreistellung. ``None`` clears it."""
+
+    fund_type: FundType | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +81,19 @@ async def _get_user_tax_record(
             detail="Tax record not found",
         )
     return record
+
+
+async def _get_or_create_prefs(user_id: int, db: AsyncSession) -> UserPreferences:
+    """Fetch (or lazily create) the user's UserPreferences row."""
+    result = await db.execute(
+        select(UserPreferences).where(UserPreferences.user_id == user_id)
+    )
+    prefs = result.scalar_one_or_none()
+    if prefs is None:
+        prefs = UserPreferences(user_id=user_id)
+        db.add(prefs)
+        await db.flush()
+    return prefs
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +239,112 @@ async def harvesting_suggestions(
         db=db,
     )
     return suggestions
+
+
+# ---------------------------------------------------------------------------
+# German advanced tax: Sparer-Pauschbetrag allowance, Vorabpauschale, settings
+# ---------------------------------------------------------------------------
+
+@router.get("/allowance")
+async def german_allowance(
+    jurisdiction: str = Query(default="DE", description="Only DE is supported"),
+    financial_year: str | None = Query(
+        default=None, description="Calendar year, e.g. '2024'. Defaults to current year."
+    ),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Sparer-Pauschbetrag usage for a German financial (calendar) year.
+
+    Returns ``{total_allowance, used, remaining, filing}``. The saver's allowance
+    is EUR 1000 (single) / EUR 2000 (joint), read from the user's tax settings.
+    """
+    if jurisdiction.upper() != "DE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The Sparer-Pauschbetrag allowance tracker applies to Germany (DE) only",
+        )
+    fy = financial_year or str(date.today().year)
+    return await compute_german_allowance(
+        user_id=user.id, financial_year=fy, db=db
+    )
+
+
+@router.get("/vorabpauschale/{portfolio_id}")
+async def portfolio_vorabpauschale(
+    portfolio_id: int,
+    year: int | None = Query(default=None, description="Tax year; defaults to current year"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Estimated German Vorabpauschale per German fund holding in a portfolio.
+
+    Uses current holding values as a proxy for the start/end values (exact fund
+    values are not stored), so the result is an ESTIMATE (``is_estimate=True``).
+    """
+    port_result = await db.execute(
+        select(Portfolio).where(
+            Portfolio.id == portfolio_id,
+            Portfolio.user_id == user.id,
+        )
+    )
+    if port_result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Portfolio not found",
+        )
+    return await estimate_portfolio_vorabpauschale(
+        portfolio_id=portfolio_id, db=db, year=year
+    )
+
+
+@router.put("/settings")
+async def update_tax_settings(
+    body: TaxSettingsUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Update the German filing election / church-tax flag in tax settings.
+
+    Only the fields provided are changed; others are preserved.
+    """
+    prefs = await _get_or_create_prefs(user.id, db)
+    # Reassign a new dict so SQLAlchemy detects the JSON column change.
+    settings = dict(prefs.tax_settings or {})
+    if body.filing is not None:
+        settings["filing"] = body.filing
+    if body.church_tax is not None:
+        settings["church_tax"] = body.church_tax
+    prefs.tax_settings = settings
+    await db.flush()
+    return {"tax_settings": settings}
+
+
+@router.put("/fund-type/{holding_id}")
+async def update_holding_fund_type(
+    holding_id: int,
+    body: FundTypeUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Set a holding's fund class (used for German Teilfreistellung)."""
+    result = await db.execute(
+        select(Holding)
+        .join(Portfolio, Holding.portfolio_id == Portfolio.id)
+        .where(
+            Holding.id == holding_id,
+            Portfolio.user_id == user.id,
+        )
+    )
+    holding = result.scalar_one_or_none()
+    if holding is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Holding not found",
+        )
+    holding.fund_type = body.fund_type
+    await db.flush()
+    return {"holding_id": holding_id, "fund_type": body.fund_type}
 
 
 @router.delete("/{record_id}", status_code=status.HTTP_204_NO_CONTENT)

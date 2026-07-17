@@ -5,6 +5,7 @@ from app.models.app_settings import AppSetting
 from app.models.asset import Asset
 from app.models.broker_connection import BrokerConnection
 from app.models.chat_session import ChatSession
+from app.models.corporate_action import CorporateAction
 from app.models.dividend import Dividend
 from app.models.fno_position import FnoPosition
 from app.models.forex_rates import ForexRate
@@ -27,6 +28,7 @@ __all__ = [
     "Asset",
     "BrokerConnection",
     "ChatSession",
+    "CorporateAction",
     "Dividend",
     "FnoPosition",
     "ForexRate",

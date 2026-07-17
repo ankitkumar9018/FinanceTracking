@@ -27,6 +27,9 @@ class Holding(Base):
     stock_name: Mapped[str] = mapped_column(String(255), nullable=False)
     exchange: Mapped[str] = mapped_column(String(20), nullable=False)  # NSE/BSE/XETRA
     currency: Mapped[str] = mapped_column(String(10), default="INR", server_default="INR")
+    # Fund/instrument class for German Teilfreistellung partial-exemption:
+    # None/STOCK, EQUITY_ETF, MIXED_ETF, BOND_ETF, REAL_ESTATE_ETF
+    fund_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
     cumulative_quantity: Mapped[float] = mapped_column(
         Numeric(precision=18, scale=6), nullable=False

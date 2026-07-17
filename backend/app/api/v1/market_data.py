@@ -19,6 +19,7 @@ from app.services.market_data_service import (
     fetch_historical_data,
     refresh_all_prices,
 )
+from app.services.screener_service import ScreenerFilters, screen_stocks
 
 logger = logging.getLogger(__name__)
 
@@ -190,3 +191,65 @@ async def search_stocks(
             logger.debug("Direct symbol lookup failed for %s", query, exc_info=True)
 
     return {"results": results[:limit], "query": q, "exchange": exchange}
+
+
+@router.get("/screener")
+async def run_screener(
+    exchange: str = Query("NSE", description="Exchange for the default universe: NSE, XETRA"),
+    symbols: str | None = Query(
+        None,
+        description="Optional comma-separated symbols to add to the curated universe",
+    ),
+    market_cap_min: float | None = Query(None, ge=0),
+    market_cap_max: float | None = Query(None, ge=0),
+    pe_min: float | None = Query(None),
+    pe_max: float | None = Query(None),
+    dividend_yield_min: float | None = Query(None, ge=0, description="Minimum dividend yield (%)"),
+    price_min: float | None = Query(None, ge=0),
+    price_max: float | None = Query(None, ge=0),
+    sector: str | None = Query(None, max_length=50, description="Sector substring match"),
+    rsi_min: float | None = Query(None, ge=0, le=100),
+    rsi_max: float | None = Query(None, ge=0, le=100),
+    week52_min: float | None = Query(None, ge=0, le=100, description="Min 52-week range position (%)"),
+    week52_max: float | None = Query(None, ge=0, le=100, description="Max 52-week range position (%)"),
+    day_change_min: float | None = Query(None),
+    day_change_max: float | None = Query(None),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Screen a curated, liquid universe of stocks against the given filters.
+
+    Screens a modest per-exchange watchlist (plus any explicit ``symbols``),
+    not the whole market — this keeps every scan fast and predictable without a
+    paid screener API. Each symbol is fetched from yfinance with bounded
+    concurrency and a per-symbol timeout; unreachable symbols are skipped.
+    """
+    symbol_list = (
+        [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
+    )
+    filters = ScreenerFilters(
+        market_cap_min=market_cap_min,
+        market_cap_max=market_cap_max,
+        pe_min=pe_min,
+        pe_max=pe_max,
+        dividend_yield_min=dividend_yield_min,
+        price_min=price_min,
+        price_max=price_max,
+        sector=sector,
+        rsi_min=rsi_min,
+        rsi_max=rsi_max,
+        week52_min=week52_min,
+        week52_max=week52_max,
+        day_change_min=day_change_min,
+        day_change_max=day_change_max,
+    )
+
+    try:
+        return await screen_stocks(
+            filters, exchange=exchange.upper().strip(), symbols=symbol_list
+        )
+    except Exception as exc:
+        logger.exception("Screener failed")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Screener failed: {exc}",
+        )
