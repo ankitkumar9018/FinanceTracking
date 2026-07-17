@@ -22,6 +22,7 @@ class NotificationSettings(BaseModel):
     email_enabled: bool = False
     telegram_enabled: bool = False
     whatsapp_enabled: bool = False
+    sms_enabled: bool = False
     in_app_enabled: bool = True
     alert_check_interval: int = 60
 
@@ -45,6 +46,8 @@ class SettingsUpdate(BaseModel):
     preferred_currency: str | None = None
     theme_preference: str | None = None
     display_name: str | None = None
+    phone: str | None = None
+    telegram_chat_id: str | None = None
     notification_preferences: dict | None = None
 
 

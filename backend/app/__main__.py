@@ -48,7 +48,10 @@ def _run_migrations() -> None:
         return
 
     cfg = Config(ini_path)
-    cfg.set_main_option("sqlalchemy.url", sync_url)
+    # configparser treats % as interpolation syntax — a URL-encoded path like
+    # .../Application%20Support/... (any macOS install!) crashes set_main_option
+    # with "invalid interpolation syntax" unless % is escaped as %%.
+    cfg.set_main_option("sqlalchemy.url", sync_url.replace("%", "%%"))
     cfg.set_main_option("script_location", alembic_dir)
 
     # Check if this is a legacy DB (has app tables but no alembic_version)
@@ -72,9 +75,67 @@ def _run_migrations() -> None:
         command.upgrade(cfg, "head")
         print("[migrate] Migrations complete.")
 
+    # Safety net for upgrades: stamping a legacy DB at head claims newer
+    # migrations already ran, so columns they would have added are missing.
+    # Reconcile additively so an old DB keeps working with a new build.
+    _reconcile_schema(sync_url)
+
+
+def _reconcile_schema(sync_url: str) -> None:
+    """Additive schema reconciliation: create missing tables, add missing columns.
+
+    Never drops, renames, or rewrites anything — existing data is untouched.
+    This is what guarantees a database created by an OLDER app version keeps
+    working after installing a NEWER build, regardless of how its schema was
+    originally created (alembic or create_all).
+    """
+    from sqlalchemy import create_engine, inspect, text
+
+    import app.models  # noqa: F401 — registers every model on Base.metadata
+    from app.database import Base
+
+    engine = create_engine(sync_url)
+    try:
+        inspector = inspect(engine)
+        existing_tables = set(inspector.get_table_names())
+
+        # 1. Tables added in newer versions (create_all only creates absent ones)
+        Base.metadata.create_all(engine)
+
+        # 2. Columns added in newer versions. SQLite can't ADD COLUMN with
+        #    NOT NULL and no default, so columns are added nullable (or with
+        #    the model's scalar default when it has one).
+        with engine.begin() as conn:
+            for table in Base.metadata.sorted_tables:
+                if table.name not in existing_tables:
+                    continue
+                have = {c["name"] for c in inspector.get_columns(table.name)}
+                for column in table.columns:
+                    if column.name in have:
+                        continue
+                    col_type = column.type.compile(dialect=engine.dialect)
+                    ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {col_type}'
+                    default = None
+                    if column.default is not None and getattr(column.default, "is_scalar", False):
+                        default = column.default.arg
+                    if isinstance(default, bool):
+                        ddl += f" DEFAULT {int(default)}"
+                    elif isinstance(default, (int, float)):
+                        ddl += f" DEFAULT {default}"
+                    elif isinstance(default, str):
+                        ddl += " DEFAULT '{}'".format(default.replace("'", "''"))
+                    print(f"[migrate] Adding missing column {table.name}.{column.name}")
+                    conn.execute(text(ddl))
+    except Exception as exc:
+        # Never block startup on reconciliation — worst case the app behaves
+        # like before this safety net existed.
+        print(f"[migrate] Schema reconciliation warning: {exc}")
+    finally:
+        engine.dispose()
+
 
 def _run_seed() -> None:
-    """Run migrations then seed the database with a demo user if needed."""
+    """Seed the database with a demo user if needed (schema must exist)."""
     # Import here so env vars (DATABASE_URL) are already set
     from sqlalchemy import select
 
@@ -82,9 +143,6 @@ def _run_seed() -> None:
     from app.models.user import User
     from app.utils.security import hash_password
     from app.models.portfolio import Portfolio
-
-    # Run migrations first (creates/upgrades schema)
-    _run_migrations()
 
     async def seed() -> None:
         async with async_session_factory() as db:
@@ -126,17 +184,22 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.db_path:
-        # Use forward slashes for SQLAlchemy URL (Windows backslashes break the URL)
-        # URL-encode the path to handle spaces (e.g. "C:/Users/John Doe/...")
-        from urllib.parse import quote
+        # Use forward slashes for SQLAlchemy URL (Windows backslashes break the URL).
+        # Do NOT percent-encode: SQLAlchemy takes the sqlite database path
+        # verbatim (no URL-decoding), so an encoded "Application%20Support"
+        # becomes a literal %20 directory that doesn't exist. Raw spaces work.
         db_posix = Path(args.db_path).as_posix()
-        db_encoded = quote(db_posix, safe="/:")
-        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{db_encoded}"
+        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{db_posix}"
 
     # Sidecar mode: allow all origins. The backend binds to 127.0.0.1 only,
     # so this is safe. Avoids CORS mismatches across platform webview engines
     # (macOS WKWebView sends null/tauri://, Windows WebView2 sends https://tauri.localhost, etc.)
     os.environ["CORS_ORIGINS"] = "*"
+
+    # Always migrate/reconcile when a concrete DB path is given (sidecar mode)
+    # — not only when seeding — so upgrades work even without --seed.
+    if args.db_path or args.seed:
+        _run_migrations()
 
     if args.seed:
         _run_seed()

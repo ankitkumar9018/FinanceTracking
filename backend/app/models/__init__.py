@@ -12,6 +12,7 @@ from app.models.goal import Goal
 from app.models.holding import Holding
 from app.models.mutual_fund import MutualFund
 from app.models.notification_log import NotificationLog
+from app.models.password_reset import PasswordReset
 from app.models.portfolio import Portfolio
 from app.models.price_history import PriceHistory
 from app.models.tax_record import TaxRecord
@@ -33,6 +34,7 @@ __all__ = [
     "Holding",
     "MutualFund",
     "NotificationLog",
+    "PasswordReset",
     "Portfolio",
     "PriceHistory",
     "TaxRecord",

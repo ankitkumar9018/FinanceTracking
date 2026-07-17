@@ -78,11 +78,21 @@ async def compare_with_benchmark(
         return None
     benchmark_return = ((bench_end - bench_start) / bench_start) * 100
 
-    # Portfolio return from daily values
-    if len(portfolio_daily_values) < 2:
+    # Portfolio return from daily values — clipped to the benchmark's date
+    # range so both returns cover the same period (comparing a full-history
+    # portfolio return against a windowed benchmark return fabricates alpha)
+    bench_first_date = benchmark_closes[0][0]
+    bench_last_date = benchmark_closes[-1][0]
+    aligned_pf = [
+        p for p in portfolio_daily_values
+        if bench_first_date <= p["date"] <= bench_last_date
+    ]
+    if len(aligned_pf) < 2:
+        aligned_pf = portfolio_daily_values
+    if len(aligned_pf) < 2:
         return None
-    pf_start = portfolio_daily_values[0]["value"]
-    pf_end = portfolio_daily_values[-1]["value"]
+    pf_start = aligned_pf[0]["value"]
+    pf_end = aligned_pf[-1]["value"]
     portfolio_return = ((pf_end - pf_start) / pf_start) * 100 if pf_start > 0 else 0
 
     # Build normalized data points (both starting at 100)

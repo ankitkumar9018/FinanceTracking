@@ -434,6 +434,8 @@ async def export_sqlite_backup() -> bytes | None:
 
     Returns None if the app is not using SQLite.
     """
+    import asyncio
+
     from app.config import settings
 
     if not settings.is_sqlite:
@@ -441,18 +443,22 @@ async def export_sqlite_backup() -> bytes | None:
 
     db_path = settings.database_url.replace("sqlite+aiosqlite:///", "")
 
-    # Checkpoint WAL to ensure consistency
-    import sqlite3
-    try:
-        conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.close()
-    except Exception:
-        logger.debug("WAL checkpoint failed (may not be in WAL mode)", exc_info=True)
+    def _read_backup() -> bytes | None:
+        # Checkpoint WAL to ensure consistency
+        import sqlite3
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.close()
+        except Exception:
+            logger.debug("WAL checkpoint failed (may not be in WAL mode)", exc_info=True)
 
-    try:
-        with open(db_path, "rb") as f:
-            return f.read()
-    except FileNotFoundError:
-        logger.warning("SQLite database file not found at %s", db_path)
-        return None
+        try:
+            with open(db_path, "rb") as f:
+                return f.read()
+        except FileNotFoundError:
+            logger.warning("SQLite database file not found at %s", db_path)
+            return None
+
+    # sqlite3 + full-file read are blocking — keep them off the event loop
+    return await asyncio.to_thread(_read_backup)

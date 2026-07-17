@@ -103,14 +103,18 @@ class TestClassifyGainType:
         assert result == "STCG"
 
     def test_classify_gain_ltcg(self):
-        """Holding period >= 12 months in India -> LTCG."""
-        result = classify_gain_type(date(2024, 1, 1), date(2025, 1, 1), "IN")
+        """Holding period of more than 12 months in India -> LTCG."""
+        result = classify_gain_type(date(2024, 1, 1), date(2025, 6, 1), "IN")
         assert result == "LTCG"
 
-    def test_classify_gain_ltcg_exactly_365_days(self):
-        """Exactly 365 days is LTCG in India."""
-        result = classify_gain_type(date(2024, 1, 1), date(2024, 12, 31), "IN")
-        assert result == "LTCG"
+    def test_classify_gain_exactly_12_months_is_stcg(self):
+        """Exactly 12 months is NOT 'more than 12 months' -> STCG.
+
+        Also: 365 days across a leap year (2024) is still under 12 calendar
+        months, so it stays STCG — the rule is calendar months, not day count.
+        """
+        assert classify_gain_type(date(2024, 1, 1), date(2025, 1, 1), "IN") == "STCG"
+        assert classify_gain_type(date(2024, 1, 1), date(2024, 12, 31), "IN") == "STCG"
 
     def test_classify_gain_ltcg_long_holding(self):
         """Multi-year holding is LTCG in India."""
@@ -774,18 +778,16 @@ class TestTaxServiceEdgeCases:
         assert fy_april == "2025-26"
         assert fy_march != fy_april
 
-    def test_stcg_boundary_364_vs_365_days(self):
-        """364 days = STCG; 365 days = LTCG in India."""
+    def test_stcg_ltcg_twelve_month_boundary(self):
+        """LTCG requires MORE than 12 calendar months, not >= 365 days."""
         base = date(2024, 1, 1)
-        # 364 days later
-        sale_364 = date(2024, 12, 30)
-        assert (sale_364 - base).days == 364
-        assert classify_gain_type(base, sale_364, "IN") == "STCG"
-
-        # 365 days later
-        sale_365 = date(2024, 12, 31)
-        assert (sale_365 - base).days == 365
-        assert classify_gain_type(base, sale_365, "IN") == "LTCG"
+        # Exactly 12 months -> still STCG
+        assert classify_gain_type(base, date(2025, 1, 1), "IN") == "STCG"
+        # One day past 12 months -> LTCG
+        assert classify_gain_type(base, date(2025, 1, 2), "IN") == "LTCG"
+        # Month-end clamping: buy on leap day -> 12 months later clamps to Feb 28
+        assert classify_gain_type(date(2024, 2, 29), date(2025, 2, 28), "IN") == "STCG"
+        assert classify_gain_type(date(2024, 2, 29), date(2025, 3, 1), "IN") == "LTCG"
 
     def test_german_tax_very_large_gain(self):
         """German tax calculation handles large gains correctly."""

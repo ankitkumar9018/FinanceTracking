@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -171,8 +172,13 @@ async def search_stocks(
     if not results:
         try:
             symbol = _ticker_symbol(query.upper(), exchange.upper())
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
+
+            def _lookup_info() -> dict:
+                return yf.Ticker(symbol).info or {}
+
+            # ticker.info issues several blocking HTTP requests — keep it off
+            # the event loop and bound it so autocomplete can't hang the server
+            info = await asyncio.wait_for(asyncio.to_thread(_lookup_info), timeout=10.0)
             if info and info.get("symbol"):
                 results.append({
                     "symbol": query.upper(),

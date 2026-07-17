@@ -18,8 +18,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Override sqlalchemy.url with our settings
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Override sqlalchemy.url with our settings.
+# Escape % for configparser interpolation — a URL-encoded DB path like
+# .../Application%20Support/... (every macOS desktop install) otherwise
+# raises "invalid interpolation syntax" and kills the sidecar at startup.
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 

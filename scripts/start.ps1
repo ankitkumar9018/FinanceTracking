@@ -154,7 +154,7 @@ Pop-Location
 if ($hasRedis) {
     Push-Location $BackendDir
     $celeryProc = Start-Process -NoNewWindow -PassThru -FilePath "uv" `
-        -ArgumentList "run celery -A app.tasks.celery_app worker --loglevel=info" `
+        -ArgumentList "run celery -A app.tasks.celery_app worker --beat --loglevel=info" `
         -RedirectStandardOutput (Join-Path $LogsDir "celery.log") `
         -RedirectStandardError (Join-Path $LogsDir "celery-err.log")
     $celeryProc.Id | Set-Content (Join-Path $LogsDir "celery.pid")

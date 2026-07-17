@@ -13,6 +13,8 @@ from sqlalchemy.orm import selectinload
 from app.models.asset import Asset
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
+from app.models.user import User
+from app.services import forex_service
 
 logger = logging.getLogger(__name__)
 
@@ -21,38 +23,60 @@ logger = logging.getLogger(__name__)
 # Live price helpers for non-stock assets
 # ---------------------------------------------------------------------------
 
-def _sync_fetch_price(symbol: str) -> float | None:
-    """Synchronous helper to fetch a price via yfinance (runs in a thread)."""
+def _sync_fetch_price(symbol: str) -> tuple[float, str | None] | None:
+    """Fetch a price via yfinance (runs in a thread).
+
+    Returns ``(price, quote_currency)`` — the currency the price is
+    denominated in (e.g. USD for BTC-USD/GC=F, INR for GOLDBEES.NS) —
+    or ``None`` if the price could not be fetched.
+    """
     try:
         ticker = yf.Ticker(symbol)
-        return float(ticker.fast_info.last_price)
+        info = ticker.fast_info
+        return float(info.last_price), getattr(info, "currency", None)
     except Exception:
         try:
             ticker = yf.Ticker(symbol)
-            return float(ticker.info.get("regularMarketPrice", 0)) or None
+            info = ticker.info
+            price = float(info.get("regularMarketPrice", 0)) or None
+            if price is None:
+                return None
+            return price, info.get("currency")
         except Exception:
             return None
 
 
-async def _fetch_crypto_price(symbol: str) -> float | None:
-    """Fetch current crypto price via yfinance (e.g. BTC-USD, ETH-USD)."""
+async def _fetch_live_price(symbol: str) -> tuple[float, str | None] | None:
+    """Fetch current price + quote currency via yfinance (crypto, gold, …)."""
     try:
         return await asyncio.wait_for(asyncio.to_thread(_sync_fetch_price, symbol), timeout=10.0)
     except Exception:
-        logger.warning("Failed to fetch crypto price for %s", symbol)
+        logger.warning("Failed to fetch live price for %s", symbol)
         return None
 
 
-async def _fetch_gold_price(symbol: str = "GC=F") -> float | None:
-    """Fetch current gold price via yfinance.
+class _RateCache:
+    """Per-request cache of conversion rates into the base currency."""
 
-    Default uses gold futures (GC=F). For India, use GOLDBEES.NS.
-    """
-    try:
-        return await asyncio.wait_for(asyncio.to_thread(_sync_fetch_price, symbol), timeout=10.0)
-    except Exception:
-        logger.warning("Failed to fetch gold price for %s", symbol)
-        return None
+    def __init__(self, base_currency: str, db: AsyncSession) -> None:
+        self.base = base_currency.upper()
+        self.db = db
+        self._rates: dict[str, float] = {self.base: 1.0}
+
+    async def to_base(self, amount: float, from_currency: str | None) -> float:
+        cur = (from_currency or self.base).upper()
+        if cur not in self._rates:
+            try:
+                self._rates[cur] = await forex_service.get_exchange_rate(
+                    cur, self.base, None, self.db
+                )
+            except Exception:
+                logger.warning(
+                    "No %s->%s rate available; using 1.0 (net worth may mix currencies)",
+                    cur, self.base,
+                )
+                self._rates[cur] = 1.0
+        return amount * self._rates[cur]
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +94,19 @@ async def get_net_worth(user_id: int, db: AsyncSession) -> dict:
     - BOND: stored value
     - REAL_ESTATE: stored value
 
+    All aggregate figures (breakdown ``total_value`` and ``total_net_worth``)
+    are converted into the user's preferred currency; per-item values stay in
+    their native currency (each item carries its own ``currency`` field) with
+    a ``value_in_base`` key added.
+
     Returns a dict matching NetWorthResponse schema.
     """
     breakdown: list[dict] = []
+
+    user_result = await db.execute(select(User).where(User.id == user_id))
+    user = user_result.scalar_one_or_none()
+    base_currency = (user.preferred_currency if user else None) or "INR"
+    rates = _RateCache(base_currency, db)
 
     # ── 1. Stocks from existing portfolio holdings ─────────────────
     stock_value = 0.0
@@ -91,7 +125,9 @@ async def get_net_worth(user_id: int, db: AsyncSession) -> dict:
             avg = float(h.average_price)
             price = float(h.current_price) if h.current_price is not None else avg
             value = qty * price
-            stock_value += value
+            holding_currency = h.currency or portfolio.currency
+            value_base = await rates.to_base(value, holding_currency)
+            stock_value += value_base
             stock_items.append({
                 "id": h.id,
                 "asset_type": "STOCK",
@@ -103,7 +139,8 @@ async def get_net_worth(user_id: int, db: AsyncSession) -> dict:
                 "current_price": price,
                 "current_value": round(value, 2),
                 "value": round(value, 2),
-                "currency": portfolio.currency,
+                "value_in_base": round(value_base, 2),
+                "currency": holding_currency,
                 "portfolio": portfolio.name,
             })
 
@@ -132,18 +169,21 @@ async def get_net_worth(user_id: int, db: AsyncSession) -> dict:
 
         for asset in asset_list:
             value = float(asset.current_value)
+            value_currency = asset.currency
 
-            # For crypto and gold with a symbol, try to fetch live price
-            if asset_type == "CRYPTO" and asset.symbol:
-                live_price = await _fetch_crypto_price(asset.symbol)
-                if live_price is not None and float(asset.quantity) > 0:
+            # For crypto and gold with a symbol, try to fetch live price.
+            # The live price is denominated in the symbol's quote currency
+            # (USD for BTC-USD/GC=F, INR for GOLDBEES.NS, …), which may
+            # differ from the currency stored on the asset.
+            if asset_type in ("CRYPTO", "GOLD") and asset.symbol:
+                live = await _fetch_live_price(asset.symbol)
+                if live is not None and float(asset.quantity) > 0:
+                    live_price, quote_currency = live
                     value = float(asset.quantity) * live_price
-            elif asset_type == "GOLD" and asset.symbol:
-                live_price = await _fetch_gold_price(asset.symbol)
-                if live_price is not None and float(asset.quantity) > 0:
-                    value = float(asset.quantity) * live_price
+                    value_currency = quote_currency or asset.currency
 
-            type_value += value
+            value_base = await rates.to_base(value, value_currency)
+            type_value += value_base
             item_data: dict = {
                 "id": asset.id,
                 "asset_type": asset_type,
@@ -152,7 +192,8 @@ async def get_net_worth(user_id: int, db: AsyncSession) -> dict:
                 "quantity": float(asset.quantity),
                 "purchase_price": float(asset.purchase_price),
                 "current_value": round(value, 2),
-                "currency": asset.currency,
+                "value_in_base": round(value_base, 2),
+                "currency": value_currency,
             }
             if asset.interest_rate is not None:
                 item_data["interest_rate"] = asset.interest_rate
@@ -172,5 +213,5 @@ async def get_net_worth(user_id: int, db: AsyncSession) -> dict:
     return {
         "total_net_worth": round(total_net_worth, 2),
         "breakdown": breakdown,
-        "currency": "INR",  # default; can be made user-specific
+        "currency": base_currency,
     }

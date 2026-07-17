@@ -84,10 +84,13 @@ def calculate_sortino_ratio(
         return None
     daily_rf = (1 + risk_free_rate) ** (1 / TRADING_DAYS_PER_YEAR) - 1
     excess = returns - daily_rf
-    downside = excess[excess < 0]
-    if len(downside) == 0 or downside.std() < 1e-10:
+    # Downside deviation is the RMS of negative excess over ALL observations
+    # (clipping positives to 0) — not the sample std of the negative subset,
+    # which re-centers within the subset and overstates Sortino.
+    downside_dev = float(np.sqrt((excess.clip(upper=0.0) ** 2).mean()))
+    if downside_dev < 1e-10:
         return None
-    return float(excess.mean() / downside.std() * np.sqrt(TRADING_DAYS_PER_YEAR))
+    return float(excess.mean() / downside_dev * np.sqrt(TRADING_DAYS_PER_YEAR))
 
 
 def calculate_max_drawdown(
@@ -159,6 +162,10 @@ def calculate_portfolio_returns(
     df = pd.DataFrame(
         {h["symbol"]: h["daily_returns"] * h["weight"] for h in holdings_data}
     )
+    # Only use dates where every holding has data: summing with NaN→0 would
+    # fabricate 0%-return days (all-NaN dates) and value shorter-history
+    # holdings at 0% without renormalizing weights, biasing vol/VaR/Sharpe.
+    df = df.dropna()
     return df.sum(axis=1)
 
 
@@ -231,7 +238,9 @@ async def compute_portfolio_risk(
         for h in holdings
     )
 
-    cutoff = date.today() - timedelta(days=days + 10)
+    # `days` means trading days (default 252 = 1y); widen the calendar
+    # window accordingly or a "1-year" metric only sees ~7 months of bars
+    cutoff = date.today() - timedelta(days=int(days * 1.45) + 10)
     holdings_data = []
 
     for h in holdings:
@@ -374,7 +383,9 @@ async def compute_holding_risks(
         for h in holdings
     )
 
-    cutoff = date.today() - timedelta(days=days + 10)
+    # `days` means trading days (default 252 = 1y); widen the calendar
+    # window accordingly or a "1-year" metric only sees ~7 months of bars
+    cutoff = date.today() - timedelta(days=int(days * 1.45) + 10)
 
     # Benchmark returns
     bench_returns = await _fetch_benchmark_returns(db, benchmark_symbol, cutoff)

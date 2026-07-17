@@ -73,22 +73,36 @@ def get_financial_year(d: date, jurisdiction: str = "IN") -> str:
 # Gain classification
 # ---------------------------------------------------------------------------
 
+def _add_months(d: date, months: int) -> date:
+    """Add calendar months to a date, clamping the day (Jan 31 + 1m = Feb 28)."""
+    month_index = d.month - 1 + months
+    year = d.year + month_index // 12
+    month = month_index % 12 + 1
+    # Clamp to the last valid day of the target month
+    for day in (d.day, 30, 29, 28):
+        try:
+            return date(year, month, day)
+        except ValueError:
+            continue
+    raise ValueError(f"Cannot add {months} months to {d}")
+
+
 def classify_gain_type(purchase_date: date, sale_date: date, jurisdiction: str) -> str:
     """Classify the capital gain type based on holding period and jurisdiction.
 
-    India:
-        <12 months  -> STCG
-        >=12 months -> LTCG
+    India (listed equity):
+        held for MORE than 12 calendar months -> LTCG, otherwise STCG.
+        (Calendar months, not 365 days — a 365-day hold across a leap year
+        is still under 12 months and stays STCG.)
     Germany:
         Always ABGELTUNGSSTEUER (flat tax on capital gains).
     """
     if jurisdiction == "DE":
         return "ABGELTUNGSSTEUER"
 
-    holding_days = (sale_date - purchase_date).days
-    if holding_days < 365:
-        return "STCG"
-    return "LTCG"
+    if sale_date > _add_months(purchase_date, 12):
+        return "LTCG"
+    return "STCG"
 
 
 # ---------------------------------------------------------------------------
@@ -224,13 +238,85 @@ def calculate_german_tax(
 # Compute tax for a specific SELL transaction
 # ---------------------------------------------------------------------------
 
+def _build_consumed_lots(
+    transactions: list[Transaction],
+    taxed_txn_id: int,
+) -> list[dict]:
+    """Replay BUY/SELL transactions in date order, consuming lots FIFO, and
+    return the lots (with matched quantity, buy price, buy date) that the taxed
+    SELL consumes.
+
+    The lot queue is built from BUY transactions in chronological order. Every
+    SELL up to and including the taxed one is replayed against that queue,
+    consuming lots from the front (first-in, first-out). For the taxed SELL we
+    record exactly which lots — and how much of each — it draws from.
+    """
+    # Ordered by (date, id) so a BUY and SELL on the same day resolve
+    # deterministically (earlier-created first).
+    ordered = sorted(transactions, key=lambda t: (t.date, t.id))
+
+    # Each lot: {"qty": remaining, "price": buy price, "date": buy date}
+    lots: list[dict] = []
+    consumed: list[dict] = []
+
+    for t in ordered:
+        if t.transaction_type == "BUY":
+            lots.append(
+                {
+                    "qty": float(t.quantity),
+                    "price": float(t.price),
+                    "date": t.date,
+                }
+            )
+            continue
+
+        if t.transaction_type != "SELL":
+            continue
+
+        # Consume this SELL's quantity FIFO from the front of the queue.
+        remaining = float(t.quantity)
+        is_taxed = t.id == taxed_txn_id
+        while remaining > 1e-12 and lots:
+            lot = lots[0]
+            matched = min(remaining, lot["qty"])
+            if is_taxed and matched > 0:
+                consumed.append(
+                    {
+                        "qty": matched,
+                        "price": lot["price"],
+                        "date": lot["date"],
+                    }
+                )
+            lot["qty"] -= matched
+            remaining -= matched
+            if lot["qty"] <= 1e-12:
+                lots.pop(0)
+
+        if is_taxed:
+            # We only care up to and including the taxed SELL.
+            break
+
+    return consumed
+
+
 async def compute_tax_for_transaction(
     transaction_id: int,
     user_id: int,
     db: AsyncSession,
-) -> TaxRecord:
-    """Load a SELL transaction, compute the capital gain and tax, and persist
-    a ``TaxRecord``.
+) -> list[TaxRecord]:
+    """Load a SELL transaction, compute the per-lot FIFO capital gain and tax,
+    and persist one ``TaxRecord`` per gain-type bucket.
+
+    A single SELL matched against multiple buy lots may straddle the STCG/LTCG
+    boundary (India), producing BOTH an STCG record and an LTCG record. Germany
+    has no split (a single ``ABGELTUNGSSTEUER`` record) but still uses the
+    per-lot FIFO cost basis.
+
+    Returns
+    -------
+    list[TaxRecord]
+        One record per non-empty gain-type bucket. Empty if the SELL matched
+        no available buy lots.
 
     Raises
     ------
@@ -263,112 +349,172 @@ async def compute_tax_for_transaction(
     if txn.transaction_type != "SELL":
         raise ValueError("Tax computation is only applicable to SELL transactions")
 
+    # Idempotent recompute: drop any records previously produced for this SELL
+    # before creating new ones. Otherwise a recompute would double-count gains
+    # AND deplete the LTCG exemption / Freibetrag twice, overtaxing later sales
+    # in the same FY.
+    existing_rec = await db.execute(
+        select(TaxRecord).where(TaxRecord.transaction_id == transaction_id)
+    )
+    for old in existing_rec.scalars().all():
+        await db.delete(old)
+    await db.flush()
+
     # Determine jurisdiction and currency from exchange
     exchange = holding.exchange.upper()
     jurisdiction = EXCHANGE_JURISDICTION_MAP.get(exchange, "IN")
     currency = EXCHANGE_CURRENCY_MAP.get(exchange, "INR")
 
-    # Determine dates and holding period
-    sale_date = txn.date
-    # Use the earliest BUY transaction date as purchase_date approximation
-    buy_result = await db.execute(
-        select(Transaction)
-        .where(
-            Transaction.holding_id == holding.id,
-            Transaction.transaction_type == "BUY",
+    if jurisdiction not in ("IN", "DE"):
+        # Only the Indian and German regimes are implemented. Producing a
+        # number for other jurisdictions would silently mix Indian FY +
+        # gain types with the German formula — worse than no answer.
+        raise ValueError(
+            f"Tax computation for {exchange}-listed holdings ({jurisdiction}) "
+            "is not supported yet — only Indian (NSE/BSE) and German (XETRA) "
+            "regimes are implemented."
         )
-        .order_by(Transaction.date.asc())
-        .limit(1)
-    )
-    earliest_buy = buy_result.scalar_one_or_none()
-    purchase_date = earliest_buy.date if earliest_buy else sale_date
 
-    holding_period_days = (sale_date - purchase_date).days
-
-    # Calculate gain
-    avg_price = float(holding.average_price)
+    sale_date = txn.date
     sale_price = float(txn.price)
-    quantity = float(txn.quantity)
-    gain_amount = round((sale_price - avg_price) * quantity, 4)
-
-    # Classify gain type
-    gain_type = classify_gain_type(purchase_date, sale_date, jurisdiction)
-
-    # Determine financial year
     fy = get_financial_year(sale_date, jurisdiction)
 
-    # Calculate tax based on jurisdiction
-    if jurisdiction == "IN":
-        # Check how much LTCG exemption has already been used in this FY
-        existing_result = await db.execute(
-            select(TaxRecord).where(
-                TaxRecord.user_id == user_id,
-                TaxRecord.financial_year == fy,
-                TaxRecord.tax_jurisdiction == "IN",
-                TaxRecord.gain_type == "LTCG",
-            )
-        )
-        existing_records = existing_result.scalars().all()
-        fy_ltcg_exemption_used = sum(
-            float(r.gain_amount) for r in existing_records
-            if r.gain_amount is not None and float(r.gain_amount) > 0
-        )
-        fy_ltcg_exemption_used = min(fy_ltcg_exemption_used, INDIA_LTCG_EXEMPTION)
+    # ── FIFO: figure out which buy lots this SELL consumes ─────────────
+    all_txns_result = await db.execute(
+        select(Transaction).where(Transaction.holding_id == holding.id)
+    )
+    all_txns = list(all_txns_result.scalars().all())
+    consumed_lots = _build_consumed_lots(all_txns, transaction_id)
 
-        tax_info = calculate_indian_tax(gain_amount, gain_type, fy_ltcg_exemption_used)
-    else:
-        # German: check remaining Freibetrag for this FY
-        existing_result = await db.execute(
-            select(TaxRecord).where(
-                TaxRecord.user_id == user_id,
-                TaxRecord.financial_year == fy,
-                TaxRecord.tax_jurisdiction == "DE",
-            )
+    if not consumed_lots:
+        # No matching buy lots (e.g. an oversell with no history). Nothing to
+        # tax — return no records rather than fabricate a cost basis.
+        logger.info(
+            "Tax compute: txn=%d consumed no buy lots — no tax records created",
+            transaction_id,
         )
-        existing_records = existing_result.scalars().all()
-        freibetrag_used = min(
-            sum(
+        return []
+
+    # ── Aggregate consumed lots into per-gain-type buckets ─────────────
+    # Each bucket: qty, cost basis, proceeds, gain, earliest consumed buy date.
+    buckets: dict[str, dict] = {}
+    for lot in consumed_lots:
+        gain_type = classify_gain_type(lot["date"], sale_date, jurisdiction)
+        matched_qty = lot["qty"]
+        cost = lot["price"] * matched_qty
+        proceeds = sale_price * matched_qty
+        gain = (sale_price - lot["price"]) * matched_qty
+
+        bucket = buckets.setdefault(
+            gain_type,
+            {
+                "qty": 0.0,
+                "cost": 0.0,
+                "proceeds": 0.0,
+                "gain": 0.0,
+                "earliest_buy": lot["date"],
+            },
+        )
+        bucket["qty"] += matched_qty
+        bucket["cost"] += cost
+        bucket["proceeds"] += proceeds
+        bucket["gain"] += gain
+        if lot["date"] < bucket["earliest_buy"]:
+            bucket["earliest_buy"] = lot["date"]
+
+    # Deterministic record order: STCG before LTCG (India), single bucket (DE).
+    ordering = ["STCG", "LTCG", "ABGELTUNGSSTEUER"]
+    ordered_types = sorted(
+        buckets.keys(),
+        key=lambda g: ordering.index(g) if g in ordering else len(ordering),
+    )
+
+    tax_records: list[TaxRecord] = []
+    for gain_type in ordered_types:
+        bucket = buckets[gain_type]
+        gain_amount = round(bucket["gain"], 4)
+        purchase_date = bucket["earliest_buy"]
+        holding_period_days = (sale_date - purchase_date).days
+
+        # Tax calculation with FY exemption / Freibetrag netting. Records
+        # already created earlier in this same call (e.g. an STCG bucket) do
+        # not affect the LTCG exemption, but must be flushed so the FY netting
+        # query below sees any prior sales in the FY.
+        if jurisdiction == "IN":
+            existing_result = await db.execute(
+                select(TaxRecord).where(
+                    TaxRecord.user_id == user_id,
+                    TaxRecord.financial_year == fy,
+                    TaxRecord.tax_jurisdiction == "IN",
+                    TaxRecord.gain_type == "LTCG",
+                )
+            )
+            existing_records = existing_result.scalars().all()
+            # Net LTCG for the FY: losses set off against gains before the
+            # exemption is consumed.
+            net_ltcg = sum(
                 float(r.gain_amount) for r in existing_records
-                if r.gain_amount is not None and float(r.gain_amount) > 0
-            ),
-            GERMANY_DEFAULT_FREIBETRAG,
+                if r.gain_amount is not None
+            )
+            fy_ltcg_exemption_used = min(max(net_ltcg, 0.0), INDIA_LTCG_EXEMPTION)
+            tax_info = calculate_indian_tax(
+                gain_amount, gain_type, fy_ltcg_exemption_used
+            )
+        else:
+            existing_result = await db.execute(
+                select(TaxRecord).where(
+                    TaxRecord.user_id == user_id,
+                    TaxRecord.financial_year == fy,
+                    TaxRecord.tax_jurisdiction == "DE",
+                )
+            )
+            existing_records = existing_result.scalars().all()
+            net_gains = sum(
+                float(r.gain_amount) for r in existing_records
+                if r.gain_amount is not None
+            )
+            freibetrag_used = min(max(net_gains, 0.0), GERMANY_DEFAULT_FREIBETRAG)
+            freibetrag_remaining = max(
+                GERMANY_DEFAULT_FREIBETRAG - freibetrag_used, 0.0
+            )
+            tax_info = calculate_german_tax(gain_amount, freibetrag_remaining)
+
+        tax_amount = tax_info["tax_amount"]
+
+        tax_record = TaxRecord(
+            user_id=user_id,
+            transaction_id=transaction_id,
+            financial_year=fy,
+            tax_jurisdiction=jurisdiction,
+            gain_type=gain_type,
+            purchase_date=purchase_date,
+            sale_date=sale_date,
+            purchase_price=round(bucket["cost"], 4),
+            sale_price=round(bucket["proceeds"], 4),
+            gain_amount=gain_amount,
+            tax_amount=tax_amount,
+            holding_period_days=holding_period_days,
+            currency=currency,
         )
-        freibetrag_remaining = max(GERMANY_DEFAULT_FREIBETRAG - freibetrag_used, 0.0)
+        db.add(tax_record)
+        # Flush each record before computing the next bucket so the FY netting
+        # query above reflects records created within this call.
+        await db.flush()
+        await db.refresh(tax_record)
+        tax_records.append(tax_record)
 
-        tax_info = calculate_german_tax(gain_amount, freibetrag_remaining)
+        logger.info(
+            "Tax record created: id=%d txn=%d qty=%.4f gain=%.2f tax=%.2f (%s/%s)",
+            tax_record.id,
+            transaction_id,
+            bucket["qty"],
+            gain_amount,
+            tax_amount,
+            jurisdiction,
+            gain_type,
+        )
 
-    tax_amount = tax_info["tax_amount"]
-
-    # Create the tax record
-    tax_record = TaxRecord(
-        user_id=user_id,
-        transaction_id=transaction_id,
-        financial_year=fy,
-        tax_jurisdiction=jurisdiction,
-        gain_type=gain_type,
-        purchase_date=purchase_date,
-        sale_date=sale_date,
-        purchase_price=round(avg_price * quantity, 4),
-        sale_price=round(sale_price * quantity, 4),
-        gain_amount=gain_amount,
-        tax_amount=tax_amount,
-        holding_period_days=holding_period_days,
-        currency=currency,
-    )
-    db.add(tax_record)
-    await db.flush()
-    await db.refresh(tax_record)
-
-    logger.info(
-        "Tax record created: id=%d txn=%d gain=%.2f tax=%.2f (%s/%s)",
-        tax_record.id,
-        transaction_id,
-        gain_amount,
-        tax_amount,
-        jurisdiction,
-        gain_type,
-    )
-    return tax_record
+    return tax_records
 
 
 # ---------------------------------------------------------------------------
@@ -410,23 +556,21 @@ async def generate_tax_summary(
 
         total_tax += tax
 
-    # Calculate exemption used for the FY
+    # Calculate exemption used for the FY (net of losses, floored at zero)
     if jurisdiction == "IN":
-        ltcg_gains = sum(
+        net_ltcg = sum(
             float(r.gain_amount)
             for r in records
-            if r.gain_type == "LTCG"
-            and r.gain_amount is not None
-            and float(r.gain_amount) > 0
+            if r.gain_type == "LTCG" and r.gain_amount is not None
         )
-        exemption_used = min(ltcg_gains, INDIA_LTCG_EXEMPTION)
+        exemption_used = min(max(net_ltcg, 0.0), INDIA_LTCG_EXEMPTION)
     elif jurisdiction == "DE":
-        total_gains = sum(
+        net_gains = sum(
             float(r.gain_amount)
             for r in records
-            if r.gain_amount is not None and float(r.gain_amount) > 0
+            if r.gain_amount is not None
         )
-        exemption_used = min(total_gains, GERMANY_DEFAULT_FREIBETRAG)
+        exemption_used = min(max(net_gains, 0.0), GERMANY_DEFAULT_FREIBETRAG)
 
     return {
         "financial_year": financial_year,

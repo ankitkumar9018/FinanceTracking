@@ -69,6 +69,12 @@ def calculate_rsi(closes: pd.Series, period: int = 14) -> pd.Series:
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
+    # avg_loss == 0 is a defined case, not missing data: an all-gain streak
+    # is RSI 100; a perfectly flat window is conventionally 50. (avg_gain is
+    # NaN during the warmup period, which keeps those rows NaN.)
+    all_gain = (avg_loss == 0) & (avg_gain > 0)
+    flat = (avg_loss == 0) & (avg_gain == 0)
+    rsi = rsi.mask(all_gain, 100.0).mask(flat, 50.0)
     return rsi
 
 
@@ -104,7 +110,9 @@ def calculate_bollinger_bands(
     std = closes.rolling(window=period).std()
     upper = middle + (std * std_dev)
     lower = middle - (std * std_dev)
-    bandwidth = ((upper - lower) / middle) * 100
+    # Guard the divide: a zero middle band would produce inf, which is not
+    # valid JSON and slips past NaN-to-None conversion (isna(inf) is False)
+    bandwidth = ((upper - lower) / middle.replace(0, np.nan)) * 100
 
     dates = closes.index.tolist()
     return BollingerResult(

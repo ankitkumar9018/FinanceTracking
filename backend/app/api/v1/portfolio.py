@@ -212,6 +212,7 @@ async def get_portfolio_xirr(
     # Build cash flows: BUY -> negative, SELL -> positive
     cash_flows: list[CashFlow] = []
     total_current_value = 0.0
+    used_stale_prices = False
 
     for h in holdings:
         for tx in h.transactions:
@@ -221,9 +222,15 @@ async def get_portfolio_xirr(
             elif tx.transaction_type == "SELL":
                 cash_flows.append(CashFlow(date=tx.date, amount=amount))
 
-        # Add current portfolio value as final positive cash flow (today's date)
-        if h.current_price is not None and h.cumulative_quantity:
-            total_current_value += float(h.current_price) * float(h.cumulative_quantity)
+        # Add current portfolio value as final positive cash flow (today's
+        # date). Fall back to average price for never-refreshed holdings —
+        # otherwise they'd contribute no terminal value at all and drag the
+        # computed return toward a total loss.
+        terminal_price = h.current_price if h.current_price is not None else h.average_price
+        if h.current_price is None:
+            used_stale_prices = True
+        if terminal_price is not None and h.cumulative_quantity:
+            total_current_value += float(terminal_price) * float(h.cumulative_quantity)
 
     if total_current_value > 0:
         cash_flows.append(CashFlow(date=date.today(), amount=total_current_value))
@@ -242,6 +249,7 @@ async def get_portfolio_xirr(
         "xirr_decimal": result_xirr,
         "total_current_value": round(total_current_value, 2),
         "num_cash_flows": len(cash_flows),
+        "used_stale_prices": used_stale_prices,
         "status": "calculated" if result_xirr is not None else "failed_to_converge",
     }
 

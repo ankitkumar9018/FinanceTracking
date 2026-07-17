@@ -122,6 +122,7 @@ async def get_portfolio_summary(
                 "stock_symbol": h.stock_symbol,
                 "stock_name": h.stock_name,
                 "exchange": h.exchange,
+                "currency": h.currency or portfolio.currency,
                 "quantity": qty,
                 "avg_price": avg,
                 "current_price": current,

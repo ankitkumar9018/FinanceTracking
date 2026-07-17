@@ -196,6 +196,29 @@ async def update_transaction(
     for field, value in patch_data.items():
         setattr(tx, field, value)
 
+    # Same guard as POST: replay the (patched) ledger and reject any SELL
+    # that exceeds the quantity held at that point. Raising rolls back the
+    # patch via get_db, so no partial edit is persisted.
+    ledger_result = await db.execute(
+        select(Transaction)
+        .where(Transaction.holding_id == tx.holding_id)
+        .order_by(Transaction.date, Transaction.id)
+    )
+    running_qty = 0.0
+    for entry in ledger_result.scalars():
+        if entry.transaction_type == "BUY":
+            running_qty += float(entry.quantity)
+        elif float(entry.quantity) > running_qty + 1e-9:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Edit would sell {float(entry.quantity)} units on {entry.date} "
+                    f"when only {running_qty} are held"
+                ),
+            )
+        else:
+            running_qty -= float(entry.quantity)
+
     await db.flush()
     await db.refresh(tx)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 
 import httpx
 from sqlalchemy import select
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.mutual_fund import MutualFund
 from app.models.portfolio import Portfolio
 from app.schemas.mutual_fund import MutualFundCreate, MutualFundUpdate
+from app.services.xirr_service import CashFlow, xirr
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +250,8 @@ async def get_mf_summary(user_id: int, db: AsyncSession) -> dict:
 
     total_invested = 0.0
     total_current_value = 0.0
+    cash_flows: list[CashFlow] = []
+    today = date.today()
 
     for fund in funds:
         invested = float(fund.invested_amount)
@@ -255,16 +259,31 @@ async def get_mf_summary(user_id: int, db: AsyncSession) -> dict:
         total_invested += invested
         total_current_value += current
 
+        # Outflow (buy) dated at the fund's investment date. The model has no
+        # dedicated purchase/investment date, so fall back to created_at's date.
+        buy_date = fund.created_at.date() if fund.created_at is not None else today
+        cash_flows.append(CashFlow(date=buy_date, amount=-invested))
+
+    # Single aggregate inflow of the current value, dated today.
+    cash_flows.append(CashFlow(date=today, amount=total_current_value))
+
     total_gain = total_current_value - total_invested
     gain_percent: float | None = None
     if total_invested > 0:
         gain_percent = round((total_gain / total_invested) * 100, 2)
+
+    # xirr() returns None when there are fewer than 2 distinct dates or it
+    # fails to converge; surface it as a percentage otherwise.
+    xirr_pct: float | None = None
+    xirr_decimal = xirr(cash_flows)
+    if xirr_decimal is not None:
+        xirr_pct = round(xirr_decimal * 100, 2)
 
     return {
         "total_invested": round(total_invested, 2),
         "total_current_value": round(total_current_value, 2),
         "total_gain": round(total_gain, 2),
         "gain_percent": gain_percent,
-        "xirr": None,  # Placeholder: needs cash flow history for proper calculation
+        "xirr": xirr_pct,
         "fund_count": len(funds),
     }

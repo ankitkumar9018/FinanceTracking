@@ -137,8 +137,10 @@ if _static_dir:
         # Try to serve a static file
         # 1. Exact file match (e.g., /favicon.svg, /_next/static/...)
         file_path = (_static_dir / path.lstrip("/")).resolve()
-        # Guard against path traversal (e.g., /../../../etc/passwd)
-        if not str(file_path).startswith(str(_static_dir.resolve())):
+        # Guard against path traversal (e.g., /../../../etc/passwd).
+        # is_relative_to (not str.startswith) so a sibling dir sharing the
+        # prefix (static-backup next to static) can't be escaped into.
+        if not file_path.is_relative_to(_static_dir.resolve()):
             return await call_next(request)
         if file_path.is_file():
             return _FileResponse(str(file_path))

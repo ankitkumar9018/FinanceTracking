@@ -362,6 +362,12 @@ async def refresh_all_prices(
 
         try:
             quote = fetch_result["quote"]
+            if quote.get("current_price") is None:
+                # Timeout/no-data path: keep the last known price rather than
+                # wiping it, and leave last_price_update untouched so the
+                # freshness service doesn't report a stale holding as fresh.
+                failed += 1
+                continue
             holding.current_price = quote["current_price"]
             holding.last_price_update = datetime.now(UTC)
             holding.current_rsi = fetch_result.get("rsi")
@@ -370,23 +376,25 @@ async def refresh_all_prices(
                 holding.current_price, holding
             )
 
-            # Store price in history table
-            hist_result = await db.execute(
-                select(PriceHistory).where(
-                    PriceHistory.stock_symbol == holding.stock_symbol,
-                    PriceHistory.exchange == holding.exchange,
-                    PriceHistory.date == today,
+            # Store price in history table under the bar's own trading date —
+            # not "today", which would fabricate rows on weekends/holidays.
+            ohlcv = fetch_result.get("ohlcv", [])
+            if ohlcv:
+                latest = ohlcv[-1]
+                bar_date = latest.get("date") or today
+                hist_result = await db.execute(
+                    select(PriceHistory).where(
+                        PriceHistory.stock_symbol == holding.stock_symbol,
+                        PriceHistory.exchange == holding.exchange,
+                        PriceHistory.date == bar_date,
+                    )
                 )
-            )
-            existing = hist_result.scalar_one_or_none()
-            if existing is None:
-                ohlcv = fetch_result.get("ohlcv", [])
-                if ohlcv:
-                    latest = ohlcv[-1]
+                existing = hist_result.scalar_one_or_none()
+                if existing is None:
                     ph = PriceHistory(
                         stock_symbol=holding.stock_symbol,
                         exchange=holding.exchange,
-                        date=today,
+                        date=bar_date,
                         open=latest["open"],
                         high=latest["high"],
                         low=latest["low"],
@@ -395,6 +403,15 @@ async def refresh_all_prices(
                         rsi_14=holding.current_rsi,
                     )
                     db.add(ph)
+                else:
+                    # Intraday row for the same bar date: update with the
+                    # latest values so the EOD close replaces the midday one.
+                    existing.open = latest["open"]
+                    existing.high = latest["high"]
+                    existing.low = latest["low"]
+                    existing.close = latest["close"]
+                    existing.volume = latest["volume"]
+                    existing.rsi_14 = holding.current_rsi
 
             updated += 1
         except Exception:

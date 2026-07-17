@@ -9,7 +9,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -457,8 +457,23 @@ async def export_report(
 # ===========================================================================
 
 @router.get("/export/backup/sqlite")
-async def export_sqlite(user: User = Depends(get_current_user)) -> Response:
-    """Download a copy of the SQLite database file (SQLite deployments only)."""
+async def export_sqlite(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Download a copy of the SQLite database file (SQLite deployments only).
+
+    The raw file contains every user's data (password hashes, TOTP secrets,
+    encrypted broker credentials), so it is restricted to the instance owner —
+    the first-registered account. Other users can use the scoped JSON export.
+    """
+    owner_id = (await db.execute(select(func.min(User.id)))).scalar()
+    if owner_id is not None and user.id != owner_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Full-database backup is restricted to the instance owner. "
+            "Use the JSON export for your own data.",
+        )
     db_bytes = await export_sqlite_backup()
     if db_bytes is None:
         raise HTTPException(

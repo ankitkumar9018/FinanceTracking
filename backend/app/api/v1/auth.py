@@ -2,21 +2,31 @@
 
 from __future__ import annotations
 
+import hashlib
+import logging
+import secrets
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.config import settings
 from app.database import get_db
+from app.models.password_reset import PasswordReset
 from app.models.user import User
 from app.schemas.auth import (
+    ForgotPasswordRequest,
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
+    ResetPasswordRequest,
     TokenResponse,
     UserResponse,
 )
+from app.services import notification_service
 from app.utils.audit import audit_log
 from app.utils.rate_limiter import limiter
 from app.utils.security import (
@@ -30,6 +40,8 @@ from app.utils.security import (
     verify_totp,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
@@ -41,6 +53,11 @@ class TwoFactorCode(BaseModel):
 
 class TwoFactorVerify(TwoFactorCode):
     secret: str = Field(..., min_length=16, description="TOTP secret from /2fa/setup")
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 # ── Auth endpoints ────────────────────────────────────────────────────────────
@@ -175,17 +192,168 @@ async def refresh_token(
     }
 
 
+# ── Password reset endpoints ──────────────────────────────────────────────────
+
+_GENERIC_RESET_MESSAGE = "If that email exists, a reset link has been sent."
+
+
+@router.post("/forgot-password")
+@limiter.limit("3/minute")
+async def forgot_password(
+    request: Request,
+    body: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Start a password reset.
+
+    Always returns a generic 200 response so the endpoint never reveals
+    whether an account exists for the given email. If the user does exist,
+    a single-use token is stored (hashed) and a reset link is emailed.
+    """
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+
+    if user:
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+
+        db.add(
+            PasswordReset(
+                user_id=user.id,
+                token_hash=token_hash,
+                expires_at=expires_at,
+            )
+        )
+        await db.flush()
+
+        frontend_base = settings.cors_origins.split(",")[0].strip().rstrip("/")
+        reset_link = f"{frontend_base}/reset-password?token={raw_token}"
+        subject = "Reset your FinanceTracker password"
+        html_body = (
+            "<p>We received a request to reset your FinanceTracker password.</p>"
+            f'<p><a href="{reset_link}">Click here to reset your password</a>.</p>'
+            "<p>Or paste this token into the reset form (valid for 1 hour):</p>"
+            f"<p><code>{raw_token}</code></p>"
+            "<p>If you did not request this, you can safely ignore this email.</p>"
+        )
+
+        # Best-effort: if SendGrid is unconfigured send_email returns False.
+        # We still return the generic 200 so callers learn nothing either way.
+        sent = await notification_service.send_email(
+            to_email=user.email,
+            subject=subject,
+            body=html_body,
+            user_id=user.id,
+            db=db,
+        )
+        if not sent:
+            logger.warning(
+                "Password reset email not delivered for user %d "
+                "(email provider unconfigured or failed)",
+                user.id,
+            )
+
+    return {"message": _GENERIC_RESET_MESSAGE}
+
+
+@router.post("/reset-password")
+@limiter.limit("5/minute")
+async def reset_password(
+    request: Request,
+    body: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Complete a password reset using a single-use token."""
+    token_hash = hashlib.sha256(body.token.encode()).hexdigest()
+    now = datetime.now(timezone.utc)
+
+    result = await db.execute(
+        select(PasswordReset).where(
+            PasswordReset.token_hash == token_hash,
+            PasswordReset.used_at.is_(None),
+            PasswordReset.expires_at > now,
+        )
+    )
+    reset = result.scalar_one_or_none()
+    if reset is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired token",
+        )
+
+    user_result = await db.execute(select(User).where(User.id == reset.user_id))
+    user = user_result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired token",
+        )
+
+    user.password_hash = hash_password(body.new_password)
+    reset.used_at = now
+
+    # Invalidate this user's other outstanding reset tokens.
+    await db.execute(
+        update(PasswordReset)
+        .where(
+            PasswordReset.user_id == user.id,
+            PasswordReset.used_at.is_(None),
+        )
+        .values(used_at=now)
+    )
+    await db.flush()
+
+    await audit_log(
+        db,
+        user_id=user.id,
+        action="password_change",
+        resource_type="user",
+        resource_id=user.id,
+        details="password reset via token",
+        ip_address=request.client.host if request.client else None,
+    )
+
+    return {"message": "Password has been reset successfully"}
+
+
 # ── Current user endpoint ─────────────────────────────────────────────────────
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
     user: User = Depends(get_current_user),
-) -> User:
+) -> UserResponse:
     """Get the current authenticated user's information."""
-    return user
+    response = UserResponse.model_validate(user)
+    response.totp_enabled = user.totp_secret is not None
+    return response
 
 
 # ── 2FA endpoints ────────────────────────────────────────────────────────────
+
+@router.post("/change-password")
+async def change_password(
+    body: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Change the current user's password (requires the current password)."""
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
+        )
+    user.password_hash = hash_password(body.new_password)
+    await db.flush()
+    await audit_log(
+        db,
+        user_id=user.id,
+        action="password_change",
+        resource_type="user",
+        resource_id=user.id,
+    )
+    return {"message": "Password updated successfully"}
+
 
 @router.post("/2fa/setup")
 async def setup_2fa(
@@ -215,6 +383,10 @@ async def verify_2fa(
     authenticator app.  Only persists the secret on success, preventing
     lockout if the user's authenticator isn't configured correctly.
     """
+    if user.totp_secret:
+        # Refuse to overwrite an active secret: a leaked access token must
+        # not be enough to swap in an attacker-controlled second factor.
+        raise HTTPException(status_code=400, detail="2FA is already enabled. Disable it first.")
     if not verify_totp(body.secret, body.code):
         raise HTTPException(status_code=400, detail="Invalid TOTP code")
     user.totp_secret = body.secret

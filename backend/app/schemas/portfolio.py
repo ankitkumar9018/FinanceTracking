@@ -41,6 +41,7 @@ class HoldingSummaryRow(BaseModel):
     stock_symbol: str
     stock_name: str
     exchange: str
+    currency: str = "INR"
     quantity: float
     avg_price: float
     current_price: float | None

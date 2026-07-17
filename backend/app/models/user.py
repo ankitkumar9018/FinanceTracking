@@ -19,6 +19,10 @@ class User(Base):
     )
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     totp_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # E.164 phone (e.g. +919876543210) for WhatsApp/SMS notification channels
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Per-user Telegram chat id — so alerts go to each user, not one global chat
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     display_name: Mapped[str] = mapped_column(String(255), default="", server_default="")
     preferred_currency: Mapped[str] = mapped_column(
         String(10), default="INR", server_default="INR"

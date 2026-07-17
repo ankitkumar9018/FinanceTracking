@@ -24,6 +24,9 @@ class BrokerConnectionResponse(BaseModel):
     is_active: bool
     last_synced: datetime | None
     created_at: datetime
+    # OAuth continuation URL (e.g. Zerodha): present only on connect responses
+    # when the broker requires the user to authorize in a browser first.
+    login_url: str | None = None
 
     model_config = {"from_attributes": True}
 

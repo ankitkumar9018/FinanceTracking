@@ -74,20 +74,19 @@ def determine_action_needed(current_price: float | None, holding_or_item) -> str
     if lmr2 is not None and price <= float(lmr2):
         return "Y_DARK_RED"
 
-    # Light red: price between lower_mid_range_2 and lower_mid_range_1
-    if lmr2 is not None and lmr1 is not None:
-        if float(lmr2) < price <= float(lmr1):
-            return "Y_LOWER_MID"
+    # Light red: at or below lower_mid_range_1 (and above lmr2 when set).
+    # Works with only lmr1 configured — a partial setup must still trigger.
+    if lmr1 is not None and price <= float(lmr1):
+        return "Y_LOWER_MID"
 
     # --- Top zones (selling opportunities) ---
     # Dark green: price at or above upper_mid_range_2 (toward / above top)
     if umr2 is not None and price >= float(umr2):
         return "Y_DARK_GREEN"
 
-    # Light green: price between upper_mid_range_1 and upper_mid_range_2
-    if umr1 is not None and umr2 is not None:
-        if float(umr1) <= price < float(umr2):
-            return "Y_UPPER_MID"
+    # Light green: at or above upper_mid_range_1 (and below umr2 when set).
+    if umr1 is not None and price >= float(umr1):
+        return "Y_UPPER_MID"
 
     # Neutral zone: between lmr1 and umr1, or outside all defined ranges
     return "N"
@@ -97,9 +96,16 @@ def determine_action_needed(current_price: float | None, holding_or_item) -> str
 # Check alerts for a specific holding
 # ---------------------------------------------------------------------------
 
-async def check_alerts_for_holding(holding: Holding, db: AsyncSession) -> list[dict]:
+async def check_alerts_for_holding(
+    holding: Holding, db: AsyncSession, *, update_state: bool = True
+) -> list[dict]:
     """Check all active alerts associated with a holding and evaluate whether
     they should trigger based on the holding's current price.
+
+    ``update_state=False`` makes the check a pure read: ``last_triggered``
+    is not stamped. Use this from GET endpoints so a user viewing their
+    alerts doesn't put alerts into cooldown and suppress the background
+    dispatcher's real notifications.
 
     Returns a list of triggered alert descriptions (dicts).
     """
@@ -182,20 +188,22 @@ async def check_alerts_for_holding(holding: Holding, db: AsyncSession) -> list[d
                 )
 
         if should_trigger:
-            alert.last_triggered = datetime.now(UTC)
+            triggered_at = datetime.now(UTC)
+            if update_state:
+                alert.last_triggered = triggered_at
             triggered.append(
                 {
                     "alert_id": alert.id,
                     "alert_type": alert.alert_type,
                     "condition": alert.condition,
-                    "triggered_at": alert.last_triggered,
+                    "triggered_at": triggered_at,
                     "stock_symbol": holding.stock_symbol,
                     "message": message,
                     "channels": alert.channels,
                 }
             )
 
-    if triggered:
+    if triggered and update_state:
         await db.flush()
 
     return triggered
@@ -205,8 +213,13 @@ async def check_alerts_for_holding(holding: Holding, db: AsyncSession) -> list[d
 # Check all holdings for a user (batch)
 # ---------------------------------------------------------------------------
 
-async def check_all_alerts_for_user(user_id: int, db: AsyncSession) -> list[dict]:
+async def check_all_alerts_for_user(
+    user_id: int, db: AsyncSession, *, update_state: bool = True
+) -> list[dict]:
     """Check alerts across all holdings and watchlist items for a given user.
+
+    ``update_state=False`` performs a pure read-only evaluation (no
+    ``last_triggered`` stamping) — see ``check_alerts_for_holding``.
 
     Returns a flat list of all triggered alert dicts.
     """
@@ -228,7 +241,9 @@ async def check_all_alerts_for_user(user_id: int, db: AsyncSession) -> list[dict
         holdings = {h.id: h for h in h_result.scalars().all()}
 
         for holding in holdings.values():
-            triggered = await check_alerts_for_holding(holding, db)
+            triggered = await check_alerts_for_holding(
+                holding, db, update_state=update_state
+            )
             all_triggered.extend(triggered)
 
     # ── Watchlist-based alerts ──────────────────────────────────────
@@ -287,18 +302,20 @@ async def check_all_alerts_for_user(user_id: int, db: AsyncSession) -> list[dict
                     message = f"{wl_item.stock_symbol} RSI {rsi:.1f} below {float(rsi_below)}"
 
             if should_trigger:
-                alert.last_triggered = datetime.now(UTC)
+                triggered_at = datetime.now(UTC)
+                if update_state:
+                    alert.last_triggered = triggered_at
                 all_triggered.append({
                     "alert_id": alert.id,
                     "alert_type": alert.alert_type,
                     "condition": alert.condition,
-                    "triggered_at": alert.last_triggered,
+                    "triggered_at": triggered_at,
                     "stock_symbol": wl_item.stock_symbol,
                     "message": message,
                     "channels": alert.channels,
                 })
 
-        if any(a.last_triggered for a in wl_alerts):
+        if update_state and any(a.last_triggered for a in wl_alerts):
             await db.flush()
 
     return all_triggered

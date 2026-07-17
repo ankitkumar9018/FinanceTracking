@@ -65,6 +65,9 @@ async def check_alerts_task() -> dict:
                 user_obj = await db.get(User, user_id)
                 user_email = user_obj.email if user_obj else None
                 user_phone = getattr(user_obj, "phone", None) if user_obj else None
+                user_telegram_chat_id = (
+                    getattr(user_obj, "telegram_chat_id", None) if user_obj else None
+                )
 
                 triggered = await check_all_alerts_for_user(user_id, db)
 
@@ -90,6 +93,7 @@ async def check_alerts_task() -> dict:
                             alert_id=alert_info.get("alert_id"),
                             user_email=user_email,
                             user_phone=user_phone,
+                            telegram_chat_id=user_telegram_chat_id,
                         )
                         total_notifications += sum(
                             1 for ok in results.values() if ok

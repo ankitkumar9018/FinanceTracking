@@ -192,8 +192,11 @@ def _compute_backtest_metrics(
     final = equity_curve[-1]
     total_return = ((final - initial) / initial) * 100 if initial > 0 else 0.0
 
-    # Annualized return
-    years = days / TRADING_DAYS_PER_YEAR
+    # Annualized return. Use the actual data span (one equity point per
+    # trading bar), not the requested calendar window: dividing calendar
+    # days by trading days understates returns by ~45%, and a symbol with
+    # less history than requested would be annualized over time it never had.
+    years = len(equity_curve) / TRADING_DAYS_PER_YEAR
     if years > 0 and initial > 0 and final > 0:
         annualized = ((final / initial) ** (1 / years) - 1) * 100
     else:

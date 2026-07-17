@@ -74,6 +74,12 @@ async def connect_new_broker(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
+    except NotImplementedError as exc:
+        # Stub adapters (Groww, Upstox, …) — a clear 501, not a generic 500
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=f"{body.broker_name} integration is not available yet (coming soon).",
+        ) from exc
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

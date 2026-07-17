@@ -276,7 +276,9 @@ async def optimize_portfolio(
     }
 
     # Fetch price history for all holdings
-    cutoff = date.today() - timedelta(days=days + 10)
+    # `days` means trading days (default 252 = 1y); widen the calendar
+    # window accordingly or a "1-year" metric only sees ~7 months of bars
+    cutoff = date.today() - timedelta(days=int(days * 1.45) + 10)
     returns_data: dict[str, pd.Series] = {}
 
     for h in holdings:
@@ -338,10 +340,19 @@ async def optimize_portfolio(
         sym: round(float(optimal_raw[i]), 6) for i, sym in enumerate(valid_symbols)
     }
 
-    # For holdings excluded from optimisation, assign zero target weight
-    for sym in symbols:
-        if sym not in optimal_weights:
-            optimal_weights[sym] = 0.0
+    # Holdings without enough price history are excluded from optimisation.
+    # Freeze them at their current weight (scaling the optimised weights into
+    # the remaining budget) — a zero target would tell the user to sell to
+    # zero because of a data gap, not a decision.
+    excluded = [sym for sym in symbols if sym not in optimal_weights]
+    frozen_total = sum(current_weights.get(sym, 0.0) for sym in excluded)
+    if excluded and frozen_total < 1.0:
+        scale = 1.0 - frozen_total
+        optimal_weights = {
+            sym: round(w * scale, 6) for sym, w in optimal_weights.items()
+        }
+    for sym in excluded:
+        optimal_weights[sym] = round(current_weights.get(sym, 0.0), 6)
 
     # Compute expected metrics for optimal portfolio
     exp_return = _portfolio_return(mean_daily, optimal_raw)

@@ -229,8 +229,9 @@ async def alert_history(
             }
         )
 
-    # Also run a live check
-    live_triggered = await check_all_alerts_for_user(user.id, db)
+    # Also run a live check — read-only, so viewing this page doesn't put
+    # alerts into cooldown and suppress the background dispatcher.
+    live_triggered = await check_all_alerts_for_user(user.id, db, update_state=False)
 
     return {
         "history": history,

@@ -7,6 +7,7 @@ to avoid any collision with the stdlib ``settings`` or the config module.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -43,6 +44,7 @@ async def get_settings(
             "email_enabled": notif_prefs.get("email_enabled", False),
             "telegram_enabled": notif_prefs.get("telegram_enabled", False),
             "whatsapp_enabled": notif_prefs.get("whatsapp_enabled", False),
+            "sms_enabled": notif_prefs.get("sms_enabled", False),
             "in_app_enabled": notif_prefs.get("in_app_enabled", True),
             "alert_check_interval": notif_prefs.get(
                 "alert_check_interval", app_settings.alert_check_interval
@@ -90,9 +92,17 @@ async def update_settings(
     if "display_name" in update_data:
         user.display_name = update_data["display_name"]
 
+    if "phone" in update_data:
+        user.phone = update_data["phone"]
+
+    if "telegram_chat_id" in update_data:
+        user.telegram_chat_id = update_data["telegram_chat_id"]
+
     if "notification_preferences" in update_data:
-        # Merge with existing preferences
-        existing = user.notification_preferences or {}
+        # Merge with existing preferences. Copy first: mutating the loaded
+        # dict in place and reassigning the same object means SQLAlchemy sees
+        # identical old/new values and emits no UPDATE (plain JSON column).
+        existing = dict(user.notification_preferences or {})
         existing.update(update_data["notification_preferences"])
         user.notification_preferences = existing
 
@@ -133,7 +143,10 @@ async def test_email(
             "— FinanceTracker",
         )
         mail = Mail(from_email, to_email, subject, content)
-        response = sg.client.mail.send.post(request_body=mail.get())
+        # SendGrid's client is synchronous — run it off the event loop
+        response = await asyncio.to_thread(
+            sg.client.mail.send.post, request_body=mail.get()
+        )
 
         return {
             "status": "sent",

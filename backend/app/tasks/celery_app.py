@@ -76,5 +76,24 @@ else:
 
 
 def is_celery_available() -> bool:
-    """Return ``True`` if the Celery library is installed and the app is configured."""
-    return _HAS_CELERY and celery_app is not None
+    """Return ``True`` if Celery can actually run scheduled work.
+
+    Library import alone is not enough: if the Redis broker is down (or was
+    never started), a worker/beat can't be running either, and skipping the
+    APScheduler fallback would mean prices and alerts silently never refresh.
+    So this also requires the broker to answer a ping.
+    """
+    if not (_HAS_CELERY and celery_app is not None):
+        return False
+    try:
+        import redis
+
+        client = redis.Redis.from_url(settings.redis_url, socket_connect_timeout=2)
+        client.ping()
+        return True
+    except Exception:
+        logger.info(
+            "Celery installed but broker unreachable at %s — using APScheduler fallback",
+            settings.redis_url,
+        )
+        return False

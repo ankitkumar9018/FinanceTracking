@@ -29,12 +29,19 @@ EXCHANGE_CURRENCY_MAP: dict[str, str] = {
 # Internal: fetch rate from yfinance
 # ---------------------------------------------------------------------------
 
-async def _fetch_rate_yfinance(from_currency: str, to_currency: str) -> float:
-    """Fetch the latest exchange rate from yfinance.
+async def _fetch_rate_yfinance(
+    from_currency: str,
+    to_currency: str,
+    target_date: date | None = None,
+) -> float:
+    """Fetch an exchange rate from yfinance.
 
     Uses the ``{FROM}{TO}=X`` ticker convention (e.g. ``EURINR=X``).
+    With a past ``target_date``, fetches that day's historical close
+    (never today's spot — that would silently answer historical
+    queries with the wrong rate and poison the per-date cache).
 
-    Returns the last price as a float, or raises ``RuntimeError`` on failure.
+    Returns the rate as a float, or raises ``RuntimeError`` on failure.
     """
     import asyncio
 
@@ -43,6 +50,20 @@ async def _fetch_rate_yfinance(from_currency: str, to_currency: str) -> float:
 
         ticker_symbol = f"{from_currency}{to_currency}=X"
         ticker = yf.Ticker(ticker_symbol)
+
+        if target_date is not None and target_date < date.today():
+            # Historical close on/after the target date (markets close on
+            # weekends/holidays, so scan a few days forward)
+            hist = ticker.history(
+                start=target_date.isoformat(),
+                end=(target_date + timedelta(days=7)).isoformat(),
+            )
+            if hist is not None and not hist.empty:
+                return float(hist["Close"].iloc[0])
+            raise RuntimeError(
+                f"No historical rate for {ticker_symbol} on {target_date}"
+            )
+
         try:
             price = ticker.fast_info.last_price
         except Exception:
@@ -130,8 +151,8 @@ async def get_exchange_rate(
     if cached is not None:
         return float(cached.rate)
 
-    # Not cached — fetch from yfinance
-    rate = await _fetch_rate_yfinance(from_currency, to_currency)
+    # Not cached — fetch from yfinance (historical close for past dates)
+    rate = await _fetch_rate_yfinance(from_currency, to_currency, lookup_date)
 
     # Store in cache
     forex_record = ForexRate(

@@ -76,17 +76,21 @@ async def list_tax_records(
 
 @router.post(
     "/compute/{transaction_id}",
-    response_model=TaxRecordResponse,
+    response_model=list[TaxRecordResponse],
     status_code=status.HTTP_201_CREATED,
 )
 async def compute_transaction_tax(
     transaction_id: int,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> TaxRecord:
-    """Compute tax for a specific SELL transaction and create a tax record."""
+) -> list[TaxRecord]:
+    """Compute per-lot FIFO tax for a SELL transaction and create tax records.
+
+    A single SELL can straddle the STCG/LTCG boundary (India) and so yield
+    multiple records, hence the list response.
+    """
     try:
-        tax_record = await compute_tax_for_transaction(
+        tax_records = await compute_tax_for_transaction(
             transaction_id=transaction_id,
             user_id=user.id,
             db=db,
@@ -96,7 +100,7 @@ async def compute_transaction_tax(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
-    return tax_record
+    return tax_records
 
 
 @router.get("/summary", response_model=TaxSummary)

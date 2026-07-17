@@ -99,6 +99,10 @@ async def connect_broker(
             broker_name,
             user_id,
         )
+        # Transient (non-persisted) attribute: lets the API response carry the
+        # OAuth login URL so flows like Zerodha's request_token round-trip can
+        # actually be completed from the UI.
+        existing.login_url = connect_result.get("login_url")
         return existing
 
     # Create new connection
@@ -120,6 +124,7 @@ async def connect_broker(
         broker_name,
         user_id,
     )
+    connection.login_url = connect_result.get("login_url")
     return connection
 
 
