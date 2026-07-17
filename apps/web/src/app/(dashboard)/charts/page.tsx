@@ -1,12 +1,23 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { ExternalLink } from "lucide-react";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { PriceChart } from "@/components/charts/price-chart";
-import { PortfolioDonut } from "@/components/charts/portfolio-donut";
 import { ContextualHelp } from "@/components/shared/contextual-help";
 import { formatCurrency } from "@/lib/utils";
+
+/* Recharts is heavy (~100kB gz) — load the donut lazily */
+const PortfolioDonut = dynamic(
+  () => import("@/components/charts/portfolio-donut").then((m) => m.PortfolioDonut),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-62.5 w-full animate-pulse rounded-lg bg-[hsl(var(--muted))]/50" />
+    ),
+  }
+);
 
 const TIME_RANGES = [
   { label: "7D", days: 7 },

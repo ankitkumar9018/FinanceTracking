@@ -12,22 +12,29 @@ import {
   Target,
   ArrowUpDown,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { api } from "@/lib/api-client";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-} from "recharts";
+
+/* Recharts is heavy (~100kB gz) — load the equity curve chart lazily */
+const EquityCurveChart = dynamic(() => import("@/components/charts/equity-curve-chart"), {
+  ssr: false,
+  loading: () => (
+    <div className="h-full w-full animate-pulse rounded-lg bg-[hsl(var(--muted))]/50" />
+  ),
+});
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
+
+/** Shape returned by GET /backtest/strategies */
+interface BackendStrategy {
+  name: string;
+  description: string;
+  default_params: Record<string, number>;
+}
 
 interface Strategy {
   name: string;
@@ -39,10 +46,41 @@ interface Strategy {
 interface StrategyParam {
   name: string;
   label: string;
-  type: string;
   default: number;
   min?: number;
   max?: number;
+}
+
+function prettify(name: string): string {
+  return name
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+function toStrategy(s: BackendStrategy): Strategy {
+  return {
+    name: s.name,
+    display_name: prettify(s.name),
+    description: s.description,
+    parameters: Object.entries(s.default_params || {}).map(([name, def]) => ({
+      name,
+      label: prettify(name),
+      default: def,
+    })),
+  };
+}
+
+/** Shape returned by POST /backtest/ (flat BacktestResult dataclass) */
+interface BackendBacktestResponse {
+  total_return: number;
+  annualized_return: number;
+  sharpe_ratio: number | null;
+  max_drawdown: number;
+  total_trades: number;
+  win_rate: number;
+  trades: { type: string; date: string; price: number; shares: number; pnl?: number }[];
+  equity_curve: number[];
 }
 
 interface BacktestResult {
@@ -54,7 +92,7 @@ interface BacktestResult {
     win_rate: number;
     total_trades: number;
   };
-  equity_curve: { date: string; value: number }[];
+  equity_curve: { day: number; value: number }[];
   trades: {
     date: string;
     type: "BUY" | "SELL";
@@ -101,15 +139,12 @@ export default function BacktestPage() {
   const loadStrategies = useCallback(async () => {
     setStrategiesLoading(true);
     try {
-      const data = await api.get<Strategy[]>("/backtest/strategies");
+      const raw = await api.get<BackendStrategy[]>("/backtest/strategies");
+      const data = raw.map(toStrategy);
       setStrategies(data);
       if (data.length > 0) {
         setSelectedStrategy(data[0].name);
-        const defaultParams: Record<string, number> = {};
-        data[0].parameters.forEach((p) => {
-          defaultParams[p.name] = p.default;
-        });
-        setParams(defaultParams);
+        setParams({ ...(raw[0].default_params || {}) });
       }
     } catch {
       setStrategies([]);
@@ -138,14 +173,30 @@ export default function BacktestPage() {
     if (!symbol.trim() || !selectedStrategy) return;
     setLoading(true);
     try {
-      const data = await api.post<BacktestResult>("/backtest", {
+      const data = await api.post<BackendBacktestResponse>("/backtest/", {
         symbol: symbol.trim().toUpperCase(),
         exchange,
-        strategy: selectedStrategy,
-        parameters: params,
+        strategy_name: selectedStrategy,
+        params,
         days,
       });
-      setResult(data);
+      setResult({
+        summary: {
+          total_return: data.total_return,
+          annualized_return: data.annualized_return,
+          sharpe_ratio: data.sharpe_ratio ?? 0,
+          max_drawdown: data.max_drawdown,
+          win_rate: data.win_rate,
+          total_trades: data.total_trades,
+        },
+        equity_curve: (data.equity_curve || []).map((value, i) => ({ day: i + 1, value })),
+        trades: (data.trades || []).map((t) => ({
+          date: t.date,
+          type: t.type.toUpperCase() === "BUY" ? "BUY" : "SELL",
+          price: t.price,
+          quantity: t.shares,
+        })),
+      });
     } catch (err) {
       setResult(null);
       toast.error(err instanceof Error ? err.message : "Backtest failed");
@@ -413,43 +464,7 @@ export default function BacktestPage() {
               >
                 <h3 className="text-sm font-semibold mb-4">Equity Curve</h3>
                 <div className="h-75">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={result.equity_curve}>
-                      <CartesianGrid
-                        strokeDasharray="3 3"
-                        stroke="hsl(var(--border))"
-                      />
-                      <XAxis
-                        dataKey="date"
-                        tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                        tickFormatter={(v) => {
-                          const d = new Date(v);
-                          return `${d.getMonth() + 1}/${d.getDate()}`;
-                        }}
-                      />
-                      <YAxis
-                        tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                        tickFormatter={(v) => `${v.toFixed(0)}`}
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "hsl(var(--card))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: "8px",
-                          fontSize: "12px",
-                        }}
-                        labelFormatter={(v) => new Date(v).toLocaleDateString()}
-                        formatter={(value: number) => [value.toFixed(2), "Value"]}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="value"
-                        stroke="hsl(var(--primary))"
-                        strokeWidth={2}
-                        dot={false}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <EquityCurveChart data={result.equity_curve} />
                 </div>
               </motion.div>
 

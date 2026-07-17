@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useState, useCallback } from "react";
 import {
   Layers,
   ChevronDown,
@@ -15,23 +15,24 @@ import {
   Activity,
   BarChart3,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { api } from "@/lib/api-client";
 import toast from "react-hot-toast";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { motion } from "framer-motion";
-import {
-  PieChart,
-  Pie,
-  Cell,
-  Tooltip,
-  ResponsiveContainer,
-  ScatterChart,
-  Scatter,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Legend,
-} from "recharts";
+
+/* Recharts is heavy (~100kB gz) — load the charts lazily */
+const chartSkeleton = () => (
+  <div className="h-full w-full animate-pulse rounded-lg bg-[hsl(var(--muted))]/50" />
+);
+const AllocationPie = dynamic(
+  () => import("@/components/charts/optimizer-charts").then((m) => m.AllocationPie),
+  { ssr: false, loading: chartSkeleton }
+);
+const FrontierChart = dynamic(
+  () => import("@/components/charts/optimizer-charts").then((m) => m.FrontierChart),
+  { ssr: false, loading: chartSkeleton }
+);
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -65,21 +66,6 @@ interface RebalanceSuggestion {
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
-
-const PIE_COLORS = [
-  "#3b82f6",
-  "#22c55e",
-  "#a855f7",
-  "#ef4444",
-  "#f59e0b",
-  "#06b6d4",
-  "#ec4899",
-  "#84cc16",
-  "#f97316",
-  "#6366f1",
-  "#14b8a6",
-  "#e11d48",
-];
 
 const RISK_OPTIONS: {
   value: RiskTolerance;
@@ -116,61 +102,16 @@ function formatPercent(value: number): string {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Custom Pie Label                                                   */
-/* ------------------------------------------------------------------ */
-
-function renderPieLabel({
-  cx,
-  cy,
-  midAngle,
-  innerRadius,
-  outerRadius,
-  percent,
-  name,
-}: {
-  cx: number;
-  cy: number;
-  midAngle: number;
-  innerRadius: number;
-  outerRadius: number;
-  percent: number;
-  name: string;
-}) {
-  if (percent < 0.05) return null;
-  const RADIAN = Math.PI / 180;
-  const radius = innerRadius + (outerRadius - innerRadius) * 1.4;
-  const x = cx + radius * Math.cos(-midAngle * RADIAN);
-  const y = cy + radius * Math.sin(-midAngle * RADIAN);
-  return (
-    <text
-      x={x}
-      y={y}
-      fill="hsl(var(--foreground))"
-      textAnchor={x > cx ? "start" : "end"}
-      dominantBaseline="central"
-      fontSize={11}
-    >
-      {name} ({(percent * 100).toFixed(0)}%)
-    </text>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
 export default function OptimizerPage() {
-  const { portfolios, activePortfolioId, fetchPortfolios, setActivePortfolio } =
-    usePortfolioStore();
+  const { portfolios, activePortfolioId, setActivePortfolio } = usePortfolioStore();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [riskTolerance, setRiskTolerance] = useState<RiskTolerance>("moderate");
   const [result, setResult] = useState<OptimizationResult | null>(null);
   const [suggestions, setSuggestions] = useState<RebalanceSuggestion[]>([]);
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!activePortfolioId) fetchPortfolios();
-  }, [activePortfolioId, fetchPortfolios]);
 
   function handlePortfolioChange(id: number) {
     setActivePortfolio(id);
@@ -383,36 +324,7 @@ export default function OptimizerPage() {
             >
               <h3 className="text-sm font-semibold mb-2">Current Allocation</h3>
               <div className="h-70">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={result.current_allocation}
-                      dataKey="weight"
-                      nameKey="symbol"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={55}
-                      outerRadius={90}
-                      label={renderPieLabel}
-                    >
-                      {result.current_allocation.map((_, index) => (
-                        <Cell
-                          key={`current-${index}`}
-                          fill={PIE_COLORS[index % PIE_COLORS.length]}
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "hsl(var(--card))",
-                        border: "1px solid hsl(var(--border))",
-                        borderRadius: "8px",
-                        fontSize: "12px",
-                      }}
-                      formatter={(value: number) => [`${value.toFixed(1)}%`, "Weight"]}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
+                <AllocationPie data={result.current_allocation} keyPrefix="current" />
               </div>
             </motion.div>
 
@@ -425,36 +337,7 @@ export default function OptimizerPage() {
             >
               <h3 className="text-sm font-semibold mb-2">Optimal Allocation</h3>
               <div className="h-70">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={result.optimal_allocation}
-                      dataKey="weight"
-                      nameKey="symbol"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={55}
-                      outerRadius={90}
-                      label={renderPieLabel}
-                    >
-                      {result.optimal_allocation.map((_, index) => (
-                        <Cell
-                          key={`optimal-${index}`}
-                          fill={PIE_COLORS[index % PIE_COLORS.length]}
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "hsl(var(--card))",
-                        border: "1px solid hsl(var(--border))",
-                        borderRadius: "8px",
-                        fontSize: "12px",
-                      }}
-                      formatter={(value: number) => [`${value.toFixed(1)}%`, "Weight"]}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
+                <AllocationPie data={result.optimal_allocation} keyPrefix="optimal" />
               </div>
             </motion.div>
           </div>
@@ -544,61 +427,7 @@ export default function OptimizerPage() {
             >
               <h3 className="text-sm font-semibold mb-4">Efficient Frontier</h3>
               <div className="h-87.5">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ScatterChart>
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      stroke="hsl(var(--border))"
-                    />
-                    <XAxis
-                      dataKey="volatility"
-                      name="Volatility"
-                      tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                      label={{
-                        value: "Volatility (%)",
-                        position: "insideBottom",
-                        offset: -5,
-                        style: { fontSize: 11, fill: "hsl(var(--muted-foreground))" },
-                      }}
-                    />
-                    <YAxis
-                      dataKey="return"
-                      name="Return"
-                      tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                      label={{
-                        value: "Return (%)",
-                        angle: -90,
-                        position: "insideLeft",
-                        style: { fontSize: 11, fill: "hsl(var(--muted-foreground))" },
-                      }}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "hsl(var(--card))",
-                        border: "1px solid hsl(var(--border))",
-                        borderRadius: "8px",
-                        fontSize: "12px",
-                      }}
-                      formatter={(value: number, name: string) => [
-                        `${value.toFixed(2)}%`,
-                        name,
-                      ]}
-                    />
-                    <Legend />
-                    <Scatter
-                      name="Portfolios"
-                      data={result.efficient_frontier.filter((p) => !p.is_optimal)}
-                      fill="hsl(var(--muted-foreground))"
-                      fillOpacity={0.4}
-                    />
-                    <Scatter
-                      name="Optimal"
-                      data={result.efficient_frontier.filter((p) => p.is_optimal)}
-                      fill="hsl(var(--primary))"
-                      shape="star"
-                    />
-                  </ScatterChart>
-                </ResponsiveContainer>
+                <FrontierChart data={result.efficient_frontier} />
               </div>
             </motion.div>
           )}

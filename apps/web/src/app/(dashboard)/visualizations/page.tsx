@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import dynamic from "next/dynamic";
 import {
   BarChart2,
   ChevronDown,
@@ -11,18 +12,22 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio-store";
-import { formatCurrency } from "@/lib/utils";
 import { motion } from "framer-motion";
-import {
-  Treemap,
-  ResponsiveContainer,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-} from "recharts";
+import { EmptyState } from "@/components/shared/empty-state";
+import { ErrorState } from "@/components/shared/error-state";
+
+/* Recharts is heavy (~100kB gz) — load each tab's chart only when needed */
+const chartSkeleton = () => (
+  <div className="h-full w-full animate-pulse rounded-lg bg-[hsl(var(--muted))]/50" />
+);
+const SectorTreemap = dynamic(() => import("@/components/charts/sector-treemap"), {
+  ssr: false,
+  loading: chartSkeleton,
+});
+const DrawdownChart = dynamic(() => import("@/components/charts/drawdown-chart"), {
+  ssr: false,
+  loading: chartSkeleton,
+});
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -64,44 +69,24 @@ const TABS: TabDef[] = [
   { key: "drawdown", label: "Drawdown Chart", icon: TrendingDown },
 ];
 
-const MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
-
-function getCorrelationColor(value: number): string {
-  if (value >= 0.8) return "rgb(22, 163, 74)";
-  if (value >= 0.5) return "rgb(74, 222, 128)";
-  if (value >= 0.2) return "rgb(187, 247, 208)";
-  if (value >= -0.2) return "rgb(255, 255, 255)";
-  if (value >= -0.5) return "rgb(254, 202, 202)";
-  if (value >= -0.8) return "rgb(248, 113, 113)";
-  return "rgb(220, 38, 38)";
+/* Theme-aware heatmap cells: profit/loss token tinted by magnitude over the
+   card background, so both light and dark themes stay readable. */
+function correlationCellStyle(value: number): React.CSSProperties {
+  const alpha = Math.min(Math.abs(value), 1) * 0.6;
+  return {
+    backgroundColor: `hsl(var(${value >= 0 ? "--profit" : "--loss"}) / ${alpha.toFixed(2)})`,
+  };
 }
 
-function getReturnColor(value: number): string {
-  if (value >= 8) return "rgb(22, 163, 74)";
-  if (value >= 4) return "rgb(74, 222, 128)";
-  if (value >= 0) return "rgb(187, 247, 208)";
-  if (value >= -4) return "rgb(254, 202, 202)";
-  if (value >= -8) return "rgb(248, 113, 113)";
-  return "rgb(220, 38, 38)";
+function returnCellStyle(value: number): React.CSSProperties {
+  const alpha = Math.min(Math.abs(value) / 10, 1) * 0.6;
+  return {
+    backgroundColor: `hsl(var(${value >= 0 ? "--profit" : "--loss"}) / ${alpha.toFixed(2)})`,
+  };
 }
 
-function getReturnTextColor(value: number): string {
-  if (value >= 8 || value <= -8) return "white";
-  return "rgb(30, 30, 30)";
-}
+const CORRELATION_LEGEND_STOPS = [-1, -0.66, -0.33, 0, 0.33, 0.66, 1];
+const RETURN_LEGEND_STOPS = [-10, -6, -2, 2, 6, 10];
 
 const TREEMAP_COLORS = [
   "#3b82f6",
@@ -121,68 +106,11 @@ const TREEMAP_COLORS = [
 /* ------------------------------------------------------------------ */
 
 /* ------------------------------------------------------------------ */
-/*  Custom Treemap Content                                             */
-/* ------------------------------------------------------------------ */
-
-interface TreemapContentProps {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  name: string;
-  value: number;
-  color: string;
-}
-
-function CustomTreemapContent(props: TreemapContentProps) {
-  const { x, y, width, height, name, value, color } = props;
-  if (width < 40 || height < 30) return null;
-  return (
-    <g>
-      <rect
-        x={x}
-        y={y}
-        width={width}
-        height={height}
-        fill={color}
-        stroke="hsl(var(--background))"
-        strokeWidth={2}
-        rx={4}
-      />
-      {width > 60 && height > 40 && (
-        <>
-          <text
-            x={x + width / 2}
-            y={y + height / 2 - 6}
-            textAnchor="middle"
-            fill="white"
-            fontSize={12}
-            fontWeight="600"
-          >
-            {name}
-          </text>
-          <text
-            x={x + width / 2}
-            y={y + height / 2 + 10}
-            textAnchor="middle"
-            fill="white"
-            fontSize={10}
-            opacity={0.8}
-          >
-            {value.toFixed(1)}%
-          </text>
-        </>
-      )}
-    </g>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
 export default function VisualizationsPage() {
-  const { portfolios, activePortfolioId, fetchPortfolios, setActivePortfolio } =
+  const { portfolios, activePortfolioId, hasLoadedPortfolios, setActivePortfolio } =
     usePortfolioStore();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -194,10 +122,7 @@ export default function VisualizationsPage() {
   const [monthlyReturns, setMonthlyReturns] = useState<{ month: string; return_pct: number }[]>([]);
   const [drawdownData, setDrawdownData] = useState<{ date: string; drawdown: number }[]>([]);
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!activePortfolioId) fetchPortfolios();
-  }, [activePortfolioId, fetchPortfolios]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -211,6 +136,7 @@ export default function VisualizationsPage() {
 
   const loadData = useCallback(async (portfolioId: number) => {
     setLoading(true);
+    setError(null);
     try {
       const [summaryData, risk, corrData, returnsData, ddData] = await Promise.all([
         api.get<PortfolioSummary>(`/portfolios/${portfolioId}/summary`),
@@ -225,9 +151,10 @@ export default function VisualizationsPage() {
       setCorrelationMatrix(corrData.matrix || []);
       setMonthlyReturns(returnsData.returns || []);
       setDrawdownData(ddData.drawdown || []);
-    } catch {
+    } catch (err) {
       setSummary(null);
       setRiskData(null);
+      setError(err instanceof Error ? err.message : "Failed to load analytics data");
     } finally {
       setLoading(false);
     }
@@ -350,10 +277,18 @@ export default function VisualizationsPage() {
       </div>
 
       {/* ---- Tab Content ---- */}
-      {loading ? (
+      {!activePortfolioId && hasLoadedPortfolios ? (
+        <EmptyState
+          icon={BarChart2}
+          title="No portfolio yet"
+          hint="Create a portfolio and add your first stock to see visualizations."
+        />
+      ) : loading || !activePortfolioId ? (
         <div className="space-y-4">
           <div className="h-100 animate-pulse rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]" />
         </div>
+      ) : error ? (
+        <ErrorState message={error} onRetry={() => loadData(activePortfolioId)} />
       ) : !summary || symbols.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-[hsl(var(--border))] py-16">
           <BarChart2 className="h-12 w-12 text-[hsl(var(--muted-foreground))]/30" />
@@ -421,11 +356,8 @@ export default function VisualizationsPage() {
                         return (
                           <div
                             key={`cell-${ri}-${ci}`}
-                            className="w-14 h-10 shrink-0 flex items-center justify-center text-[9px] font-mono border border-[hsl(var(--background))] cursor-pointer transition-transform hover:scale-105"
-                            style={{
-                              backgroundColor: getCorrelationColor(value),
-                              color: Math.abs(value) > 0.6 ? "white" : "#1e1e1e",
-                            }}
+                            className="w-14 h-10 shrink-0 flex items-center justify-center text-[9px] font-mono text-[hsl(var(--foreground))] border border-[hsl(var(--background))] cursor-pointer transition-transform hover:scale-105"
+                            style={correlationCellStyle(value)}
                             onMouseEnter={() =>
                               setHoveredCell({ row: ri, col: ci, value })
                             }
@@ -444,13 +376,9 @@ export default function VisualizationsPage() {
               <div className="flex items-center gap-2 mt-4 text-xs text-[hsl(var(--muted-foreground))]">
                 <span>-1.0</span>
                 <div className="flex h-3 flex-1 rounded overflow-hidden">
-                  <div className="flex-1" style={{ backgroundColor: "rgb(220, 38, 38)" }} />
-                  <div className="flex-1" style={{ backgroundColor: "rgb(248, 113, 113)" }} />
-                  <div className="flex-1" style={{ backgroundColor: "rgb(254, 202, 202)" }} />
-                  <div className="flex-1" style={{ backgroundColor: "rgb(255, 255, 255)" }} />
-                  <div className="flex-1" style={{ backgroundColor: "rgb(187, 247, 208)" }} />
-                  <div className="flex-1" style={{ backgroundColor: "rgb(74, 222, 128)" }} />
-                  <div className="flex-1" style={{ backgroundColor: "rgb(22, 163, 74)" }} />
+                  {CORRELATION_LEGEND_STOPS.map((stop) => (
+                    <div key={stop} className="flex-1" style={correlationCellStyle(stop)} />
+                  ))}
                 </div>
                 <span>+1.0</span>
               </div>
@@ -465,25 +393,7 @@ export default function VisualizationsPage() {
               {sectorData.length > 0 ? (
                 <>
                   <div className="h-100">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <Treemap
-                        data={sectorData}
-                        dataKey="value"
-                        aspectRatio={4 / 3}
-                        stroke="hsl(var(--background))"
-                        content={
-                          <CustomTreemapContent
-                            x={0}
-                            y={0}
-                            width={0}
-                            height={0}
-                            name=""
-                            value={0}
-                            color=""
-                          />
-                        }
-                      />
-                    </ResponsiveContainer>
+                    <SectorTreemap data={sectorData} />
                   </div>
 
                   {/* Sector Legend */}
@@ -532,12 +442,9 @@ export default function VisualizationsPage() {
                     key={item.month}
                     initial={{ opacity: 0, scale: 0.9 }}
                     animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: i * 0.04, duration: 0.2 }}
-                    className="rounded-lg p-3 text-center cursor-default transition-transform hover:scale-105"
-                    style={{
-                      backgroundColor: getReturnColor(item.return_pct),
-                      color: getReturnTextColor(item.return_pct),
-                    }}
+                    transition={{ delay: Math.min(i, 10) * 0.04, duration: 0.2 }}
+                    className="rounded-lg p-3 text-center text-[hsl(var(--foreground))] cursor-default transition-transform hover:scale-105"
+                    style={returnCellStyle(item.return_pct)}
                   >
                     <p className="text-[10px] font-medium opacity-70">{item.month}</p>
                     <p className="text-sm font-bold mt-1">
@@ -552,12 +459,9 @@ export default function VisualizationsPage() {
               <div className="flex items-center gap-2 mt-4 text-xs text-[hsl(var(--muted-foreground))]">
                 <span>Negative</span>
                 <div className="flex h-3 flex-1 rounded overflow-hidden">
-                  <div className="flex-1" style={{ backgroundColor: "rgb(220, 38, 38)" }} />
-                  <div className="flex-1" style={{ backgroundColor: "rgb(248, 113, 113)" }} />
-                  <div className="flex-1" style={{ backgroundColor: "rgb(254, 202, 202)" }} />
-                  <div className="flex-1" style={{ backgroundColor: "rgb(187, 247, 208)" }} />
-                  <div className="flex-1" style={{ backgroundColor: "rgb(74, 222, 128)" }} />
-                  <div className="flex-1" style={{ backgroundColor: "rgb(22, 163, 74)" }} />
+                  {RETURN_LEGEND_STOPS.map((stop) => (
+                    <div key={stop} className="flex-1" style={returnCellStyle(stop)} />
+                  ))}
                 </div>
                 <span>Positive</span>
               </div>
@@ -642,65 +546,7 @@ export default function VisualizationsPage() {
               </div>
 
               <div className="h-87.5">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={drawdownData}>
-                    <defs>
-                      <linearGradient
-                        id="drawdownGradient"
-                        x1="0"
-                        y1="0"
-                        x2="0"
-                        y2="1"
-                      >
-                        <stop offset="0%" stopColor="rgb(239, 68, 68)" stopOpacity={0.3} />
-                        <stop
-                          offset="100%"
-                          stopColor="rgb(239, 68, 68)"
-                          stopOpacity={0.05}
-                        />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      stroke="hsl(var(--border))"
-                    />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                      tickFormatter={(v) => {
-                        const d = new Date(v);
-                        return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
-                      }}
-                      interval="preserveStartEnd"
-                      minTickGap={50}
-                    />
-                    <YAxis
-                      tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                      tickFormatter={(v) => `${v.toFixed(0)}%`}
-                      domain={["dataMin", 0]}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "hsl(var(--card))",
-                        border: "1px solid hsl(var(--border))",
-                        borderRadius: "8px",
-                        fontSize: "12px",
-                      }}
-                      labelFormatter={(v) => new Date(v).toLocaleDateString()}
-                      formatter={(value: number) => [
-                        `${value.toFixed(2)}%`,
-                        "Drawdown",
-                      ]}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="drawdown"
-                      stroke="rgb(239, 68, 68)"
-                      strokeWidth={2}
-                      fill="url(#drawdownGradient)"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+                <DrawdownChart data={drawdownData} />
               </div>
 
               {/* Max drawdown marker info */}

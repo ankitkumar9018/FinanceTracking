@@ -7,6 +7,8 @@ import { formatCurrency, formatPercent } from "@/lib/utils";
 import { Plus, X, TrendingUp, ArrowUpDown, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
+import { EmptyState } from "@/components/shared/empty-state";
+import { ErrorState } from "@/components/shared/error-state";
 
 interface FnoPosition {
   id: number;
@@ -48,17 +50,14 @@ const EMPTY_FORM: AddPositionForm = {
 };
 
 export default function FnoPage() {
-  const { activePortfolioId, fetchPortfolios } = usePortfolioStore();
+  const { activePortfolioId, hasLoadedPortfolios } = usePortfolioStore();
   const [positions, setPositions] = useState<FnoPosition[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState<AddPositionForm>(EMPTY_FORM);
   const formRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!activePortfolioId) fetchPortfolios();
-  }, [activePortfolioId, fetchPortfolios]);
 
   useEffect(() => {
     if (activePortfolioId) loadPositions();
@@ -67,13 +66,15 @@ export default function FnoPage() {
   async function loadPositions() {
     if (!activePortfolioId) return;
     setLoading(true);
+    setError(null);
     try {
       const data = await api.get<FnoPosition[]>(
         `/fno/positions/${activePortfolioId}`
       );
       setPositions(data);
-    } catch {
-      toast.error("Failed to load F&O positions");
+    } catch (err) {
+      setPositions([]);
+      setError(err instanceof Error ? err.message : "Failed to load F&O positions");
     } finally {
       setLoading(false);
     }
@@ -368,7 +369,13 @@ export default function FnoPage() {
       </AnimatePresence>
 
       {/* Positions Table */}
-      {loading ? (
+      {!activePortfolioId && hasLoadedPortfolios ? (
+        <EmptyState
+          icon={TrendingUp}
+          title="No portfolio yet"
+          hint="Create a portfolio first, then add F&O positions to track them here."
+        />
+      ) : loading || !activePortfolioId ? (
         <div className="space-y-3">
           {Array.from({ length: 4 }).map((_, i) => (
             <div
@@ -377,6 +384,8 @@ export default function FnoPage() {
             />
           ))}
         </div>
+      ) : error ? (
+        <ErrorState message={error} onRetry={loadPositions} />
       ) : positions.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-[hsl(var(--border))] py-16">
           <ArrowUpDown className="h-12 w-12 text-[hsl(var(--muted-foreground))]/30" />

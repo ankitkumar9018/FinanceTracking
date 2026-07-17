@@ -119,7 +119,7 @@ export default function WhatIfPage() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
-          className="lg:col-span-2 rounded-xl border border-white/10 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl"
+          className="lg:col-span-2 rounded-xl border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl"
         >
           <div className="flex items-center gap-2 mb-6">
             <Lightbulb className="h-5 w-5 text-[hsl(var(--primary))]" />
@@ -338,7 +338,7 @@ export default function WhatIfPage() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.3, duration: 0.3 }}
-                    className="rounded-xl border border-white/10 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl"
+                    className="rounded-xl border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl"
                   >
                     <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-4">
                       vs Benchmark ({result.benchmark.benchmark_name})
@@ -485,7 +485,7 @@ function ResultCard({
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay, duration: 0.3 }}
-      className="rounded-lg border border-white/10 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-4 shadow-xl"
+      className="rounded-lg border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-4 shadow-xl"
     >
       <div className="flex items-center gap-2 mb-2">
         <Icon className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />

@@ -50,6 +50,8 @@ export function DensityToggle({ density, onChange }: DensityToggleProps) {
             key={opt.value}
             onClick={() => onChange(opt.value)}
             title={opt.label}
+            aria-label={`${opt.label} table density`}
+            aria-pressed={density === opt.value}
             className={`p-1.5 transition-colors ${
               density === opt.value
                 ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]"

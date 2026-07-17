@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import { TrendingUp, TrendingDown, BarChart3, Activity } from "lucide-react";
 import type { Holding } from "@/stores/portfolio-store";
-import { formatCurrency, formatPercent } from "@/lib/utils";
+import { formatCurrency, formatPercent, currencyForExchange } from "@/lib/utils";
 import { AnimatedNumber } from "@/components/shared/animated-number";
 
 interface Props {
@@ -12,14 +12,28 @@ interface Props {
 }
 
 export function PortfolioSummaryCards({ holdings, isLoading }: Props) {
-  const totalInvested = holdings.reduce(
-    (sum, h) => sum + h.avg_price * h.quantity,
-    0
-  );
-  const totalCurrent = holdings.reduce(
-    (sum, h) => sum + (h.current_price || h.avg_price) * h.quantity,
-    0
-  );
+  // Totals per currency — no FX conversion in the frontend. Totals show the
+  // primary (most common) currency, with a note when other currencies exist.
+  const byCurrency = new Map<string, { invested: number; current: number; count: number }>();
+  for (const h of holdings) {
+    const ccy = h.currency ?? currencyForExchange(h.exchange);
+    const entry = byCurrency.get(ccy) ?? { invested: 0, current: 0, count: 0 };
+    entry.invested += h.avg_price * h.quantity;
+    entry.current += (h.current_price || h.avg_price) * h.quantity;
+    entry.count += 1;
+    byCurrency.set(ccy, entry);
+  }
+  const primaryCurrency =
+    [...byCurrency.entries()].sort((a, b) => b[1].count - a[1].count)[0]?.[0] ?? "INR";
+  const primary = byCurrency.get(primaryCurrency) ?? { invested: 0, current: 0, count: 0 };
+  const otherCurrencyCount = byCurrency.size - 1;
+  const mixedNote =
+    otherCurrencyCount > 0
+      ? ` · +${otherCurrencyCount} other currenc${otherCurrencyCount > 1 ? "ies" : "y"}`
+      : "";
+
+  const totalInvested = primary.invested;
+  const totalCurrent = primary.current;
   const totalPnl = totalCurrent - totalInvested;
   const totalPnlPercent = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
 
@@ -47,19 +61,19 @@ export function PortfolioSummaryCards({ holdings, isLoading }: Props) {
   const cards = [
     {
       title: "Total Value",
-      value: formatCurrency(totalCurrent),
+      value: formatCurrency(totalCurrent, primaryCurrency),
       numericValue: totalCurrent,
       isNumeric: true,
-      subtitle: `Invested: ${formatCurrency(totalInvested)}`,
+      subtitle: `Invested: ${formatCurrency(totalInvested, primaryCurrency)}${mixedNote}`,
       icon: BarChart3,
       color: "text-[hsl(var(--primary))]",
     },
     {
       title: "Total P&L",
-      value: formatCurrency(totalPnl),
+      value: formatCurrency(totalPnl, primaryCurrency),
       numericValue: totalPnl,
       isNumeric: true,
-      subtitle: formatPercent(totalPnlPercent),
+      subtitle: `${formatPercent(totalPnlPercent)}${mixedNote}`,
       icon: totalPnl >= 0 ? TrendingUp : TrendingDown,
       color: totalPnl >= 0 ? "text-[hsl(var(--profit))]" : "text-[hsl(var(--loss))]",
     },
@@ -75,6 +89,19 @@ export function PortfolioSummaryCards({ holdings, isLoading }: Props) {
         : "No data",
       icon: TrendingUp,
       color: "text-[hsl(var(--profit))]",
+    },
+    {
+      title: "Top Loser",
+      value: topLoser?.stock_symbol || "\u2014",
+      numericValue: null,
+      isNumeric: false,
+      subtitle: topLoser
+        ? formatPercent(
+            ((topLoser.current_price! - topLoser.avg_price) / topLoser.avg_price) * 100
+          )
+        : "No data",
+      icon: TrendingDown,
+      color: "text-[hsl(var(--loss))]",
     },
     {
       title: "Portfolio RSI",
@@ -100,11 +127,11 @@ export function PortfolioSummaryCards({ holdings, isLoading }: Props) {
 
   if (isLoading) {
     return (
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        {Array.from({ length: 5 }).map((_, i) => (
           <div
             key={i}
-            className="h-30 animate-pulse rounded-lg border border-white/10 bg-[hsl(var(--card))]/60 backdrop-blur-xl shadow-xl"
+            className="h-30 animate-pulse rounded-lg border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl shadow-xl"
           />
         ))}
       </div>
@@ -112,7 +139,7 @@ export function PortfolioSummaryCards({ holdings, isLoading }: Props) {
   }
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
       {cards.map((card, i) => {
         const Icon = card.icon;
         return (
@@ -121,7 +148,7 @@ export function PortfolioSummaryCards({ holdings, isLoading }: Props) {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05, duration: 0.3 }}
-            className="rounded-lg border border-white/10 bg-[hsl(var(--card))]/60 backdrop-blur-xl shadow-xl p-5"
+            className="rounded-lg border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl shadow-xl p-5"
           >
             <div className="flex items-center justify-between">
               <p className="text-sm font-medium text-[hsl(var(--muted-foreground))]">
@@ -136,7 +163,7 @@ export function PortfolioSummaryCards({ holdings, isLoading }: Props) {
                   formatFn={(n) =>
                     card.title === "Portfolio RSI"
                       ? n.toFixed(1)
-                      : formatCurrency(n)
+                      : formatCurrency(n, primaryCurrency)
                   }
                 />
               ) : (

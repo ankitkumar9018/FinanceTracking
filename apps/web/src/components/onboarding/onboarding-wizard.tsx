@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import {
   Sparkles,
   Upload,
@@ -40,6 +40,8 @@ const TOTAL_STEPS = 5;
 /* ------------------------------------------------------------------ */
 
 function WelcomeStep({ onNext }: StepProps) {
+  const reduceMotion = useReducedMotion();
+
   return (
     <div className="flex flex-col items-center text-center">
       <motion.div
@@ -49,7 +51,7 @@ function WelcomeStep({ onNext }: StepProps) {
         className="flex h-24 w-24 items-center justify-center rounded-2xl bg-[hsl(var(--primary))]/10"
       >
         <motion.div
-          animate={{ rotate: [0, 10, -10, 0] }}
+          animate={reduceMotion ? undefined : { rotate: [0, 10, -10, 0] }}
           transition={{ duration: 2, repeat: Infinity, repeatDelay: 1 }}
         >
           <Sparkles className="h-12 w-12 text-[hsl(var(--primary))]" />
@@ -258,8 +260,10 @@ function AlertsStep({ onNext, onBack }: StepProps) {
 /* ------------------------------------------------------------------ */
 
 function DoneStep({ onNext }: StepProps) {
-  /* Confetti-like animated particles */
-  const particles = Array.from({ length: 20 }, (_, i) => ({
+  const reduceMotion = useReducedMotion();
+
+  /* Confetti-like animated particles (skipped under prefers-reduced-motion) */
+  const particles = Array.from({ length: reduceMotion ? 0 : 20 }, (_, i) => ({
     id: i,
     x: Math.random() * 300 - 150,
     y: -(Math.random() * 200 + 100),
@@ -446,6 +450,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
             onClick={handleSkip}
             className="absolute right-4 top-4 rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] transition-colors"
             title="Skip onboarding"
+            aria-label="Skip onboarding"
           >
             <X className="h-4 w-4" />
           </button>

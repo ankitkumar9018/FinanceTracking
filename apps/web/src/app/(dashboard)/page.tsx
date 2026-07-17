@@ -4,10 +4,11 @@ import { useEffect } from "react";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { PortfolioSummaryCards } from "@/components/dashboard/portfolio-summary-cards";
 import { PortfolioTable } from "@/components/dashboard/portfolio-table";
+import { XirrBenchmarkCards } from "@/components/dashboard/xirr-benchmark-cards";
 import { ContextualHelp } from "@/components/shared/contextual-help";
 
 export default function DashboardPage() {
-  const { fetchPortfolios, holdings, isLoading, error } = usePortfolioStore();
+  const { fetchPortfolios, holdings, isLoading, error, activePortfolioId } = usePortfolioStore();
 
   useEffect(() => {
     fetchPortfolios();
@@ -38,6 +39,7 @@ export default function DashboardPage() {
       )}
 
       <PortfolioSummaryCards holdings={holdings} isLoading={isLoading} />
+      <XirrBenchmarkCards portfolioId={activePortfolioId} />
       <PortfolioTable holdings={holdings} isLoading={isLoading} />
     </div>
   );

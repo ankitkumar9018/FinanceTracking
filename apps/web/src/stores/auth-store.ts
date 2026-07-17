@@ -14,7 +14,9 @@ interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  /** Returns { requires2fa: true } when the account has TOTP enabled and no
+   * (or no valid) code was supplied — no tokens are stored in that case. */
+  login: (email: string, password: string, totpCode?: string) => Promise<{ requires2fa: boolean }>;
   register: (email: string, password: string, displayName?: string) => Promise<void>;
   logout: () => void;
   loadUser: () => Promise<void>;
@@ -25,12 +27,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   isAuthenticated: typeof window !== "undefined" && !!localStorage.getItem("ft-access-token"),
   isLoading: false,
 
-  login: async (email, password) => {
+  login: async (email, password, totpCode) => {
     const apiBase = await getApiBaseAsync();
     const res = await fetch(`${apiBase}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify(
+        totpCode ? { email, password, totp_code: totpCode } : { email, password }
+      ),
     });
 
     if (!res.ok) {
@@ -39,9 +43,15 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
 
     const data = await res.json();
+    // 2FA-enabled accounts get {requires_2fa: true} with no tokens
+    if (data.requires_2fa || !data.access_token) {
+      return { requires2fa: true };
+    }
+
     localStorage.setItem("ft-access-token", data.access_token);
     localStorage.setItem("ft-refresh-token", data.refresh_token);
     set({ isAuthenticated: true });
+    return { requires2fa: false };
   },
 
   register: async (email, password, displayName) => {

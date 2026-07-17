@@ -132,6 +132,7 @@ export function BulkEditPanel({
                 setActiveField(null);
                 setInputValue("");
               }}
+              aria-label="Cancel field edit"
               className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
             >
               <X className="h-3.5 w-3.5" />
@@ -145,6 +146,7 @@ export function BulkEditPanel({
           onClick={onClose}
           className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
           title="Exit bulk edit"
+          aria-label="Exit bulk edit"
         >
           <X className="h-4 w-4" />
         </button>

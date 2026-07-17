@@ -7,6 +7,28 @@ class ApiError extends Error {
   }
 }
 
+/** Convert a FastAPI error `detail` into a readable string. Pydantic 422
+ * responses carry an array of {loc, msg, ...} objects. */
+function formatErrorDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((d) => {
+        if (d && typeof d === "object" && "msg" in d) {
+          const item = d as { loc?: unknown[]; msg: string };
+          const loc = Array.isArray(item.loc)
+            ? item.loc.filter((p) => p !== "body" && p !== "query" && p !== "path").join(".")
+            : "";
+          return loc ? `${loc}: ${item.msg}` : item.msg;
+        }
+        return typeof d === "string" ? d : "";
+      })
+      .filter(Boolean);
+    if (parts.length > 0) return parts.join("; ");
+  }
+  return fallback;
+}
+
 async function getToken(): Promise<string | null> {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("ft-access-token");
@@ -40,7 +62,7 @@ async function request<T>(
       const retry = await fetch(`${apiBase}${path}`, { ...options, headers });
       if (!retry.ok) {
         const err = await retry.json().catch(() => ({ detail: "Request failed" }));
-        throw new ApiError(retry.status, err.detail || "Request failed");
+        throw new ApiError(retry.status, formatErrorDetail(err.detail, "Request failed"));
       }
       if (retry.status === 204) return undefined as T;
       return retry.json();
@@ -54,7 +76,7 @@ async function request<T>(
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({ detail: "Request failed" }));
-    throw new ApiError(response.status, err.detail || "Request failed");
+    throw new ApiError(response.status, formatErrorDetail(err.detail, "Request failed"));
   }
 
   if (response.status === 204) return undefined as T;
@@ -135,7 +157,7 @@ export const api = {
         });
         if (!retry.ok) {
           const err = await retry.json().catch(() => ({ detail: "Upload failed" }));
-          throw new ApiError(retry.status, err.detail || "Upload failed");
+          throw new ApiError(retry.status, formatErrorDetail(err.detail, "Upload failed"));
         }
         return retry.json();
       }
@@ -146,7 +168,7 @@ export const api = {
     }
     if (!response.ok) {
       const err = await response.json().catch(() => ({ detail: "Upload failed" }));
-      throw new ApiError(response.status, err.detail || "Upload failed");
+      throw new ApiError(response.status, formatErrorDetail(err.detail, "Upload failed"));
     }
     return response.json();
   },

@@ -6,16 +6,16 @@ import {
   Plus,
   X,
   RefreshCw,
-  Trash2,
   CheckCircle2,
-  Circle,
+  Clock,
   Loader2,
   Key,
   Eye,
   EyeOff,
+  ExternalLink,
   Unplug,
 } from "lucide-react";
-import { api } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import toast from "react-hot-toast";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -35,6 +35,9 @@ interface ConnectedBroker {
   is_active: boolean;
   last_synced: string | null;
   created_at: string;
+  /* OAuth continuation URL — present on connect responses when the broker
+     requires the user to authorize in a browser first (e.g. Zerodha). */
+  login_url?: string | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -56,6 +59,9 @@ export default function BrokersPage() {
   const [showSecret, setShowSecret] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState("");
+  /* Step-2 OAuth state: set when the broker returns a login_url */
+  const [loginUrl, setLoginUrl] = useState<string | null>(null);
+  const [requestToken, setRequestToken] = useState("");
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -79,12 +85,37 @@ export default function BrokersPage() {
 
   /* ---- Connect broker ---- */
   function openConnectForm(broker: AvailableBroker) {
+    if (broker.status === "coming_soon") {
+      toast(`${broker.display_name || broker.name} integration is not available yet.`);
+      return;
+    }
     setConnectBroker(broker);
     setShowConnectForm(true);
     setFormApiKey("");
     setFormApiSecret("");
     setShowSecret(false);
     setConnectError("");
+    setLoginUrl(null);
+    setRequestToken("");
+  }
+
+  function closeConnectForm() {
+    setShowConnectForm(false);
+    setConnectBroker(null);
+    setLoginUrl(null);
+    setRequestToken("");
+  }
+
+  function handleConnectError(err: unknown) {
+    if (err instanceof ApiError && err.status === 501) {
+      toast(
+        `${connectBroker?.display_name || connectBroker?.name || "This broker"} isn't available yet — integration coming soon.`,
+        { icon: "🚧" }
+      );
+      closeConnectForm();
+      return;
+    }
+    setConnectError(err instanceof Error ? err.message : "Failed to connect broker");
   }
 
   async function handleConnect() {
@@ -92,18 +123,44 @@ export default function BrokersPage() {
     setConnecting(true);
     setConnectError("");
     try {
-      await api.post("/broker/connect", {
+      const connection = await api.post<ConnectedBroker>("/broker/connect", {
         broker_name: connectBroker.name,
         api_key: formApiKey,
         api_secret: formApiSecret,
       });
-      setShowConnectForm(false);
-      setConnectBroker(null);
+      if (connection.login_url) {
+        /* OAuth step 2: the user must authorize in the broker's portal
+           and paste back the request token to finish. */
+        setLoginUrl(connection.login_url);
+        return;
+      }
+      toast.success(`${connectBroker.display_name || connectBroker.name} connected`);
+      closeConnectForm();
       await loadData();
     } catch (err: unknown) {
-      setConnectError(
-        err instanceof Error ? err.message : "Failed to connect broker"
-      );
+      handleConnectError(err);
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  /* ---- Complete OAuth connect (step 2) ---- */
+  async function handleCompleteConnect() {
+    if (!connectBroker || !requestToken.trim()) return;
+    setConnecting(true);
+    setConnectError("");
+    try {
+      await api.post<ConnectedBroker>("/broker/connect", {
+        broker_name: connectBroker.name,
+        api_key: formApiKey,
+        api_secret: formApiSecret,
+        additional_params: { request_token: requestToken.trim() },
+      });
+      toast.success(`${connectBroker.display_name || connectBroker.name} connected`);
+      closeConnectForm();
+      await loadData();
+    } catch (err: unknown) {
+      handleConnectError(err);
     } finally {
       setConnecting(false);
     }
@@ -264,6 +321,7 @@ export default function BrokersPage() {
             {available.map((broker, i) => {
               const connection = getConnection(broker.name);
               const isConnected = !!connection;
+              const isComingSoon = broker.status === "coming_soon";
 
               return (
                 <motion.div
@@ -297,7 +355,7 @@ export default function BrokersPage() {
                       <div>
                         <h3 className="font-medium">{broker.display_name || broker.name}</h3>
                         <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                          {broker.status}
+                          {isComingSoon ? "Coming soon" : "Available"}
                         </p>
                       </div>
                     </div>
@@ -307,13 +365,20 @@ export default function BrokersPage() {
                   </div>
 
                   {!isConnected && (
-                    <button
-                      onClick={() => openConnectForm(broker)}
-                      className="mt-4 inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-[hsl(var(--primary))] px-3 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 transition-colors"
-                    >
-                      <Plus className="h-4 w-4" />
-                      Connect
-                    </button>
+                    isComingSoon ? (
+                      <span className="mt-4 inline-flex w-full cursor-not-allowed items-center justify-center gap-1.5 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/50 px-3 py-2 text-sm font-medium text-[hsl(var(--muted-foreground))]">
+                        <Clock className="h-4 w-4" />
+                        Coming soon
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => openConnectForm(broker)}
+                        className="mt-4 inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-[hsl(var(--primary))] px-3 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 transition-colors"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Connect
+                      </button>
+                    )
                   )}
                 </motion.div>
               );
@@ -330,10 +395,7 @@ export default function BrokersPage() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-            onClick={() => {
-              setShowConnectForm(false);
-              setConnectBroker(null);
-            }}
+            onClick={closeConnectForm}
           >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
@@ -349,24 +411,79 @@ export default function BrokersPage() {
                   </div>
                   <div>
                     <h2 className="text-lg font-semibold">
-                      Connect {connectBroker.name}
+                      Connect {connectBroker.display_name || connectBroker.name}
                     </h2>
                     <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                      Enter your API credentials
+                      {loginUrl
+                        ? "Authorize with your broker to finish"
+                        : "Enter your API credentials"}
                     </p>
                   </div>
                 </div>
                 <button
-                  onClick={() => {
-                    setShowConnectForm(false);
-                    setConnectBroker(null);
-                  }}
+                  onClick={closeConnectForm}
                   className="rounded-md p-1 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
                 >
                   <X className="h-5 w-5" />
                 </button>
               </div>
 
+              {loginUrl ? (
+                /* ---- Step 2: OAuth authorization ---- */
+                <div className="mt-5 space-y-4">
+                  <div className="rounded-md bg-[hsl(var(--muted))]/50 p-3">
+                    <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                      Step 2 of 2 — log in at your broker to authorize this app. After
+                      logging in you&apos;ll be redirected to a URL containing a{" "}
+                      <code className="font-mono">request_token</code>. Paste that token
+                      below to finish connecting.
+                    </p>
+                  </div>
+
+                  <a
+                    href={loginUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-[hsl(var(--border))] px-3 py-2 text-sm font-medium hover:bg-[hsl(var(--accent))] transition-colors"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    Open broker login page
+                  </a>
+
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">Request Token</label>
+                    <div className="relative">
+                      <Key className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
+                      <input
+                        type="text"
+                        value={requestToken}
+                        onChange={(e) => setRequestToken(e.target.value)}
+                        placeholder="Paste the request_token here"
+                        className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+                      />
+                    </div>
+                  </div>
+
+                  {connectError && (
+                    <p className="text-sm text-[hsl(var(--destructive))]">{connectError}</p>
+                  )}
+
+                  <button
+                    onClick={handleCompleteConnect}
+                    disabled={!requestToken.trim() || connecting}
+                    className="w-full rounded-md bg-[hsl(var(--primary))] py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 transition-colors disabled:opacity-50"
+                  >
+                    {connecting ? (
+                      <span className="inline-flex items-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Completing...
+                      </span>
+                    ) : (
+                      "Complete Connection"
+                    )}
+                  </button>
+                </div>
+              ) : (
               <div className="mt-5 space-y-4">
                 {/* API Key */}
                 <div className="space-y-1">
@@ -438,6 +555,7 @@ export default function BrokersPage() {
                   )}
                 </button>
               </div>
+              )}
             </motion.div>
           </motion.div>
         )}

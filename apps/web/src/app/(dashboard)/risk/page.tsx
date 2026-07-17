@@ -13,7 +13,8 @@ import { api } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { formatPercent } from "@/lib/utils";
 import { motion } from "framer-motion";
-import toast from "react-hot-toast";
+import { EmptyState } from "@/components/shared/empty-state";
+import { ErrorState } from "@/components/shared/error-state";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -87,17 +88,14 @@ function getVaRColor(value: number | null): string {
 /* ------------------------------------------------------------------ */
 
 export default function RiskPage() {
-  const { portfolios, activePortfolioId, fetchPortfolios, setActivePortfolio } =
+  const { portfolios, activePortfolioId, hasLoadedPortfolios, setActivePortfolio } =
     usePortfolioStore();
   const [metrics, setMetrics] = useState<RiskMetrics | null>(null);
   const [holdingRisks, setHoldingRisks] = useState<HoldingRisk[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!activePortfolioId) fetchPortfolios();
-  }, [activePortfolioId, fetchPortfolios]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -111,6 +109,7 @@ export default function RiskPage() {
 
   const loadRiskData = useCallback(async (portfolioId: number) => {
     setLoading(true);
+    setError(null);
     try {
       const [riskData, holdingsData] = await Promise.all([
         api.get<RiskMetrics>(`/indicators/risk/${portfolioId}`),
@@ -118,10 +117,10 @@ export default function RiskPage() {
       ]);
       setMetrics(riskData);
       setHoldingRisks(holdingsData);
-    } catch {
-      toast.error("Failed to load risk metrics");
+    } catch (err) {
       setMetrics(null);
       setHoldingRisks([]);
+      setError(err instanceof Error ? err.message : "Failed to load risk metrics");
     } finally {
       setLoading(false);
     }
@@ -216,6 +215,10 @@ export default function RiskPage() {
 
   const activePortfolio = portfolios.find((p) => p.id === activePortfolioId);
 
+  // Show the metric sections unless we're in a terminal empty/error state
+  const noPortfolio = !activePortfolioId && hasLoadedPortfolios;
+  const showContent = !noPortfolio && !(error && !loading);
+
   return (
     <div className="space-y-6">
       {/* ---- Header ---- */}
@@ -262,8 +265,23 @@ export default function RiskPage() {
         </div>
       </div>
 
+      {/* ---- No portfolio / Error states ---- */}
+      {noPortfolio && (
+        <EmptyState
+          icon={ShieldAlert}
+          title="No portfolio yet"
+          hint="Create a portfolio and add your first stock to see risk metrics."
+        />
+      )}
+      {!noPortfolio && error && !loading && (
+        <ErrorState
+          message={error}
+          onRetry={() => activePortfolioId && loadRiskData(activePortfolioId)}
+        />
+      )}
+
       {/* ---- Risk Summary Cards ---- */}
-      {loading ? (
+      {showContent && (loading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {Array.from({ length: 5 }).map((_, i) => (
             <div
@@ -281,7 +299,7 @@ export default function RiskPage() {
                 key={card.title}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.05, duration: 0.3 }}
+                transition={{ delay: Math.min(i, 10) * 0.05, duration: 0.3 }}
                 className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5"
               >
                 <div className="flex items-center justify-between">
@@ -315,10 +333,10 @@ export default function RiskPage() {
             Select a portfolio with holdings to view risk metrics.
           </p>
         </div>
-      )}
+      ))}
 
       {/* ---- Per-Holding Risk Table ---- */}
-      {loading ? (
+      {showContent && (loading ? (
         <div className="space-y-3">
           {Array.from({ length: 5 }).map((_, i) => (
             <div
@@ -348,7 +366,7 @@ export default function RiskPage() {
                     key={holding.symbol}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    transition={{ delay: i * 0.02 }}
+                    transition={{ delay: Math.min(i, 10) * 0.02 }}
                     className="border-b border-[hsl(var(--border))] last:border-0 hover:bg-[hsl(var(--muted))]/50"
                   >
                     <td className="px-5 py-3 font-medium">{holding.symbol}</td>
@@ -431,7 +449,7 @@ export default function RiskPage() {
             </p>
           </div>
         )
-      )}
+      ))}
     </div>
   );
 }

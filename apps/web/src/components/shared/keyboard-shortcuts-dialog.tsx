@@ -116,6 +116,7 @@ export function KeyboardShortcutsDialog({ shortcuts }: KeyboardShortcutsDialogPr
               </h2>
               <button
                 onClick={handleClose}
+                aria-label="Close dialog"
                 className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] transition-colors"
               >
                 <X className="h-4 w-4" />

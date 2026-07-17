@@ -72,14 +72,28 @@ export function PriceChart({ symbol, exchange, days }: Props) {
   useEffect(() => {
     if (!symbol) return;
 
+    // Guard against a stale response from a previous symbol/range
+    // overwriting newer data after rapid switches.
+    let cancelled = false;
+
     setLoading(true);
     setError(null);
 
     api
       .get<{ data: OhlcvData[] }>(`/charts/price/${symbol}?exchange=${exchange}&days=${days}`)
-      .then((res) => setData(res.data || []))
-      .catch((err) => setError(err.message || "Failed to load chart data"))
-      .finally(() => setLoading(false));
+      .then((res) => {
+        if (!cancelled) setData(res.data || []);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message || "Failed to load chart data");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [symbol, exchange, days]);
 
   useEffect(() => {

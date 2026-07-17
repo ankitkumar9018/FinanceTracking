@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ChevronDown, FileText, Database, FileJson } from "lucide-react";
 import { api } from "@/lib/api-client";
+import { getApiBaseAsync } from "@/lib/tauri-port";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -42,20 +43,20 @@ const COLUMN_EXAMPLES: Record<DataType, { headers: string[]; sample: string[] }>
 
 function getEndpoint(dataType: DataType, portfolioId: number | null): string {
   switch (dataType) {
-    case "holdings": return `/import/csv?portfolio_id=${portfolioId}`;
-    case "dividends": return `/import/csv/dividends?portfolio_id=${portfolioId}`;
-    case "mutual_funds": return `/import/csv/mutual-funds?portfolio_id=${portfolioId}`;
-    case "tax_records": return `/import/csv/tax-records`;
-    case "json_backup": return `/import/json`;
+    case "holdings": return `/import-export/csv?portfolio_id=${portfolioId}`;
+    case "dividends": return `/import-export/csv/dividends?portfolio_id=${portfolioId}`;
+    case "mutual_funds": return `/import-export/csv/mutual-funds?portfolio_id=${portfolioId}`;
+    case "tax_records": return `/import-export/csv/tax-records`;
+    case "json_backup": return `/import-export/json`;
   }
 }
 
 function getTemplateEndpoint(dataType: DataType): string | null {
   switch (dataType) {
-    case "holdings": return "/import/export/template/csv";
-    case "dividends": return "/import/export/template/dividends";
-    case "mutual_funds": return "/import/export/template/mutual-funds";
-    case "tax_records": return "/import/export/template/tax-records";
+    case "holdings": return "/import-export/export/template/csv";
+    case "dividends": return "/import-export/export/template/dividends";
+    case "mutual_funds": return "/import-export/export/template/mutual-funds";
+    case "tax_records": return "/import-export/export/template/tax-records";
     default: return null;
   }
 }
@@ -105,7 +106,7 @@ export default function ImportPage() {
     // For .xlsx files on holdings, use the Excel endpoint
     let endpoint: string;
     if (dataType === "holdings" && (ext === "xlsx" || ext === "xls")) {
-      endpoint = `/import/excel?portfolio_id=${activePortfolioId}`;
+      endpoint = `/import-export/excel?portfolio_id=${activePortfolioId}`;
     } else {
       endpoint = getEndpoint(dataType, activePortfolioId);
     }
@@ -141,7 +142,8 @@ export default function ImportPage() {
     const endpoint = getTemplateEndpoint(dataType);
     if (!endpoint) return;
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1"}${endpoint}`, {
+      const apiBase = await getApiBaseAsync();
+      const res = await fetch(`${apiBase}${endpoint}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("ft-access-token") || ""}` },
       });
       if (!res.ok) throw new Error("Download failed");

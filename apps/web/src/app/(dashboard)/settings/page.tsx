@@ -3,13 +3,14 @@
 import { useState, useEffect } from "react";
 import { useAuthStore } from "@/stores/auth-store";
 import { useTheme } from "@/components/providers/theme-provider";
+import { SecuritySection } from "@/components/settings/security-section";
 import { api } from "@/lib/api-client";
 import { Save, TestTube, Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
 
 interface Settings {
   display: { preferred_currency: string; theme_preference: string; display_name: string | null };
-  notifications: { email_enabled: boolean; telegram_enabled: boolean; whatsapp_enabled: boolean; in_app_enabled: boolean };
+  notifications: { email_enabled: boolean; telegram_enabled: boolean; whatsapp_enabled: boolean; sms_enabled: boolean; in_app_enabled: boolean };
   market: { price_refresh_interval: number; default_chart_days: number };
   integrations: { llm_provider: string; ollama_url: string; ollama_model: string; has_sendgrid_key: boolean; has_telegram_bot: boolean };
 }
@@ -18,6 +19,8 @@ export default function SettingsPage() {
   const { user } = useAuthStore();
   const { setTheme } = useTheme();
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [phone, setPhone] = useState("");
+  const [telegramChatId, setTelegramChatId] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -32,6 +35,13 @@ export default function SettingsPage() {
         setLoadError(err instanceof Error ? err.message : "Failed to load settings");
       })
       .finally(() => setLoading(false));
+    // Notification destinations live on the user record, not /settings.
+    api.get<{ phone: string | null; telegram_chat_id: string | null }>("/auth/me")
+      .then((me) => {
+        setPhone(me.phone || "");
+        setTelegramChatId(me.telegram_chat_id || "");
+      })
+      .catch((err) => console.error("Failed to load profile:", err));
   }
 
   useEffect(() => {
@@ -46,6 +56,8 @@ export default function SettingsPage() {
         preferred_currency: settings.display.preferred_currency,
         theme_preference: settings.display.theme_preference,
         display_name: settings.display.display_name,
+        phone: phone || null,
+        telegram_chat_id: telegramChatId || null,
         notification_preferences: settings.notifications,
       });
       setTheme(settings.display.theme_preference as "dark" | "light" | "system");
@@ -163,9 +175,15 @@ export default function SettingsPage() {
       <section className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6">
         <h2 className="text-lg font-semibold">Notifications</h2>
         <div className="mt-4 space-y-3">
-          {(["in_app_enabled", "email_enabled", "telegram_enabled", "whatsapp_enabled"] as const).map((key) => (
+          {([
+            ["in_app_enabled", "In-App Notifications"],
+            ["email_enabled", "Email Notifications"],
+            ["telegram_enabled", "Telegram Notifications"],
+            ["whatsapp_enabled", "WhatsApp Notifications"],
+            ["sms_enabled", "SMS Notifications"],
+          ] as const).map(([key, label]) => (
             <label key={key} className="flex items-center justify-between">
-              <span className="text-sm">{key.replace("_enabled", "").replace("_", " ").replace(/^\w/, (c) => c.toUpperCase())} Notifications</span>
+              <span className="text-sm">{label}</span>
               <input
                 type="checkbox"
                 checked={settings.notifications[key]}
@@ -179,6 +197,32 @@ export default function SettingsPage() {
               />
             </label>
           ))}
+          {settings.notifications.telegram_enabled && (
+            <div>
+              <label className="block text-sm font-medium mb-1">Telegram chat ID</label>
+              <input
+                type="text"
+                value={telegramChatId}
+                onChange={(e) => setTelegramChatId(e.target.value)}
+                aria-label="Telegram chat ID"
+                placeholder="123456789"
+                className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+              />
+            </div>
+          )}
+          {(settings.notifications.whatsapp_enabled || settings.notifications.sms_enabled) && (
+            <div>
+              <label className="block text-sm font-medium mb-1">Phone number (E.164, e.g. +9198...)</label>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                aria-label="Phone number in E.164 format"
+                placeholder="+9198XXXXXXXX"
+                className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+              />
+            </div>
+          )}
           <div className="flex gap-2 pt-2">
             {settings.integrations.has_sendgrid_key && (
               <button onClick={testEmail} className="inline-flex items-center gap-1 rounded-md bg-[hsl(var(--muted))] px-3 py-1.5 text-xs font-medium hover:bg-[hsl(var(--accent))] transition-colors">
@@ -193,6 +237,9 @@ export default function SettingsPage() {
           </div>
         </div>
       </section>
+
+      {/* Security */}
+      <SecuritySection />
 
       {/* Integrations */}
       <section className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6">

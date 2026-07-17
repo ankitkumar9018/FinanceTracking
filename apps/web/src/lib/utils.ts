@@ -34,3 +34,36 @@ export function formatRsi(value: number | null): string {
   if (value === null || value === undefined) return "\u2014";
   return value.toFixed(1);
 }
+
+/** Trading currency for an exchange. Used to display each holding in its
+ * native currency instead of defaulting everything to INR. */
+const EXCHANGE_CURRENCY: Record<string, string> = {
+  NSE: "INR",
+  BSE: "INR",
+  XETRA: "EUR",
+  FRA: "EUR",
+  NYSE: "USD",
+  NASDAQ: "USD",
+};
+
+export function currencyForExchange(exchange: string | null | undefined): string {
+  if (!exchange) return "INR";
+  return EXCHANGE_CURRENCY[exchange.toUpperCase()] ?? "INR";
+}
+
+/** Shared date formatter so every page renders dates the same way.
+ * `style: "short"` \u2192 17 Jul 2026, `"long"` \u2192 17 July 2026, `"numeric"` \u2192 17/07/2026 */
+export function formatDate(
+  value: string | number | Date | null | undefined,
+  style: "short" | "long" | "numeric" = "short",
+): string {
+  if (value == null || value === "") return "\u2014";
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "\u2014";
+  if (style === "numeric") return d.toLocaleDateString("en-IN");
+  return d.toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: style === "long" ? "long" : "short",
+    year: "numeric",
+  });
+}

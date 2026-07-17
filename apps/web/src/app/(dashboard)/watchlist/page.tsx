@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import { Plus, Star, Trash2, Search, X } from "lucide-react";
 import { api } from "@/lib/api-client";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, currencyForExchange } from "@/lib/utils";
 import { StockHoverCard } from "@/components/shared/stock-hover-card";
+import { EmptyState } from "@/components/shared/empty-state";
+import { ErrorState } from "@/components/shared/error-state";
 import toast from "react-hot-toast";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -21,6 +23,7 @@ interface WatchlistItem {
 export default function WatchlistPage() {
   const [items, setItems] = useState<WatchlistItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
   const [newSymbol, setNewSymbol] = useState("");
@@ -35,12 +38,14 @@ export default function WatchlistPage() {
   }, []);
 
   async function loadWatchlist() {
+    setLoading(true);
+    setError(null);
     try {
       const data = await api.get<WatchlistItem[]>("/watchlist");
       setItems(data);
     } catch (err) {
-      toast.error("Failed to load watchlist");
       console.error("Failed to load watchlist:", err);
+      setError(err instanceof Error ? err.message : "Failed to load watchlist");
     } finally {
       setLoading(false);
     }
@@ -112,7 +117,7 @@ export default function WatchlistPage() {
             <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-medium">Add Stock to Watchlist</h3>
-                <button onClick={() => setShowAddForm(false)} className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">
+                <button onClick={() => setShowAddForm(false)} aria-label="Close add form" className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">
                   <X className="h-4 w-4" />
                 </button>
               </div>
@@ -191,16 +196,14 @@ export default function WatchlistPage() {
             <div key={i} className="h-16 animate-pulse rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]" />
           ))}
         </div>
+      ) : error ? (
+        <ErrorState message={error} onRetry={loadWatchlist} />
       ) : items.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-[hsl(var(--border))] py-16">
-          <Star className="h-12 w-12 text-[hsl(var(--muted-foreground))]/30" />
-          <p className="mt-4 text-lg font-medium text-[hsl(var(--muted-foreground))]">
-            Watchlist is empty
-          </p>
-          <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
-            Add stocks to track before buying.
-          </p>
-        </div>
+        <EmptyState
+          icon={Star}
+          title="Watchlist is empty"
+          hint="Add your first stock to track it before buying."
+        />
       ) : (
         <div className="space-y-2">
           {items.filter((item) => {
@@ -212,7 +215,7 @@ export default function WatchlistPage() {
               key={item.id}
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.03 }}
+              transition={{ delay: Math.min(i, 10) * 0.03 }}
               className="flex items-center justify-between rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4"
             >
               <div className="flex items-center gap-4">
@@ -228,7 +231,7 @@ export default function WatchlistPage() {
                 {item.target_buy_price && (
                   <div className="text-right">
                     <p className="text-xs text-[hsl(var(--muted-foreground))]">Target</p>
-                    <p className="font-mono text-sm">{formatCurrency(item.target_buy_price)}</p>
+                    <p className="font-mono text-sm">{formatCurrency(item.target_buy_price, currencyForExchange(item.exchange))}</p>
                   </div>
                 )}
                 {item.notes && (
@@ -238,6 +241,8 @@ export default function WatchlistPage() {
                 )}
                 <button
                   onClick={() => removeItem(item.id)}
+                  aria-label={`Remove ${item.stock_symbol} from watchlist`}
+                  title="Remove from watchlist"
                   className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--destructive))]/10 hover:text-[hsl(var(--destructive))] transition-colors"
                 >
                   <Trash2 className="h-4 w-4" />

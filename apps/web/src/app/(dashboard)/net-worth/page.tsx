@@ -13,12 +13,22 @@ import {
   BarChart3,
   CircleDollarSign,
   Gem,
+  Trash2,
+  Loader2,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { api } from "@/lib/api-client";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import toast from "react-hot-toast";
+
+/* Recharts is heavy (~100kB gz) — load the donut chart lazily */
+const AllocationDonut = dynamic(() => import("@/components/charts/allocation-donut"), {
+  ssr: false,
+  loading: () => (
+    <div className="h-full w-full animate-pulse rounded-lg bg-[hsl(var(--muted))]/50" />
+  ),
+});
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -215,12 +225,13 @@ function AddAssetModal({
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.95 }}
           transition={{ duration: 0.2 }}
-          className="relative z-10 w-full max-w-md rounded-lg border border-white/10 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl"
+          className="relative z-10 w-full max-w-md rounded-lg border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl"
         >
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">Add Asset</h2>
             <button
               onClick={onClose}
+              aria-label="Close dialog"
               className="rounded-md p-1 hover:bg-[hsl(var(--accent))] transition-colors"
             >
               <X className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
@@ -333,29 +344,6 @@ function AddAssetModal({
 }
 
 /* ------------------------------------------------------------------ */
-/*  Custom Tooltip                                                     */
-/* ------------------------------------------------------------------ */
-
-function CustomTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: { name: string; value: number; payload: { percentage: number } }[];
-}) {
-  if (!active || !payload?.length) return null;
-  const d = payload[0];
-  return (
-    <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 shadow-lg">
-      <p className="text-sm font-medium">{d.name}</p>
-      <p className="text-xs text-[hsl(var(--muted-foreground))]">
-        {formatCurrency(d.value)} ({d.payload.percentage.toFixed(1)}%)
-      </p>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /*  Page Component                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -364,6 +352,7 @@ export default function NetWorthPage() {
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState<number | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -414,6 +403,20 @@ export default function NetWorthPage() {
       toast.error("Failed to add asset");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleDeleteAsset(asset: NetWorthAsset) {
+    if (!confirm(`Delete "${asset.name}"? This cannot be undone.`)) return;
+    setDeleting(asset.id);
+    try {
+      await api.delete(`/net-worth/assets/${asset.id}`);
+      toast.success("Asset deleted");
+      await loadData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete asset");
+    } finally {
+      setDeleting(null);
     }
   }
 
@@ -470,7 +473,7 @@ export default function NetWorthPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
-            className="rounded-xl border border-white/10 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-8 shadow-xl"
+            className="rounded-xl border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-8 shadow-xl"
           >
             <div className="flex items-center gap-3 mb-2">
               <div className="rounded-full bg-[hsl(var(--primary))]/10 p-2.5">
@@ -496,31 +499,12 @@ export default function NetWorthPage() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.1, duration: 0.4 }}
-              className="rounded-xl border border-white/10 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl"
+              className="rounded-xl border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl"
             >
               <h2 className="mb-4 text-lg font-semibold">Asset Allocation</h2>
               {chartData.length > 0 ? (
                 <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={chartData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={70}
-                        outerRadius={110}
-                        paddingAngle={3}
-                        dataKey="value"
-                        nameKey="name"
-                        stroke="none"
-                      >
-                        {chartData.map((entry, i) => (
-                          <Cell key={i} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip content={<CustomTooltip />} />
-                    </PieChart>
-                  </ResponsiveContainer>
+                  <AllocationDonut data={chartData} />
                 </div>
               ) : (
                 <div className="flex h-72 items-center justify-center">
@@ -554,7 +538,7 @@ export default function NetWorthPage() {
                     initial={{ opacity: 0, x: 20 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: 0.1 + i * 0.06, duration: 0.3 }}
-                    className="rounded-lg border border-white/10 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-4 shadow-xl"
+                    className="rounded-lg border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-4 shadow-xl"
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
@@ -618,6 +602,9 @@ export default function NetWorthPage() {
                       <th className="px-5 py-3 font-medium">Type</th>
                       <th className="px-5 py-3 font-medium text-right">Value</th>
                       <th className="px-5 py-3 font-medium text-right">% of Total</th>
+                      <th className="px-5 py-3 font-medium text-right">
+                        <span className="sr-only">Actions</span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -642,6 +629,30 @@ export default function NetWorthPage() {
                           </td>
                           <td className="px-5 py-3 text-right font-mono text-[hsl(var(--muted-foreground))]">
                             {pct.toFixed(1)}%
+                          </td>
+                          <td className="px-5 py-3 text-right">
+                            {asset.asset_type === "STOCK" ? (
+                              <span
+                                className="text-xs text-[hsl(var(--muted-foreground))]/60"
+                                title="Stock values come from your portfolio holdings — manage them on the Holdings page"
+                              >
+                                via Holdings
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => handleDeleteAsset(asset)}
+                                disabled={deleting === asset.id}
+                                title="Delete asset"
+                                aria-label={`Delete ${asset.name}`}
+                                className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--destructive))]/10 hover:text-[hsl(var(--destructive))] transition-colors disabled:opacity-50"
+                              >
+                                {deleting === asset.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );

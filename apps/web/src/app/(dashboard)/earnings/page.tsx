@@ -14,6 +14,8 @@ import { usePortfolioStore } from "@/stores/portfolio-store";
 import { formatCurrency } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { ContextualHelp } from "@/components/shared/contextual-help";
+import { EmptyState } from "@/components/shared/empty-state";
+import { ErrorState } from "@/components/shared/error-state";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -146,7 +148,7 @@ function CalendarMonthView({ entries }: { entries: EarningsEntry[] }) {
   });
 
   return (
-    <div className="rounded-xl border border-white/10 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl">
+    <div className="rounded-xl border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl">
       <h2 className="text-lg font-semibold mb-4">{monthName}</h2>
 
       {/* Day headers */}
@@ -211,18 +213,16 @@ function CalendarMonthView({ entries }: { entries: EarningsEntry[] }) {
 /* ------------------------------------------------------------------ */
 
 export default function EarningsPage() {
-  const { portfolios, activePortfolioId, fetchPortfolios, setActivePortfolio } =
+  const { portfolios, activePortfolioId, hasLoadedPortfolios, setActivePortfolio } =
     usePortfolioStore();
   const [entries, setEntries] = useState<EarningsEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
-
-  useEffect(() => {
-    if (!activePortfolioId) fetchPortfolios();
-  }, [activePortfolioId, fetchPortfolios]);
 
   const loadEarnings = useCallback(async (portfolioId: number) => {
     setLoading(true);
+    setError(null);
     try {
       const data = await api.get<PortfolioEarningsData>(`/earnings/${portfolioId}`);
       // Filter to entries with earnings dates, then sort by nearest date
@@ -233,8 +233,9 @@ export default function EarningsPage() {
         (a, b) => new Date(a.earnings_date!).getTime() - new Date(b.earnings_date!).getTime()
       );
       setEntries(sorted);
-    } catch {
+    } catch (err) {
       setEntries([]);
+      setError(err instanceof Error ? err.message : "Failed to load earnings data");
     } finally {
       setLoading(false);
     }
@@ -304,8 +305,14 @@ export default function EarningsPage() {
         </div>
       </div>
 
-      {/* ---- Loading ---- */}
-      {loading ? (
+      {/* ---- No portfolio / Loading / Error ---- */}
+      {!activePortfolioId && hasLoadedPortfolios ? (
+        <EmptyState
+          icon={CalendarDays}
+          title="No portfolio yet"
+          hint="Create a portfolio and add your first stock to track earnings dates."
+        />
+      ) : loading || !activePortfolioId ? (
         <div className="space-y-6">
           <div className="h-80 animate-pulse rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]" />
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -317,6 +324,8 @@ export default function EarningsPage() {
             ))}
           </div>
         </div>
+      ) : error ? (
+        <ErrorState message={error} onRetry={() => loadEarnings(activePortfolioId)} />
       ) : entries.length > 0 ? (
         <>
           {/* ---- Calendar Month View ---- */}

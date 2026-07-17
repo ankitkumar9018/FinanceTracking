@@ -12,10 +12,13 @@ import {
   ChevronLeft,
   ChevronRight,
   Trash2,
+  Sparkles,
+  X,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { motion, AnimatePresence } from "framer-motion";
 import { VoiceInput } from "@/components/ai/voice-input";
+import InsightsPanel from "@/components/ai/insights-panel";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -62,6 +65,7 @@ export default function AIAssistantPage() {
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [insightsOpen, setInsightsOpen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -284,6 +288,7 @@ export default function AIAssistantPage() {
                   onClick={handleNewChat}
                   className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] transition-colors"
                   title="New Chat"
+                  aria-label="Start new chat"
                 >
                   <Plus className="h-4 w-4" />
                 </button>
@@ -380,6 +385,20 @@ export default function AIAssistantPage() {
               >
                 <Plus className="h-3.5 w-3.5" />
                 New Chat
+              </button>
+              <button
+                onClick={() => setInsightsOpen((v) => !v)}
+                aria-label={insightsOpen ? "Hide market insights" : "Show market insights"}
+                aria-pressed={insightsOpen}
+                title="Market Insights"
+                className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                  insightsOpen
+                    ? "border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]"
+                    : "border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]"
+                }`}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Insights</span>
               </button>
             </div>
           </div>
@@ -540,6 +559,36 @@ export default function AIAssistantPage() {
             </p>
           </div>
         </div>
+
+        {/* ---- Insights Panel (right, collapsible) ---- */}
+        <AnimatePresence initial={false}>
+          {insightsOpen && (
+            <motion.div
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 360, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="flex flex-col overflow-hidden border-l border-[hsl(var(--border))] bg-[hsl(var(--card))]"
+            >
+              <div className="flex items-center justify-between border-b border-[hsl(var(--border))] px-3 py-2">
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-[hsl(var(--muted-foreground))]">
+                  <Sparkles className="h-3.5 w-3.5 text-[hsl(var(--primary))]" />
+                  AI Insights
+                </span>
+                <button
+                  onClick={() => setInsightsOpen(false)}
+                  aria-label="Close insights panel"
+                  className="rounded-md p-1 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="min-w-90 flex-1 overflow-hidden">
+                <InsightsPanel />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

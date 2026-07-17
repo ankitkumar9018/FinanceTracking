@@ -12,6 +12,7 @@ import { usePortfolioStore, type Holding } from "@/stores/portfolio-store";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { ContextualHelp } from "@/components/shared/contextual-help";
+import toast from "react-hot-toast";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -221,7 +222,7 @@ function HeatmapTileCard({
 /* ------------------------------------------------------------------ */
 
 export default function MarketHeatmapPage() {
-  const { holdings, activePortfolioId, fetchPortfolios, fetchHoldings, refreshPrices, isLoading } =
+  const { holdings, activePortfolioId, fetchHoldings, refreshPrices, isLoading } =
     usePortfolioStore();
   const [refreshing, setRefreshing] = useState(false);
   const [tooltip, setTooltip] = useState<{
@@ -237,17 +238,23 @@ export default function MarketHeatmapPage() {
   }, []);
 
   useEffect(() => {
-    if (!activePortfolioId) {
-      fetchPortfolios();
-    } else if (holdings.length === 0) {
+    if (activePortfolioId && holdings.length === 0) {
       fetchHoldings(activePortfolioId);
     }
-  }, [activePortfolioId, holdings.length, fetchPortfolios, fetchHoldings]);
+  }, [activePortfolioId, holdings.length, fetchHoldings]);
 
   async function handleRefresh() {
     setRefreshing(true);
-    await refreshPrices();
-    setRefreshing(false);
+    try {
+      const result = await refreshPrices();
+      toast.success(
+        `Updated ${result.updated} stocks${result.failed > 0 ? `, ${result.failed} failed` : ""}`
+      );
+    } catch {
+      toast.error("Failed to refresh prices");
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   function handleTileHover(tile: HeatmapTile, e: React.MouseEvent) {

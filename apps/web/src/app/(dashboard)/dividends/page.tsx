@@ -9,6 +9,8 @@ import {
   Hash,
   Repeat,
   CircleDollarSign,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { formatCurrency } from "@/lib/utils";
@@ -63,6 +65,7 @@ export default function DividendsPage() {
   const [formReinvestPrice, setFormReinvestPrice] = useState("");
   const [formReinvestShares, setFormReinvestShares] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState<number | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -109,6 +112,24 @@ export default function DividendsPage() {
       toast.error(err instanceof Error ? err.message : "Failed to add dividend");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleDeleteDividend(dividend: Dividend) {
+    const label = dividend.holding_symbol || `Holding #${dividend.holding_id}`;
+    const dripNote = dividend.is_reinvested
+      ? " Reinvested (DRIP) share adjustments will be reversed."
+      : "";
+    if (!confirm(`Delete this ${label} dividend?${dripNote} This cannot be undone.`)) return;
+    setDeleting(dividend.id);
+    try {
+      await api.delete(`/dividends/${dividend.id}`);
+      toast.success("Dividend deleted");
+      await loadData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete dividend");
+    } finally {
+      setDeleting(null);
     }
   }
 
@@ -247,6 +268,9 @@ export default function DividendsPage() {
                 <th className="px-5 py-3 font-medium text-center">
                   Reinvested
                 </th>
+                <th className="px-5 py-3 font-medium text-right">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -292,6 +316,21 @@ export default function DividendsPage() {
                       </span>
                     )}
                   </td>
+                  <td className="px-5 py-3 text-right">
+                    <button
+                      onClick={() => handleDeleteDividend(div)}
+                      disabled={deleting === div.id}
+                      title="Delete dividend"
+                      aria-label="Delete dividend"
+                      className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--destructive))]/10 hover:text-[hsl(var(--destructive))] transition-colors disabled:opacity-50"
+                    >
+                      {deleting === div.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-4 w-4" />
+                      )}
+                    </button>
+                  </td>
                 </motion.tr>
               ))}
             </tbody>
@@ -326,6 +365,7 @@ export default function DividendsPage() {
                     setShowAddForm(false);
                     resetForm();
                   }}
+                  aria-label="Close dialog"
                   className="rounded-md p-1 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
                 >
                   <X className="h-5 w-5" />

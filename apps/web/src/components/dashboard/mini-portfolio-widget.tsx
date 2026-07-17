@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { usePortfolioStore } from "@/stores/portfolio-store";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, currencyForExchange } from "@/lib/utils";
 import { TrendingUp, TrendingDown, ChevronDown, ChevronUp } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -13,14 +13,25 @@ export function MiniPortfolioWidget() {
 
   if (!visible || holdings.length === 0) return null;
 
-  const totalValue = holdings.reduce(
-    (sum, h) => sum + (h.current_price || 0) * h.quantity,
-    0
-  );
-  const totalCost = holdings.reduce(
-    (sum, h) => sum + h.avg_price * h.quantity,
-    0
-  );
+  // Totals per currency — no FX conversion in the frontend, so show the
+  // primary (most common) currency's totals and note the rest.
+  const byCurrency = new Map<string, { value: number; cost: number; count: number }>();
+  for (const h of holdings) {
+    const ccy = h.currency ?? currencyForExchange(h.exchange);
+    const entry = byCurrency.get(ccy) ?? { value: 0, cost: 0, count: 0 };
+    // Value at avg price until the first live price arrives (avoids -100% P&L)
+    entry.value += (h.current_price ?? h.avg_price) * h.quantity;
+    entry.cost += h.avg_price * h.quantity;
+    entry.count += 1;
+    byCurrency.set(ccy, entry);
+  }
+  const primaryCurrency =
+    [...byCurrency.entries()].sort((a, b) => b[1].count - a[1].count)[0]?.[0] ?? "INR";
+  const primary = byCurrency.get(primaryCurrency) ?? { value: 0, cost: 0, count: 0 };
+  const otherCount = holdings.length - primary.count;
+
+  const totalValue = primary.value;
+  const totalCost = primary.cost;
   const totalPnl = totalValue - totalCost;
   const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
   const isUp = totalPnl >= 0;
@@ -51,7 +62,12 @@ export function MiniPortfolioWidget() {
           <p className="text-[10px] font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
             Portfolio
           </p>
-          <p className="font-mono text-lg font-bold">{formatCurrency(totalValue)}</p>
+          <p className="font-mono text-lg font-bold">{formatCurrency(totalValue, primaryCurrency)}</p>
+          {otherCount > 0 && (
+            <p className="text-[9px] text-[hsl(var(--muted-foreground))]">
+              +{otherCount} holding{otherCount > 1 ? "s" : ""} in other currencies
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <div

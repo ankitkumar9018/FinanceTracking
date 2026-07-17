@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, MicOff, Loader2 } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -72,6 +72,7 @@ function createRecognition(): SpeechRecognitionInstance | null {
 /* ------------------------------------------------------------------ */
 
 export function VoiceInput({ onTranscript, className = "" }: VoiceInputProps) {
+  const reduceMotion = useReducedMotion();
   const [state, setState] = useState<VoiceState>("idle");
   const [supported, setSupported] = useState(true);
   const [interimText, setInterimText] = useState("");
@@ -254,7 +255,7 @@ export function VoiceInput({ onTranscript, className = "" }: VoiceInputProps) {
         }
       >
         {/* Pulsing ring when recording */}
-        {state === "recording" && (
+        {state === "recording" && !reduceMotion && (
           <motion.span
             className="absolute inset-0 rounded-lg border-2 border-red-500"
             animate={{ scale: [1, 1.15, 1], opacity: [0.7, 0, 0.7] }}
@@ -270,7 +271,7 @@ export function VoiceInput({ onTranscript, className = "" }: VoiceInputProps) {
               <motion.div
                 key={i}
                 className="w-0.75 rounded-full bg-red-500"
-                animate={{
+                animate={reduceMotion ? { height: "12px" } : {
                   height: ["8px", "16px", "8px"],
                 }}
                 transition={{

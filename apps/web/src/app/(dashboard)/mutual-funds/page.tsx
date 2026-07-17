@@ -115,7 +115,7 @@ export default function MutualFundsPage() {
   async function handleRefreshNavs() {
     setRefreshing(true);
     try {
-      await api.post("/mutual-funds/refresh-navs");
+      await api.post("/mutual-funds/refresh");
       await loadData();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to refresh NAVs");
@@ -404,6 +404,7 @@ export default function MutualFundsPage() {
                     setShowAddForm(false);
                     resetForm();
                   }}
+                  aria-label="Close dialog"
                   className="rounded-md p-1 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
                 >
                   <X className="h-5 w-5" />
@@ -458,6 +459,7 @@ export default function MutualFundsPage() {
                     </div>
                     <button
                       onClick={() => setSelectedScheme(null)}
+                      aria-label="Clear selected scheme"
                       className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
                     >
                       <X className="h-4 w-4" />

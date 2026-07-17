@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/stores/auth-store";
-import { Sidebar } from "@/components/layout/sidebar";
+import { usePortfolioStore } from "@/stores/portfolio-store";
+import { Sidebar, MobileSidebar } from "@/components/layout/sidebar";
 import { TopBar } from "@/components/layout/top-bar";
 import { OnboardingWizard } from "@/components/onboarding/onboarding-wizard";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
+import { usePriceStream } from "@/hooks/use-price-stream";
 import { KeyboardShortcutsDialog } from "@/components/shared/keyboard-shortcuts-dialog";
 import { CommandPalette } from "@/components/shared/command-palette";
 import { LiveTicker } from "@/components/dashboard/live-ticker";
@@ -15,9 +17,15 @@ import { MiniPortfolioWidget } from "@/components/dashboard/mini-portfolio-widge
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { isAuthenticated, isLoading, loadUser } = useAuthStore();
+  const fetchPortfolios = usePortfolioStore((s) => s.fetchPortfolios);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const shortcuts = useKeyboardShortcuts();
+
+  // Live price streaming — mounted once here so route changes never open a
+  // second socket. Internally no-ops until an auth token is present.
+  usePriceStream();
 
   useEffect(() => {
     setMounted(true);
@@ -29,6 +37,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       router.push("/login");
     }
   }, [isAuthenticated, isLoading, router]);
+
+  /* ---- Bootstrap portfolios once auth is confirmed ---- */
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) {
+      fetchPortfolios();
+    }
+  }, [isAuthenticated, isLoading, fetchPortfolios]);
 
   /* ---- Check onboarding status on mount ---- */
   useEffect(() => {
@@ -61,10 +76,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <div className="flex h-screen overflow-hidden bg-[hsl(var(--background))]">
       <Sidebar />
+      <MobileSidebar open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
       <div className="flex flex-1 flex-col overflow-hidden">
-        <TopBar />
+        <TopBar onMenuClick={() => setMobileNavOpen(true)} />
         <LiveTicker />
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <main className="flex-1 overflow-y-auto p-4 md:p-6">{children}</main>
       </div>
       {showOnboarding && (
         <OnboardingWizard onComplete={handleOnboardingComplete} />

@@ -9,6 +9,8 @@ interface StockHoverCardProps {
   currentPrice?: number | null;
   avgPrice?: number;
   rsi?: number | null;
+  /** Display currency for prices (defaults to INR) */
+  currency?: string;
   children: React.ReactNode;
 }
 
@@ -18,6 +20,7 @@ export function StockHoverCard({
   currentPrice,
   avgPrice,
   rsi,
+  currency,
   children,
 }: StockHoverCardProps) {
   const [show, setShow] = useState(false);
@@ -70,12 +73,12 @@ export function StockHoverCard({
             <div className="flex justify-between">
               <span className="text-[hsl(var(--muted-foreground))]">Price</span>
               <span className="font-mono font-medium">
-                {currentPrice ? formatCurrency(currentPrice) : "\u2014"}
+                {currentPrice ? formatCurrency(currentPrice, currency) : "\u2014"}
               </span>
             </div>
             <div className="flex justify-between">
               <span className="text-[hsl(var(--muted-foreground))]">Avg</span>
-              <span className="font-mono">{avgPrice ? formatCurrency(avgPrice) : "\u2014"}</span>
+              <span className="font-mono">{avgPrice ? formatCurrency(avgPrice, currency) : "\u2014"}</span>
             </div>
             {pnlPct !== null && (
               <div className="flex justify-between">

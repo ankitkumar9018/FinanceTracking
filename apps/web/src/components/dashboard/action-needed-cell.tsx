@@ -1,6 +1,6 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { AlertTriangle, Trophy } from "lucide-react";
 
 const ZONE_CONFIG: Record<string, { bg: string; text: string; label: string; icon?: React.ComponentType<{ className?: string }> }> = {
@@ -39,8 +39,9 @@ interface Props {
 }
 
 export function ActionNeededCell({ action, onClick }: Props) {
+  const reduceMotion = useReducedMotion();
   const config = ZONE_CONFIG[action] || ZONE_CONFIG.N;
-  const shouldPulse = action !== "N";
+  const shouldPulse = action !== "N" && !reduceMotion;
   const Icon = config.icon;
 
   return (
@@ -50,6 +51,7 @@ export function ActionNeededCell({ action, onClick }: Props) {
       transition={shouldPulse ? { duration: 2, repeat: Infinity, ease: "easeInOut" } : {}}
       className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold cursor-pointer transition-shadow hover:ring-2 hover:ring-[hsl(var(--ring))] ${config.bg} ${config.text}`}
       title={`Action: ${action} — Click to view price chart`}
+      aria-label={`Action ${action} — view price chart`}
     >
       {Icon && <Icon className="h-3 w-3" />}
       {config.label}

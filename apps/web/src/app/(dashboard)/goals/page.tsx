@@ -195,6 +195,7 @@ function GoalFormModal({
             </h2>
             <button
               onClick={onClose}
+              aria-label="Close dialog"
               className="rounded-md p-1 hover:bg-[hsl(var(--accent))] transition-colors"
             >
               <X className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
@@ -488,6 +489,7 @@ export default function GoalsPage() {
                       onClick={() => openEditModal(goal)}
                       className="rounded-md p-1.5 hover:bg-[hsl(var(--accent))] transition-colors"
                       title="Edit"
+                      aria-label={`Edit ${goal.name}`}
                     >
                       <Pencil className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
                     </button>
@@ -495,6 +497,7 @@ export default function GoalsPage() {
                       onClick={() => handleDelete(goal.id)}
                       className="rounded-md p-1.5 hover:bg-red-500/10 transition-colors"
                       title="Delete"
+                      aria-label={`Delete ${goal.name}`}
                     >
                       <Trash2 className="h-3.5 w-3.5 text-red-500" />
                     </button>

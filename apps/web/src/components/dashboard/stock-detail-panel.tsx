@@ -78,6 +78,7 @@ export function StockDetailPanel({ holding, type, onClose }: Props) {
           </div>
           <button
             onClick={onClose}
+            aria-label="Close panel"
             className="rounded-md p-2 hover:bg-[hsl(var(--accent))] transition-colors"
           >
             <X className="h-5 w-5" />

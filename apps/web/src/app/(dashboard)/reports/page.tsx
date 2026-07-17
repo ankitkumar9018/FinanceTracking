@@ -3,12 +3,13 @@
 import { useState } from "react";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { getToken, tryRefresh } from "@/lib/api-client";
+import { getApiBaseAsync } from "@/lib/tauri-port";
 import { FileText, Download, FileSpreadsheet, FileJson, Database, FileOutput } from "lucide-react";
 import toast from "react-hot-toast";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
-
-async function fetchWithAuth(url: string): Promise<Response> {
+async function fetchWithAuth(path: string): Promise<Response> {
+  const apiBase = await getApiBaseAsync();
+  const url = `${apiBase}${path}`;
   const token = await getToken();
   const headers: Record<string, string> = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -31,8 +32,8 @@ async function fetchWithAuth(url: string): Promise<Response> {
   return response;
 }
 
-async function downloadBlob(url: string, filename: string) {
-  const res = await fetchWithAuth(url);
+async function downloadBlob(path: string, filename: string) {
+  const res = await fetchWithAuth(path);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(text || `Download failed (${res.status})`);
@@ -71,7 +72,7 @@ export default function ReportsPage() {
       actionLabel: "View Report",
       needsPortfolio: true,
       action: () => run("report", async () => {
-        const res = await fetchWithAuth(`${API_BASE}/import-export/export/report/${pid}`);
+        const res = await fetchWithAuth(`/import-export/export/report/${pid}`);
         if (!res.ok) throw new Error("Failed to generate report");
         const html = await res.text();
         const win = window.open("", "_blank");
@@ -87,7 +88,7 @@ export default function ReportsPage() {
       actionLabel: "Download Excel",
       needsPortfolio: true,
       action: () => run("excel", async () => {
-        await downloadBlob(`${API_BASE}/import-export/export/excel/${pid}`, `portfolio_${pid}.xlsx`);
+        await downloadBlob(`/import-export/export/excel/${pid}`, `portfolio_${pid}.xlsx`);
         toast.success("Excel file downloaded!");
       }),
     },
@@ -99,7 +100,7 @@ export default function ReportsPage() {
       actionLabel: "Download PDF",
       needsPortfolio: true,
       action: () => run("pdf", async () => {
-        await downloadBlob(`${API_BASE}/import-export/export/pdf/${pid}`, `portfolio_${pid}_report.pdf`);
+        await downloadBlob(`/import-export/export/pdf/${pid}`, `portfolio_${pid}_report.pdf`);
         toast.success("PDF downloaded!");
       }),
     },
@@ -111,7 +112,7 @@ export default function ReportsPage() {
       actionLabel: "Download CSV",
       needsPortfolio: true,
       action: () => run("csv-holdings", async () => {
-        await downloadBlob(`${API_BASE}/import-export/export/csv/${pid}`, `holdings_${pid}.csv`);
+        await downloadBlob(`/import-export/export/csv/${pid}`, `holdings_${pid}.csv`);
         toast.success("Holdings CSV downloaded!");
       }),
     },
@@ -123,7 +124,7 @@ export default function ReportsPage() {
       actionLabel: "Download CSV",
       needsPortfolio: true,
       action: () => run("csv-tx", async () => {
-        await downloadBlob(`${API_BASE}/import-export/export/csv/${pid}/transactions`, `transactions_${pid}.csv`);
+        await downloadBlob(`/import-export/export/csv/${pid}/transactions`, `transactions_${pid}.csv`);
         toast.success("Transactions CSV downloaded!");
       }),
     },
@@ -135,7 +136,7 @@ export default function ReportsPage() {
       actionLabel: "Export CSV",
       needsPortfolio: true,
       action: () => run("sheets", async () => {
-        await downloadBlob(`${API_BASE}/analytics/export/sheets/${pid}`, `portfolio_${pid}_sheets.csv`);
+        await downloadBlob(`/analytics/export/sheets/${pid}`, `portfolio_${pid}_sheets.csv`);
         toast.success("Google Sheets CSV downloaded!");
       }),
     },
@@ -147,7 +148,7 @@ export default function ReportsPage() {
       actionLabel: "Download JSON",
       needsPortfolio: true,
       action: () => run("json", async () => {
-        await downloadBlob(`${API_BASE}/import-export/export/json/${pid}`, `portfolio_${pid}_backup.json`);
+        await downloadBlob(`/import-export/export/json/${pid}`, `portfolio_${pid}_backup.json`);
         toast.success("JSON backup downloaded!");
       }),
     },
@@ -160,7 +161,7 @@ export default function ReportsPage() {
       needsPortfolio: false,
       action: () => run("sqlite", async () => {
         const ts = new Date().toISOString().replace(/[:-]/g, "").split(".")[0];
-        await downloadBlob(`${API_BASE}/import-export/export/backup/sqlite`, `finance_tracker_backup_${ts}.db`);
+        await downloadBlob(`/import-export/export/backup/sqlite`, `finance_tracker_backup_${ts}.db`);
         toast.success("Database backup downloaded!");
       }),
     },

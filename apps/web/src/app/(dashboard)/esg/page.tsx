@@ -14,6 +14,8 @@ import { api } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { motion } from "framer-motion";
 import { ContextualHelp } from "@/components/shared/contextual-help";
+import { EmptyState } from "@/components/shared/empty-state";
+import { ErrorState } from "@/components/shared/error-state";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -112,7 +114,7 @@ function EsgGauge({
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay, duration: 0.4 }}
-      className="rounded-xl border border-white/10 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl flex flex-col items-center"
+      className="rounded-xl border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl flex flex-col items-center"
     >
       <div className="flex items-center gap-2 mb-4">
         <Icon className="h-5 w-5 text-[hsl(var(--muted-foreground))]" />
@@ -156,23 +158,22 @@ function EsgGauge({
 /* ------------------------------------------------------------------ */
 
 export default function EsgPage() {
-  const { portfolios, activePortfolioId, fetchPortfolios, setActivePortfolio } =
+  const { portfolios, activePortfolioId, hasLoadedPortfolios, setActivePortfolio } =
     usePortfolioStore();
   const [data, setData] = useState<EsgData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
-
-  useEffect(() => {
-    if (!activePortfolioId) fetchPortfolios();
-  }, [activePortfolioId, fetchPortfolios]);
 
   const loadEsg = useCallback(async (portfolioId: number) => {
     setLoading(true);
+    setError(null);
     try {
       const result = await api.get<EsgData>(`/esg/${portfolioId}`);
       setData(result);
-    } catch {
+    } catch (err) {
       setData(null);
+      setError(err instanceof Error ? err.message : "Failed to load ESG data");
     } finally {
       setLoading(false);
     }
@@ -238,8 +239,14 @@ export default function EsgPage() {
         </div>
       </div>
 
-      {/* ---- Loading ---- */}
-      {loading ? (
+      {/* ---- No portfolio / Loading / Error ---- */}
+      {!activePortfolioId && hasLoadedPortfolios ? (
+        <EmptyState
+          icon={Leaf}
+          title="No portfolio yet"
+          hint="Create a portfolio and add your first stock to see ESG scores."
+        />
+      ) : loading || !activePortfolioId ? (
         <div className="space-y-6">
           <div className="h-36 animate-pulse rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]" />
           <div className="grid gap-4 sm:grid-cols-3">
@@ -252,6 +259,8 @@ export default function EsgPage() {
           </div>
           <div className="h-64 animate-pulse rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]" />
         </div>
+      ) : error ? (
+        <ErrorState message={error} onRetry={() => loadEsg(activePortfolioId)} />
       ) : data ? (
         <>
           {/* ---- Portfolio Sustainability Score ---- */}
@@ -259,7 +268,7 @@ export default function EsgPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
-            className="rounded-xl border border-white/10 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl"
+            className="rounded-xl border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl"
           >
             <div className="flex items-center justify-between">
               <div>

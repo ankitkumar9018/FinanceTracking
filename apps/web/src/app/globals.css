@@ -89,6 +89,23 @@
   }
 }
 
+/* Live ticker marquee — content is duplicated, so -50% loops seamlessly */
+@keyframes ft-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.ft-marquee {
+  animation: ft-marquee var(--marquee-duration, 30s) linear infinite;
+}
+.ft-marquee:hover {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ft-marquee {
+    animation: none;
+  }
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

@@ -10,6 +10,8 @@ export default function LoginPage() {
   const login = useAuthStore((s) => s.login);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [totpCode, setTotpCode] = useState("");
+  const [requires2fa, setRequires2fa] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -18,7 +20,11 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      await login(email, password);
+      const result = await login(email, password, totpCode.trim() || undefined);
+      if (result.requires2fa) {
+        setRequires2fa(true);
+        return;
+      }
       router.push("/holdings");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Login failed");
@@ -64,7 +70,39 @@ export default function LoginPage() {
             className="flex h-10 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
             placeholder="••••••••"
           />
+          <div className="mt-1 text-right">
+            <Link
+              href="/forgot-password"
+              className="text-xs text-[hsl(var(--primary))] hover:underline"
+            >
+              Forgot password?
+            </Link>
+          </div>
         </div>
+
+        {requires2fa && (
+          <div>
+            <label htmlFor="totp" className="block text-sm font-medium mb-1">
+              Two-Factor Code
+            </label>
+            <input
+              id="totp"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              required
+              autoFocus
+              maxLength={6}
+              value={totpCode}
+              onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))}
+              className="flex h-10 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm font-mono tracking-widest focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+              placeholder="123456"
+            />
+            <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+              Enter the 6-digit code from your authenticator app.
+            </p>
+          </div>
+        )}
 
         {error && (
           <p className="text-sm text-[hsl(var(--destructive))]">{error}</p>

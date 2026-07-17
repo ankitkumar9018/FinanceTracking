@@ -6,7 +6,8 @@ import { api } from "@/lib/api-client";
 import { formatCurrency } from "@/lib/utils";
 import { ChevronLeft, ChevronRight, CalendarRange } from "lucide-react";
 import { motion } from "framer-motion";
-import toast from "react-hot-toast";
+import { EmptyState } from "@/components/shared/empty-state";
+import { ErrorState } from "@/components/shared/error-state";
 
 interface CalendarEvent {
   date: string; // YYYY-MM-DD
@@ -41,17 +42,14 @@ const EVENT_COLORS: Record<string, { dot: string; bg: string; label: string }> =
 };
 
 export default function SipCalendarPage() {
-  const { activePortfolioId, fetchPortfolios } = usePortfolioStore();
+  const { activePortfolioId, hasLoadedPortfolios } = usePortfolioStore();
   const now = new Date();
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [year, setYear] = useState(now.getFullYear());
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!activePortfolioId) fetchPortfolios();
-  }, [activePortfolioId, fetchPortfolios]);
 
   useEffect(() => {
     if (activePortfolioId) loadCalendar();
@@ -60,14 +58,15 @@ export default function SipCalendarPage() {
   async function loadCalendar() {
     if (!activePortfolioId) return;
     setLoading(true);
+    setError(null);
     try {
       const data = await api.get<CalendarData>(
         `/analytics/calendar/${activePortfolioId}?month=${month}&year=${year}`
       );
       setEvents(data.events || []);
-    } catch {
-      toast.error("Failed to load calendar data");
+    } catch (err) {
       setEvents([]);
+      setError(err instanceof Error ? err.message : "Failed to load calendar data");
     } finally {
       setLoading(false);
     }
@@ -173,8 +172,16 @@ export default function SipCalendarPage() {
       </div>
 
       {/* Calendar Grid */}
-      {loading ? (
+      {!activePortfolioId && hasLoadedPortfolios ? (
+        <EmptyState
+          icon={CalendarRange}
+          title="No portfolio yet"
+          hint="Create a portfolio and add your first stock to see SIP, dividend, and earnings dates."
+        />
+      ) : loading || !activePortfolioId ? (
         <div className="h-96 animate-pulse rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]" />
+      ) : error ? (
+        <ErrorState message={error} onRetry={loadCalendar} />
       ) : (
         <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden">
           {/* Day headers */}

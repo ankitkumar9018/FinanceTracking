@@ -20,13 +20,24 @@ export class WSConnection {
   }
 
   connect(): void {
-    if (this.ws?.readyState === WebSocket.OPEN) return;
-    getWsBaseAsync().then((wsBase) => this._doConnect(wsBase));
+    // Skip if a socket is already open OR still connecting — otherwise calling
+    // connect() during the async handshake would open a second socket.
+    const state = this.ws?.readyState;
+    if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) return;
+    this._resolveAndConnect();
   }
 
-  private _doConnect(wsBase?: string): void {
-    const base = wsBase || process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
-    this.ws = new WebSocket(this.buildUrl(base));
+  /** Resolve the WS base (dynamic in Tauri) on every (re)connect, then open. */
+  private _resolveAndConnect(): void {
+    getWsBaseAsync()
+      .then((wsBase) => this._doConnect(wsBase))
+      .catch(() => {
+        // Base resolution failed — degrade silently.
+      });
+  }
+
+  private _doConnect(wsBase: string): void {
+    this.ws = new WebSocket(this.buildUrl(wsBase));
 
     this.ws.onopen = () => {
       this.reconnectAttempts = 0;
@@ -50,7 +61,8 @@ export class WSConnection {
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
         this.reconnectTimeout = setTimeout(() => {
           this.reconnectAttempts++;
-          this._doConnect();
+          // Re-resolve the base each attempt so a dynamic Tauri port is picked up.
+          this._resolveAndConnect();
         }, delay);
       }
     };
