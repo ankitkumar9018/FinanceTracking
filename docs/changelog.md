@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [0.10.0] - 2026-07 (Tax Correctness, Planning & Discovery)
+
+### Added — Tax Correctness
+- **Per-lot FIFO capital-gains matching**: sales matched against buy lots FIFO, STCG/LTCG split per lot, idempotent recompute
+- **Indian LTCG grandfathering**: 31-Jan-2018 FMV used as the cost basis per FIFO lot (LTCG only)
+- **German Teilfreistellung** partial exemption: equity 30% / mixed 15% / real-estate 60%, driven by holding/fund `fund_type` (`PUT /tax/fund-type/{holding_id}`)
+- **German Vorabpauschale** advance-tax estimate: Basiszins table 2018–2025 (`GET /tax/vorabpauschale/{portfolio_id}`)
+- **Sparer-Pauschbetrag allowance tracker**: €1,000 single / €2,000 joint; Freibetrag netting honors joint filing + Teilfreistellung (`GET /tax/allowance`, `PUT /tax/settings`)
+- **Consolidated capital-gains tax report**: ITR-ready CSV + HTML export (`GET /tax/report/{financial_year}`)
+
+### Added — Auth & Security
+- **Forgot / reset password** flow: `PasswordReset` model, `POST /auth/forgot-password`, `POST /auth/reset-password`, plus `/forgot-password` and `/reset-password` pages
+- **Change password** endpoint (`POST /auth/change-password`)
+- **2FA/TOTP** now has a full setup / verify / disable UI
+- **Per-user notification destinations**: `users.phone` and `users.telegram_chat_id` used across email / Telegram / WhatsApp / SMS / in-app, plus an SMS toggle
+
+### Added — Real-Time
+- Live-price WebSocket client wired into the UI via the `use-price-stream` hook
+- In-app notification center in the top bar (bell)
+
+### Added — Analytics & Insights
+- **Concentration & diversification score** (HHI-based) — `GET /analytics/concentration/{portfolio_id}`
+- **Economic / macro calendar** — `GET /analytics/economic-calendar/{portfolio_id}` + Economic Calendar page
+
+### Added — Planning
+- **FIRE / retirement projection** (`GET /goals/fire`) and **SIP step-up projection** (`GET /goals/sip-projection`); Goals page reorganized into tabs
+
+### Added — Income
+- **Dividend income forecast** + yield-on-cost (`GET /dividends/forecast`)
+- **Real XIRR for mutual funds**
+
+### Added — Discovery
+- **Stock screener** over a curated liquid universe (`GET /market/screener`) + Screener page
+- **Corporate-actions detection & apply** (splits / bonuses) — `/corporate-actions/*` + Corporate Actions page
+- **Mutual-fund overlap X-ray** and **expense / fee analyzer** (`GET /mutual-funds/overlap`, `GET /mutual-funds/expense-analysis`)
+
+### Added — Multi-Currency
+- Optional **global display currency**: additive `?display_currency=` on portfolio summary and net worth, with a top-bar currency selector (existing response fields unchanged)
+
+### Added — UX
+- Create-portfolio modal in the top bar
+- Holdings stop-loss + custom columns; stock **Compare** page
+- AI insights panels (prediction / anomaly / sentiment)
+- Dashboard XIRR + benchmark cards; dividend & net-worth delete
+- Mobile drawer navigation, grouped sidebar, error / empty states
+- ~45 aria-labels, reduced-motion support, dynamic-imported charts, offline service worker
+- New sidebar entries: **Compare**, **Screener**, **Corporate Actions**, **Economic Calendar**
+
+### Fixed — Desktop
+- macOS backend-not-starting crash on "Application Support" paths (space encoded as `%20`)
+- Corrected build order (frontend staged into `backend/static`)
+- 120s startup wait with a self-healing loading page; `#ftport` hash for the dynamic port
+- Additive schema reconciliation keeps existing databases usable across upgrades
+
+---
+
 ## [0.9.1] - 2026-03 (Cross-Platform & Polish)
 
 ### Added
@@ -205,9 +261,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 | Metric | Count |
 |---|---|
-| API endpoints | 152 |
-| Backend tests passing | 245 |
-| Frontend routes | 32 |
+| REST API endpoints | 171 |
+| WebSocket channels | 2 |
+| Backend tests passing | 352 |
+| Frontend routes (`page.tsx`) | 38 (31 dashboard) |
+| Alembic migrations | 6 |
 | E2E tests | 32 |
-| SQLAlchemy models | 19 |
-| Sidebar nav items | 28 |
+| SQLAlchemy models | 21 |
+| Sidebar nav items | 32 |

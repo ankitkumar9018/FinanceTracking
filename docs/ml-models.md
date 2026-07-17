@@ -235,6 +235,10 @@ Confidence is derived from the test-set R², decaying for each step further into
 confidence_for_step_i = max(0.0, min(1.0, r_squared - (i * 0.05)))
 ```
 
+### UI
+
+The prediction endpoint (`GET /ai/prediction/{symbol}?exchange=...&days_ahead=5`) is surfaced in the web app through the **AI Insights** panel on the AI Assistant page (`apps/web/src/components/ai/insights-panel.tsx`), which renders the forecast as a mini line chart under a "Prediction" tab. The same collapsible panel also exposes the anomaly and sentiment endpoints (see below).
+
 ---
 
 ## 3. Anomaly Detection
@@ -286,6 +290,8 @@ When an anomaly is detected:
 2. Notification sent via configured channels
 3. Anomaly badge displayed on the holding in the dashboard
 4. Details available in the stock detail view
+
+The anomaly report (`GET /ai/anomalies/{symbol}?exchange=...&days=90`) is also viewable in the web app via the **Anomalies** tab of the AI Insights panel on the AI Assistant page.
 
 ---
 
@@ -341,6 +347,10 @@ _sentiment_pipeline = pipeline(
 ```
 
 `analyze_sentiment(symbol, max_news=10)` returns a `SentimentResult` dataclass with the overall sentiment, score, the scored news items, and `analysis_method` (`"finbert"`, `"keyword"`, or `"none"` when no news was found).
+
+### UI
+
+Sentiment (`GET /ai/sentiment/{symbol}`) is shown in the **Sentiment** tab of the AI Insights panel on the AI Assistant page, alongside the prediction and anomaly tabs.
 
 ### Resource Requirements
 

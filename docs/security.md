@@ -60,16 +60,28 @@ def create_refresh_token(user_id: str) -> str:
 
 ### Two-Factor Authentication (2FA)
 
-Optional TOTP-based 2FA using RFC 6238.
+Optional TOTP-based 2FA using RFC 6238, with a full setup/disable UI in Settings (`components/settings/security-section.tsx`).
 
 **Setup flow:**
-1. User requests 2FA setup from Settings
-2. Server generates a TOTP secret and returns it as a QR code (scannable by Google Authenticator, Authy, etc.)
-3. User scans the QR code and enters the current 6-digit code to confirm
-4. Server stores the TOTP secret (encrypted) and enables 2FA
+1. User requests 2FA setup from Settings (`POST /auth/2fa/setup`)
+2. Server generates a TOTP secret and returns it plus a provisioning URI (rendered as a QR code, scannable by Google Authenticator, Authy, etc.). The secret is **not** persisted at this step.
+3. User scans the QR code and enters the current 6-digit code to confirm (`POST /auth/2fa/verify`)
+4. Only on a valid code does the server persist the TOTP secret (Fernet-encrypted) and enable 2FA — deferring persistence until verification prevents lock-out from a mis-configured authenticator
 5. On subsequent logins, user must enter their password AND the current TOTP code
 
+**Disable flow:** the user disables 2FA from Settings (`POST /auth/2fa/disable`), which requires a valid current TOTP code and then clears the stored secret. Re-enabling an already-active 2FA is refused until it is disabled first, so a leaked access token alone cannot silently swap in an attacker-controlled second factor.
+
 Backup codes are not implemented — if the user loses access to their authenticator app, 2FA must be reset through direct database access.
+
+### Password Management
+
+- **Change password** (`POST /auth/change-password`) — an authenticated user must supply their current password; on success the bcrypt hash is replaced and the change is audit-logged.
+- **Forgot / reset password** — self-service reset that never reveals whether an account exists:
+  1. `POST /auth/forgot-password` always returns the same generic 200 response (no email enumeration). If the account exists, a random URL-safe token is generated, and only its **SHA-256 hash** is stored in the `password_resets` table (the raw token is only ever emailed), with a **1-hour expiry**.
+  2. The reset link/token is emailed via the notification service on a best-effort basis — if email delivery is unconfigured the endpoint still returns the same generic response.
+  3. `POST /auth/reset-password` looks the token up by its SHA-256 hash and rejects it if it is already used or expired. On success the password is updated, the token is marked used, and all of the user's other outstanding reset tokens are invalidated — so each token works **exactly once**.
+
+Both reset endpoints are rate-limited (forgot-password 3/min, reset-password 5/min).
 
 ---
 
@@ -170,6 +182,8 @@ async def refresh(request: Request): ...
 | Register | 5 requests/minute |
 | Login | 10 requests/minute |
 | Token Refresh | 20 requests/minute |
+| Forgot Password | 3 requests/minute |
+| Reset Password | 5 requests/minute |
 
 ### Input Validation
 
@@ -227,12 +241,16 @@ result = await db.execute(
 | Data Category | Where | Encrypted? |
 |---|---|---|
 | Email, password hash | `users` table | Password is hashed (bcrypt) |
+| Notification destinations (phone, Telegram chat ID) | `users.phone`, `users.telegram_chat_id` | No (used to deliver alerts) |
+| Password-reset tokens | `password_resets` table | Stored as a SHA-256 hash, never the raw token |
 | Portfolio holdings | `holdings` table | No (needed for queries) |
 | Transaction history | `transactions` table | No (needed for calculations) |
 | Broker API credentials | `broker_connections` table | Yes (Fernet) |
 | Notification config | `app_settings` table | API keys are encrypted |
 | Chat history | `chat_sessions` table | No |
 | Price data | `price_history` table | No (public market data) |
+
+**Per-user notification destinations:** each user can store their own delivery targets — an E.164 `users.phone` (for WhatsApp/SMS) and `users.telegram_chat_id` (for Telegram) — so alerts are dispatched to the individual user rather than only to a single server-wide Telegram/phone configured in `.env`. These are optional; when a destination is unset the corresponding channel is skipped for that user.
 
 ### What Is NOT Stored
 

@@ -225,9 +225,12 @@ backend/tests/
 +-- test_holdings.py         # Holdings and transactions tests
 +-- test_market_data.py      # Market data service tests
 +-- test_alerts.py           # Alert engine tests
-+-- test_tax.py              # Tax calculation tests
++-- test_fifo_tax.py         # Per-lot FIFO capital-gains matching tests
++-- test_tax_advanced.py     # LTCG grandfathering, Teilfreistellung, Vorabpauschale, allowance
 +-- test_brokers/            # Broker integration tests (mocked)
 ```
+
+The suite currently has **352 passing tests** (plus 1 skipped). Run `uv run pytest` from the `backend/` directory — running bare `pytest` from the repo root can pick up the wrong environment.
 
 **Test conventions**:
 - Test files: `test_*.py`

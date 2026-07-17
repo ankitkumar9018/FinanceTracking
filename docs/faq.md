@@ -100,7 +100,7 @@ No. Ollama is optional. Without it, the AI chat assistant and AI-powered insight
 
 ### 12. Can I import data from my existing Excel spreadsheet?
 
-Yes. The import feature accepts .xlsx files and automatically maps columns. Your spreadsheet should have columns for stock name, purchase date, quantity, and price. Range levels (base, mid ranges, top) and sale data are optional. The app shows a preview of the parsed data before importing, so you can verify everything is correct. You can re-import updated spreadsheets; the app merges new data with existing holdings.
+Yes. The import feature accepts .xlsx files and automatically maps columns. Your spreadsheet should have columns for stock name, purchase date, quantity, and price. Range levels (base, mid ranges, top) and sale data are optional. The file is parsed and imported in one step, and a summary shows how many rows were parsed and how many holdings and transactions were created. You can re-import updated spreadsheets; the app merges new data with existing holdings.
 
 ---
 
@@ -215,6 +215,36 @@ The SQLite database is stored in your OS app data directory:
 | Linux | `~/.local/share/com.financetracker.app/finance.db` |
 
 You can back up this file at any time by copying it.
+
+---
+
+### 24. How do I download a tax report for filing?
+
+Go to the **Reports** page and use the **Capital Gains Tax Report** card. Pick the financial year and jurisdiction (India or Germany), then download it as **CSV** or **HTML**. It is a consolidated, ITR-ready statement of your capital gains for that year -- per-transaction gains plus STCG/LTCG, tax, and exemption totals. Indian long-term gains use FIFO lot matching and the 31-January-2018 grandfathered cost basis; German figures apply Teilfreistellung and the Sparer-Pauschbetrag allowance automatically. See [tax-guide.md](tax-guide.md) for details.
+
+---
+
+### 25. What is the Stock Screener and what does it search?
+
+The Screener (in the sidebar) filters a **curated universe of liquid stocks** -- major NSE and XETRA names -- by fundamentals and technicals. It is not a full-market scanner. Pick an exchange and set any combination of filters (market cap, P/E, dividend yield, price, RSI, 52-week position, day change, sector), then Run Screen to get a sortable table of matches. You can also add extra symbols to include in the scan.
+
+---
+
+### 26. How are stock splits and bonus issues handled?
+
+Open the **Corporate Actions** page and click **Detect now**. The app scans your holdings against market data for splits and bonus issues and lists anything it finds under Pending review. Click **Apply** to adjust the holding automatically (quantity multiplied and average price divided by the ratio), or **Dismiss** to ignore it. Applied and dismissed actions are kept in a History list.
+
+---
+
+### 27. Can I view my totals in a different currency?
+
+Yes. The **display-currency** dropdown in the top bar (INR / EUR / USD) converts the totals shown across the dashboard and Net Worth pages for viewing, using live forex rates. It is a viewing preference only -- it does not change how your holdings are stored or your account's base currency (set that in Settings).
+
+---
+
+### 28. I forgot my password -- how do I reset it?
+
+On the login page, click **Forgot password?**, enter your account email, and click **Send reset link**. Open the link from the email you receive and choose a new password (at least 8 characters). For your security, the app always responds with "if that email exists, a reset link was sent," so it never reveals whether an email is registered. If you have Two-Factor Authentication enabled, you will still enter your authenticator code the next time you log in.
 
 ---
 

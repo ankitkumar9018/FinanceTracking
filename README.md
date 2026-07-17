@@ -35,9 +35,9 @@ A highly visual, cross-platform portfolio tracking application designed for non-
 - **Auto-Sync** — Holdings, positions, and transactions sync automatically
 
 ### Tax Tracking
-- **India** — STCG/LTCG classification, tax harvesting suggestions
-- **Germany** — Abgeltungssteuer, Vorabpauschale, Freistellungsauftrag tracking, Anlage KAP support
-- **Multi-Currency** — INR + EUR with forex rates via yfinance
+- **India** — Per-lot FIFO STCG/LTCG matching, LTCG grandfathering (31-Jan-2018 FMV cost basis), tax harvesting suggestions, consolidated ITR-ready capital-gains report (CSV/HTML)
+- **Germany** — Abgeltungssteuer, Teilfreistellung partial exemption (equity/mixed/real-estate), Vorabpauschale advance-tax estimate, Sparer-Pauschbetrag (Freibetrag) allowance tracking, Anlage KAP support
+- **Multi-Currency** — INR + EUR with forex rates via yfinance, plus an optional global display currency
 
 ### AI Assistant
 - **Natural Language Queries** — Ask "Which stocks are underperforming?" or "How much LTCG tax will I owe?"
@@ -46,14 +46,19 @@ A highly visual, cross-platform portfolio tracking application designed for non-
 - **Graceful Degradation** — App works 100% without AI; AI features are optional enhancements
 
 ### Additional Features
-- **Mutual Fund Tracking** — CSV bulk import, AMFI NAV data via mfapi.in
-- **Dividend Tracking** — DRIP support, dividend calendar, tax implications
-- **Goal-Based Investing** — Set financial goals, track progress with visual gauges
-- **Portfolio Analytics** — XIRR, Sharpe Ratio, Sortino Ratio, VaR, Max Drawdown
+- **Mutual Fund Tracking** — CSV bulk import, AMFI NAV data via mfapi.in, real XIRR, overlap X-ray, expense/fee analyzer
+- **Dividend Tracking** — DRIP support, dividend calendar, income forecast with yield-on-cost, tax implications
+- **Goal-Based Investing** — Set financial goals, FIRE/retirement projection, SIP step-up projection, visual progress gauges
+- **Portfolio Analytics** — XIRR, Sharpe Ratio, Sortino Ratio, VaR, Max Drawdown, concentration & diversification score
+- **Stock Screener** — Filter a curated liquid universe by price, RSI, and other metrics
+- **Stock Comparison** — Compare stocks side by side on the Compare page
+- **Corporate Actions** — Auto-detect and apply stock splits and bonus issues
+- **Economic Calendar** — Upcoming macro events relevant to your portfolio
 - **Backtesting** — Test trading strategies on historical data
 - **News Sentiment** — AI-powered sentiment analysis for your holdings
 - **Watchlist** — Track stocks you're interested in with the same alert system
 - **Voice Queries** — Ask about your portfolio using voice (browser Speech API)
+- **Account Security** — Forgot/reset password, change password, optional 2FA (TOTP)
 
 ---
 

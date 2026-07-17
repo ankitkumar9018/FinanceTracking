@@ -5,6 +5,29 @@ A highly visual, cross-platform personal investment tracking application for non
 
 ---
 
+## Implementation Status (Updated 2026-07)
+
+All six phases below are complete. The following previously-roadmapped / deferred items are now **DONE**:
+
+- ✅ **Per-lot FIFO capital-gains matching** (STCG/LTCG split per lot, idempotent recompute)
+- ✅ **Indian LTCG grandfathering** (31-Jan-2018 FMV cost basis, per FIFO lot)
+- ✅ **German Teilfreistellung** partial exemption (equity 30% / mixed 15% / real-estate 60%)
+- ✅ **German Vorabpauschale** advance-tax estimate (Basiszins table 2018–2025)
+- ✅ **Sparer-Pauschbetrag / Freibetrag allowance tracker** (€1,000 single / €2,000 joint, joint-filing aware)
+- ✅ **Corporate actions** — split/bonus detection and apply
+- ✅ **Mutual-fund overlap X-ray** + expense/fee analyzer + real XIRR
+- ✅ **Stock screener** over a curated liquid universe
+- ✅ **Economic / macro calendar**
+- ✅ **Optional global display currency** (additive `?display_currency=`)
+- ✅ **FIRE / retirement projection** + SIP step-up projection
+- ✅ **Dividend income forecast** + yield-on-cost
+- ✅ **Concentration & diversification score** (HHI-based)
+- ✅ **Forgot/reset password** flow + change password + 2FA UI
+
+Current footprint: **171 REST endpoints + 2 WebSocket channels**, **21 SQLAlchemy models**, **6 Alembic migrations**, **38 frontend `page.tsx` routes** (31 dashboard), **32 sidebar nav items**, **352 backend tests passing**.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology | Why |
@@ -780,35 +803,35 @@ Service Status:
 Beyond the PDF requirements, these concrete features enhance the user experience:
 
 ### Portfolio Analytics
-1. **XIRR Calculator** — True returns accounting for cash flows (SIP, lump sum, partial sales)
-2. **Benchmark Comparison** — Compare portfolio performance vs Nifty 50, Sensex, DAX
-3. **Sector Allocation** — Auto-categorize holdings by sector, show pie/sunburst chart
-4. **Concentration Risk** — Warn if >20% of portfolio is in a single stock
-5. **52-Week High/Low Tracking** — Show how close each stock is to its yearly extremes
+1. **XIRR Calculator** ✅ — True returns accounting for cash flows (SIP, lump sum, partial sales)
+2. **Benchmark Comparison** ✅ — Compare portfolio performance vs Nifty 50, Sensex, DAX
+3. **Sector Allocation** ✅ — Auto-categorize holdings by sector, show pie/sunburst chart
+4. **Concentration Risk** ✅ — HHI-based concentration & diversification score; warns if >20% of portfolio is in a single stock
+5. **52-Week High/Low Tracking** ✅ — Show how close each stock is to its yearly extremes
 
 ### Income & Cash Flow
-6. **Dividend Calendar** — Heatmap showing expected dividend dates and amounts
-7. **SIP Tracker** — Track active SIPs, upcoming debits, SIP returns
+6. **Dividend Calendar** ✅ — Heatmap showing expected dividend dates and amounts
+7. **SIP Tracker** ✅ — Track active SIPs, upcoming debits, SIP returns
 8. **Cash Flow Timeline** — Visualize money in/out over time
 
 ### Risk & Protection
-9. **Stop-Loss Tracker** — Set stop-loss levels, get alerts when approaching
+9. **Stop-Loss Tracker** ✅ — Set stop-loss levels, get alerts when approaching
 10. **Portfolio Insurance Calculator** — Suggest hedging with index puts (informational only)
 11. **Emergency Fund Indicator** — Track if user has adequate liquid assets
 
 ### Tax Optimization
-12. **Tax Harvesting Assistant** — "You can save ₹X by selling these losing stocks before March 31"
+12. **Tax Harvesting Assistant** ✅ — "You can save ₹X by selling these losing stocks before March 31"
 13. **Holding Period Timer** — "Stock X becomes LTCG eligible in 45 days — hold to save ₹Y in tax"
-14. **Annual Tax Summary** — One-click downloadable tax statement for CA/tax filing
+14. **Annual Tax Summary** ✅ — One-click downloadable tax statement for CA/tax filing
 
 ### Comparison & Research
-15. **Stock Comparison Tool** — Compare 2-3 stocks side by side (price, RSI, PE, fundamentals)
+15. **Stock Comparison Tool** ✅ — Compare 2-3 stocks side by side (price, RSI, PE, fundamentals)
 16. **Peer Comparison** — Compare stock performance within its sector
-17. **IPO Tracker** — Track upcoming and recent IPOs with listing performance
+17. **IPO Tracker** ✅ — Track upcoming and recent IPOs with listing performance
 
 ### Export & Reports
-18. **Monthly Portfolio Report** — Auto-generated PDF with performance summary, top movers, alerts triggered
-19. **Shareable Portfolio Snapshot** — Generate a link to share portfolio performance (anonymized)
+18. **Monthly Portfolio Report** ✅ — Auto-generated PDF with performance summary, top movers, alerts triggered
+19. **Shareable Portfolio Snapshot** ✅ — Generate a link to share portfolio performance (anonymized)
 
 ---
 
@@ -1175,43 +1198,46 @@ echo "   Docs:    http://localhost:8000/docs"
 
 **Goal**: Cross-border tax tracking, multi-currency support, mutual fund & dividend features.
 
-#### 4.1 Indian Tax Engine
+#### 4.1 Indian Tax Engine ✅
 - **Files**: `app/services/tax_service.py`, `app/api/v1/tax.py`
-- Auto-classify transactions as STCG (<12 months) or LTCG (>12 months)
+- Per-lot **FIFO** matching of sales against buy lots; auto-classify each lot as STCG (<12 months) or LTCG (>12 months)
+- **LTCG grandfathering**: 31-Jan-2018 FMV used as cost basis per FIFO lot (LTCG only)
+- Consolidated ITR-ready capital-gains report (CSV/HTML) via `GET /tax/report/{financial_year}`
 - Calculate tax: STCG @20%, LTCG @12.5% (above ₹1.25 lakh exemption, FY 2025-26 rates)
 - Dividend tax tracking (TDS @10% above ₹5000)
 - Tax harvesting suggestions: "Sell X shares of Y to utilize LTCG exemption"
 - Generate tax report for ITR filing (PDF/Excel)
 
-#### 4.2 German Tax Engine
+#### 4.2 German Tax Engine ✅
 - **Files**: `app/services/tax_service.py` (extended)
 - Abgeltungssteuer: 25% + 5.5% solidarity surcharge = 26.375%
-- Vorabpauschale tracking for accumulating ETFs
-- Freistellungsauftrag (€1000 single / €2000 joint exemption) tracking
+- **Teilfreistellung** partial exemption (equity 30% / mixed 15% / real-estate 60%) driven by holding/fund `fund_type`
+- Vorabpauschale advance-tax estimate for accumulating ETFs (Basiszins table 2018–2025) via `GET /tax/vorabpauschale/{portfolio_id}`
+- Sparer-Pauschbetrag / Freistellungsauftrag (€1000 single / €2000 joint exemption) allowance tracking, joint-filing aware
 - Church tax toggle
 - Support for Anlage KAP generation
 
-#### 4.3 Multi-Currency Support
+#### 4.3 Multi-Currency Support ✅
 - **Files**: `app/services/forex_service.py`, `app/models/forex_rates.py`
-- Real-time INR/EUR (and other) rates via free API (exchangerate-api or ECB)
-- Portfolio value displayed in user's preferred currency
+- Real-time INR/EUR (and other) rates via free API (exchangerate-api or ECB) + historical rates
+- Portfolio value displayed in user's preferred currency; optional global display currency (additive `?display_currency=` on portfolio summary + net worth, top-bar selector)
 - Transaction recording in original currency
 - Forex gain/loss tracking for tax purposes
 - Currency toggle in UI (see portfolio in INR or EUR)
 
-#### 4.4 Mutual Fund Integration
+#### 4.4 Mutual Fund Integration ✅
 - **Files**: `app/api/v1/mutual_funds.py`, `app/services/mutual_fund_service.py`
 - Import via CAS PDF (using `casparser` library)
 - NAV data from AMFI/MFapi.in
 - Track SIP investments
 - Show fund performance vs benchmark
-- XIRR calculation for returns
+- Real XIRR calculation for returns; overlap X-ray (`GET /mutual-funds/overlap`) + expense/fee analyzer (`GET /mutual-funds/expense-analysis`)
 
-#### 4.5 Dividend Tracking
+#### 4.5 Dividend Tracking ✅
 - **Files**: `app/models/dividend.py`, `app/services/dividend_service.py`
 - Record dividends (auto-fetch from broker if connected)
 - DRIP tracking: reinvested shares adjust average cost
-- Dividend yield calculation
+- Dividend yield calculation; income forecast + yield-on-cost (`GET /dividends/forecast`)
 - Dividend calendar view
 - Tax implications shown per dividend
 
@@ -1353,11 +1379,12 @@ echo "   Docs:    http://localhost:8000/docs"
 - Visual efficient frontier chart
 - "One-click rebalance" suggestion (not auto-executing)
 
-#### 6.4 Goal-Based Tracking
+#### 6.4 Goal-Based Tracking ✅
 - **Files**: `app/api/v1/goals.py`, web components
 - Create goals: name, target amount, target date, category
 - Link portfolios/holdings to goals
 - Calculate: "You need ₹X/month SIP to reach goal"
+- FIRE / retirement projection (`GET /goals/fire`) + SIP step-up projection (`GET /goals/sip-projection`)
 - Animated radial progress gauge per goal
 - Milestone celebrations (confetti animation at 25%, 50%, 75%, 100%)
 

@@ -14,21 +14,26 @@ This guide walks you through everything you need to know to use FinanceTracker e
 4. [Understanding the Dashboard](#understanding-the-dashboard)
 5. [Understanding Colors and Alerts](#understanding-colors-and-alerts)
 6. [Reading Charts](#reading-charts)
-7. [Setting Up Notifications](#setting-up-notifications)
-8. [Connecting Your Broker](#connecting-your-broker)
-9. [Using the AI Assistant](#using-the-ai-assistant)
-10. [Tax Features](#tax-features)
-11. [Goal-Based Investing](#goal-based-investing)
-12. [Mutual Funds and Dividends](#mutual-funds-and-dividends)
-13. [Watchlist](#watchlist)
-14. [Net Worth Tracking](#net-worth-tracking)
-15. [ESG Scoring](#esg-scoring)
-16. [What-If Simulator](#what-if-simulator)
-17. [Earnings Calendar](#earnings-calendar)
-18. [Market Heatmap](#market-heatmap)
-19. [Futures & Options (F&O)](#futures--options-fo)
-20. [SIP Calendar](#sip-calendar)
-21. [Settings and Configuration](#settings-and-configuration)
+7. [Comparing Stocks](#comparing-stocks)
+8. [Stock Screener](#stock-screener)
+9. [Setting Up Notifications](#setting-up-notifications)
+10. [Connecting Your Broker](#connecting-your-broker)
+11. [Using the AI Assistant](#using-the-ai-assistant)
+12. [Risk Dashboard](#risk-dashboard)
+13. [Tax Features](#tax-features)
+14. [Corporate Actions](#corporate-actions)
+15. [Goal-Based Investing](#goal-based-investing)
+16. [Mutual Funds and Dividends](#mutual-funds-and-dividends)
+17. [Watchlist](#watchlist)
+18. [Net Worth Tracking](#net-worth-tracking)
+19. [ESG Scoring](#esg-scoring)
+20. [What-If Simulator](#what-if-simulator)
+21. [Earnings Calendar](#earnings-calendar)
+22. [Economic Calendar](#economic-calendar)
+23. [Market Heatmap](#market-heatmap)
+24. [Futures & Options (F&O)](#futures--options-fo)
+25. [SIP Calendar](#sip-calendar)
+26. [Settings and Configuration](#settings-and-configuration)
 
 ---
 
@@ -53,6 +58,20 @@ After your first login, you will see a guided setup wizard that walks you throug
 5. **Connect a Broker** -- Link your Zerodha, ICICI Direct, or other broker account (optional)
 
 You can skip any step and come back to it later from the Settings page.
+
+### Forgot Your Password?
+
+If you cannot log in:
+
+1. On the login page, click **Forgot password?**
+2. Enter your account email and click **Send reset link**
+3. Open the reset link from the email you receive
+4. Choose a new password (at least 8 characters) and confirm it
+5. Log in with your new password
+
+For your security, the app always responds with "if that email exists, a reset link was sent" -- it never reveals whether an email is registered.
+
+If you have Two-Factor Authentication enabled, you will also be asked for your 6-digit authenticator code when logging in.
 
 ---
 
@@ -131,6 +150,8 @@ You can click directly on any range value in the table (base level, mid ranges, 
 
 The **Edit Holding** dialog (on the Holdings page) also has a **Target %** field -- set a target allocation percentage there and the Alerts page will warn you when the holding drifts away from it.
 
+The same dialog has a **Stop-Loss** field. Set a price and the holding shows a stop-loss pill in the table that turns red when the current price falls to or below it. Clear the field to remove the stop-loss.
+
 ---
 
 ## Understanding the Dashboard
@@ -147,11 +168,13 @@ At the top, you see cards showing:
 
 Below these, **XIRR** and **Benchmark** cards show your portfolio's annualized return (XIRR) and how it compares against an index such as NIFTY50.
 
-These numbers update in real-time with animated transitions.
+These numbers update with animated transitions. Where live streaming is available, prices update automatically over a WebSocket connection; otherwise they refresh on a short polling interval. Use the **refresh** button in the top bar to fetch the latest prices on demand.
 
 ### Switching and Creating Portfolios
 
-The portfolio selector in the top bar lets you switch between portfolios. Click the **+** button next to it to create another portfolio (e.g., separate Indian and German portfolios) without leaving the page.
+The portfolio selector in the top bar lets you switch between portfolios. Click the **New portfolio** button (the **+**) next to it to create another portfolio (e.g., separate Indian and German portfolios) without leaving the page -- give it a name and currency, and optionally mark it as your default.
+
+Next to the selector is a **display-currency** dropdown (INR / EUR / USD). Pick one to convert the totals shown across the dashboard and Net Worth pages into that currency for viewing. This is a viewing preference only -- it does not change how your holdings are stored or your account's base currency.
 
 ### Holdings Table (Center)
 
@@ -259,6 +282,33 @@ If you want more analysis, you can toggle these overlays on the chart:
 
 ---
 
+## Comparing Stocks
+
+The Compare page puts 2-3 stocks side by side.
+
+1. Go to **Compare** from the sidebar
+2. Enter 2 or 3 symbols and choose each stock's exchange (NSE, BSE, or XETRA)
+3. Pick a period (30 days, 90 days, 180 days, or 1 year)
+4. Click **Compare**
+
+You get a metrics table (current price, day change, 52-week high/low, P/E ratio, market cap, volume, dividend yield, and beta) plus a normalized price chart where each stock's price is rebased to 100 at the start of the period, for an apples-to-apples comparison.
+
+---
+
+## Stock Screener
+
+The Screener filters a curated universe of liquid stocks (major NSE and XETRA names) by fundamentals and technicals. It screens this hand-picked list, not the entire market.
+
+1. Go to **Screener** from the sidebar
+2. Choose an exchange (NSE or XETRA) and, optionally, a sector
+3. Set any combination of min/max filters: market cap, P/E ratio, dividend yield, price, RSI (14), 52-week position, and day change
+4. Optionally add extra symbols to include in the scan
+5. Click **Run Screen**
+
+Results appear in a sortable table -- click any column header to sort. A summary line shows how many stocks were scanned and how many matched your filters.
+
+---
+
 ## Setting Up Notifications
 
 FinanceTracker can alert you through multiple channels when your stocks need attention.
@@ -287,6 +337,10 @@ FinanceTracker can alert you through multiple channels when your stocks need att
 ### Desktop Push Notifications
 
 Enable from Settings -- these work in both the browser and the desktop app. No external service needed.
+
+### In-App Notification Center
+
+The bell icon in the top bar is your in-app notification center. It lists your recently triggered alerts and shows an unread badge counting the alerts you have not looked at yet. Open the panel to read them -- opening it marks everything as seen and clears the badge.
 
 ### Alert Routing
 
@@ -347,9 +401,42 @@ By default, the AI runs locally using Ollama (free, private, no internet needed)
 
 Configure these in **Settings** then **AI Assistant**.
 
+### Market Insights
+
+Click **Insights** in the AI Assistant to open the insights panel. Enter a symbol and switch between three tabs:
+
+- **Prediction** -- a short-term price forecast (next few days) with a mini chart
+- **Anomalies** -- unusual price/volume days flagged over the recent period
+- **Sentiment** -- an overall bullish, bearish, or neutral read from recent news
+
+These use the built-in ML models and, like the chat, degrade gracefully if a model or data source is unavailable.
+
 ### If AI Is Offline
 
 If no AI provider is available, you will see an "AI assistant offline" message. This does not affect any other part of the app -- everything else works normally.
+
+---
+
+## Risk Dashboard
+
+Go to **Risk** from the sidebar to see risk metrics for the selected portfolio.
+
+### Risk Metrics
+
+Colour-coded summary cards show:
+
+- **Sharpe Ratio** and **Sortino Ratio** -- risk-adjusted return (higher is better)
+- **Max Drawdown** -- the largest peak-to-trough decline
+- **VaR (95%)** -- the maximum expected daily loss at 95% confidence
+- **Volatility** -- annualized standard deviation
+
+### Diversification Score
+
+A diversification card grades how well spread out your portfolio is, based on how much weight sits in single stocks and in individual sectors (a concentration measure). It flags any names or sectors that exceed the concentration thresholds.
+
+### Per-Holding Risk
+
+A table breaks down each holding's beta, correlation, volatility, weight, and contribution to your overall portfolio risk.
 
 ---
 
@@ -361,20 +448,47 @@ FinanceTracker automatically classifies your gains:
 - **STCG (Short-Term Capital Gains)**: Stocks held less than 12 months, taxed at 20%
 - **LTCG (Long-Term Capital Gains)**: Stocks held over 12 months, taxed at 12.5% (amounts above 1.25 lakh are exempt per FY)
 
+Gains are matched lot by lot on a **FIFO** (first-in, first-out) basis, and long-term gains apply the **31-January-2018 grandfathered cost basis** where it results in a lower taxable gain.
+
 ### German Tax Tracking
 
 - **Abgeltungssteuer**: 26.375% flat tax on capital gains
-- **Freistellungsauftrag**: 1,000 EUR annual exemption (2,000 EUR for couples)
-- **Vorabpauschale**: Pre-tax on accumulating ETFs
+- **Freistellungsauftrag / Sparer-Pauschbetrag**: 1,000 EUR annual exemption (2,000 EUR for couples filing jointly)
+- **Teilfreistellung**: partial exemption for fund holdings (equity, mixed, or real-estate funds), applied automatically once you set a **fund type** on a holding
+- **Vorabpauschale**: advance lump-sum tax on accumulating funds
+
+### German Advanced Tax
+
+On the Tax page, switch to the **Germany** tab to see two extra panels:
+- **Sparer-Pauschbetrag** -- a progress bar showing how much of your annual tax-free allowance is used, with a **Single / Joint** toggle that adjusts the allowance
+- **Estimated Vorabpauschale** -- an estimate of the advance lump-sum tax across your German fund holdings (set a fund type on your XETRA holdings to see it)
 
 ### Tax Dashboard
 
 Go to **Tax** in the sidebar to see:
+- India / Germany tabs and a financial-year selector
 - Year-wise summary of gains and losses
 - STCG vs LTCG breakdown
 - Tax harvesting suggestions ("sell these losing stocks to save on tax")
 
+### Capital Gains Tax Report
+
+From the **Reports** page you can download a consolidated, ITR-ready **Capital Gains Tax Report** for a financial year -- per-transaction gains plus STCG/LTCG, tax, and exemption totals. Pick the financial year and jurisdiction (India or Germany) and download it as **CSV** or **HTML**.
+
 Tax records can also be bulk-imported/exported as CSV from the Import and Reports pages.
+
+---
+
+## Corporate Actions
+
+The Corporate Actions page detects stock splits and bonus issues on your holdings and adjusts them for you.
+
+1. Go to **Corporate Actions** from the sidebar
+2. Click **Detect now** to scan your holdings against market data
+3. Detected actions appear under **Pending review** with the split/bonus ratio and ex-date
+4. Click **Apply** to adjust the holding (quantity is multiplied and average price divided by the ratio), or **Dismiss** to ignore it
+
+Applied and dismissed actions move to the **History** list, so you always have a record of what changed.
 
 ---
 
@@ -402,6 +516,13 @@ Each goal shows:
 
 When you hit 25%, 50%, 75%, and 100% of your goal, you see a celebration animation.
 
+### Planning Calculators
+
+Below your goals are two planning calculators:
+
+- **FIRE / Retirement** -- enter your current net worth (auto-filled from Net Worth), monthly contribution, expected annual return, annual retirement expenses, withdrawal rate, and an optional annual step-up. It projects your **FIRE number** (the corpus that covers your expenses), how many years until you reach it, and a year-by-year corpus table.
+- **SIP Calculator** -- compare your final corpus **with vs. without** an annual step-up, so you can see how much a rising SIP adds over time.
+
 ---
 
 ## Mutual Funds and Dividends
@@ -410,7 +531,11 @@ When you hit 25%, 50%, 75%, and 100% of your goal, you see a celebration animati
 
 - Add mutual fund holdings manually or bulk-import them from a CSV file (a template is available on the Import page)
 - NAV (Net Asset Value) can be refreshed from mfapi.in
-- XIRR for mutual funds is not calculated yet (shown as a placeholder)
+- **XIRR** (money-weighted annualized return) is calculated across your funds and shown in the summary
+- **Overlap X-Ray** -- shows how much your funds share the same underlying stocks (look-through), with a heatmap and a list of the top common holdings
+- **Fee Analyzer** -- shows your weighted expense ratio and the projected fee drag over 5, 10, and 20 years, and flags high-fee funds
+
+The Overlap X-Ray and Fee Analyzer are best-effort and depend on the availability of fund constituent and expense data; each panel notes how many of your funds it could cover.
 
 ### Dividends
 
@@ -418,6 +543,7 @@ When you hit 25%, 50%, 75%, and 100% of your goal, you see a celebration animati
 - Track if dividends were reinvested (DRIP)
 - Dividend calendar shows monthly dividend totals
 - Delete a dividend record with the trash button on its row
+- **Forward Income forecast** -- projects your dividend income for the next 12 months, with an estimated annual total, forward yield, and **yield on cost**, plus a per-holding breakdown. Forecasts are best-effort estimates based on dividend history and rates.
 
 ---
 
@@ -494,6 +620,17 @@ Stay on top of upcoming earnings announcements.
 
 ---
 
+## Economic Calendar
+
+The Economic Calendar gathers upcoming catalysts for the selected portfolio into a single chronological agenda.
+
+1. Go to **Economic Calendar** from the sidebar
+2. Events are grouped by date and tagged as **Earnings**, **Ex-Dividend**, or **Macro** (each with a region flag)
+3. Use the filter pills at the top to show only one event type
+4. Macro events show an importance indicator (low, medium, or high)
+
+---
+
 ## Market Heatmap
 
 A visual treemap of market sectors showing relative performance.
@@ -532,9 +669,11 @@ View all your recurring investments (SIPs), dividends, and earnings in one calen
 ### Display Settings
 
 - **Theme**: Dark, Light, or System (follows your OS)
-- **Currency**: INR, EUR, or USD
+- **Currency**: INR, EUR, or USD -- your account's base currency
 - **Table Density**: Compact, Comfortable, or Spacious
 - **Default Chart Period**: 7 days, 30 days, 90 days, or 1 year
+
+For quick viewing in a different currency without changing your base currency, use the **display-currency** dropdown in the top bar (see [Understanding the Dashboard](#understanding-the-dashboard)).
 
 ### Custom Columns
 

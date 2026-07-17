@@ -403,12 +403,23 @@ uv run alembic downgrade -1
 
 ### Production Migration
 
-Migrations run automatically on container startup (`alembic upgrade head`). For zero-downtime deployments:
+Migrations run automatically on container startup (`alembic upgrade head`). There are currently **6 migrations**, with head at `d2e3f4a5b6c7`. The two most recent are:
+
+- `c1f2a3b4d5e6_add_phone_telegram_and_password_resets.py` -- adds `users.phone`, `users.telegram_chat_id`, and the `password_resets` table
+- `d2e3f4a5b6c7_add_fund_type_tax_settings_corp_actions.py` -- adds `holdings.fund_type`, `mutual_funds.fund_type`, `user_preferences.tax_settings`, and the `corporate_actions` table
+
+For zero-downtime deployments:
 
 1. **Additive changes** (new tables, new columns with defaults): Safe to apply while app is running
 2. **Column renames**: Use a two-step migration (add new column, migrate data, drop old column in next release)
 3. **Column removals**: Deploy code that stops using the column first, then remove in next release
 4. **Data migrations**: Run as a separate Celery task, not in the migration itself
+
+### Additive Schema Reconciliation on Startup
+
+When the backend is launched with a concrete database path (`python -m app --db-path ...`, as the desktop sidecar does), it runs Alembic migrations and then an **additive schema-reconciliation pass** (`_reconcile_schema` in `backend/app/__main__.py`). This is a safety net for upgrades: it creates any tables and adds any columns that the current models declare but the existing database is missing, and it **never drops, renames, or rewrites anything** -- existing data is untouched.
+
+This guarantees a database created by an *older* app version keeps working after installing a *newer* build, regardless of how its schema was originally created (Alembic or a legacy `create_all()`). Legacy databases with no `alembic_version` table are stamped at head first, then reconciled additively so newly-introduced columns (e.g. `phone`, `fund_type`, `tax_settings`) are still added. Reconciliation failures never block startup.
 
 ### Backup Before Migration
 

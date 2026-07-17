@@ -300,6 +300,24 @@ The app should handle this automatically, but if you entered a stock manually, m
 
 ---
 
+## Authentication Issues
+
+### Password reset email never arrives
+
+**Cause**: `POST /auth/forgot-password` emails the reset link/token via SendGrid. If SendGrid is not configured (`SENDGRID_API_KEY` + `EMAIL_FROM` unset) or the `sendgrid` package isn't installed, the email is silently skipped. The endpoint always returns the same generic success message, so it never reveals whether an account exists — meaning a missing email looks identical to a delivered one.
+
+**Solution**:
+1. Configure SendGrid in `backend/.env` (`SENDGRID_API_KEY` and a verified `EMAIL_FROM`), then request the reset again.
+2. If you can't use SendGrid, recover the token manually — it is still generated and stored. The backend logs a warning (`SendGrid not configured — skipping email`), and the full reset email (including the raw token and the `/reset-password?token=...` link) is written to the `notification_logs` table with status `FAILED`:
+   ```sql
+   SELECT subject, body, created_at FROM notification_logs
+   WHERE channel = 'email' AND status = 'FAILED'
+   ORDER BY id DESC LIMIT 1;
+   ```
+   Copy the token out of `body` and paste it into the reset-password form (the token is valid for 1 hour).
+
+---
+
 ## Database Issues
 
 ### Want to start fresh with a clean database
@@ -338,6 +356,17 @@ pg_dump -Fc financetracker > backup_$(date +%Y%m%d).dump
 ---
 
 ## Desktop App Issues
+
+### Desktop app shows a loading spinner for a minute on first launch
+
+**Cause**: This is normal, not a hang. The bundled backend is a onefile PyInstaller binary that re-extracts itself on every launch, and on first run macOS Gatekeeper / Windows antivirus also scans it. A cold start can take **40–120 seconds**.
+
+**Solution**:
+1. Leave the window open — it shows a "Starting local server… First launch can take a minute or two" spinner and switches to the app automatically once the backend is healthy.
+2. If it runs past 120 seconds, a self-healing recovery page appears that keeps polling the backend and has a "Retry now" button. It navigates on its own as soon as the backend responds — no need to restart.
+3. Subsequent launches are faster (no first-run security scan), but the extraction step still adds a few seconds.
+
+---
 
 ### Tauri app fails to build: "Rust compilation error"
 

@@ -29,8 +29,8 @@ FinanceTracker ships as a native desktop app built with **Tauri v2**. It bundles
 |                                                        |
 |  +--------------------------------------------------+ |
 |  |  Static Frontend (Next.js export)                 | |
-|  |  - HTML/CSS/JS served from local files            | |
-|  |  - Connects to localhost:PORT for API             | |
+|  |  - Bundled into the sidecar (backend/static)      | |
+|  |  - Served by the backend at localhost:PORT        | |
 |  +--------------------------------------------------+ |
 |                                                        |
 |  +--------------------------------------------------+ |
@@ -45,8 +45,9 @@ FinanceTracker ships as a native desktop app built with **Tauri v2**. It bundles
 **Key design decisions:**
 - The backend binds to `127.0.0.1` only (not exposed to network)
 - CORS is set to `*` in sidecar mode (safe because local-only)
-- The port is dynamically assigned and injected into the frontend
-- The SQLite database lives in the OS app data directory
+- The static frontend is staged into `backend/static` at build time and bundled into the sidecar, so the backend serves the UI itself
+- The port is dynamically assigned; once the backend is healthy the window navigates to `http://localhost:PORT/#ftport=PORT` — the frontend reads the port from the `#ftport` hash and then shares the backend's origin (avoids cross-origin/mixed-content issues in the webview)
+- The SQLite database lives in the OS app data directory; its schema is reconciled additively on every launch so a database from an older build keeps working after an upgrade
 - All ML/heavy dependencies are excluded (graceful degradation)
 
 ---
@@ -185,6 +186,8 @@ chmod +x apps/desktop/src-tauri/binaries/financetracker-backend-x86_64-unknown-l
 
 The frontend is exported as static HTML/CSS/JS for embedding in Tauri.
 
+> **Order matters**: build the frontend *before* the sidecar (Step 3). The PyInstaller spec bundles `backend/static` into the sidecar binary and the installed app serves the UI from there — building the sidecar first ships a binary with no frontend, producing a blank window after install. The `build-installer` scripts already run these steps in the correct order.
+
 ```bash
 cd ..   # back to project root
 STATIC_EXPORT=true pnpm --filter @finance-tracker/web build
@@ -198,15 +201,23 @@ pnpm --filter @finance-tracker/web build
 
 This creates `apps/web/out/` with the static export.
 
-### Step 6: Copy frontend to Tauri dist
+### Step 6: Stage frontend into the sidecar and Tauri dist
+
+The static export is copied to two places: `backend/static` (bundled into the sidecar so the backend serves the UI at runtime) and `apps/desktop/dist` (Tauri's `frontendDist`, used for the initial window/loading shell).
 
 ```bash
+rm -rf backend/static
+cp -r apps/web/out backend/static
+
 rm -rf apps/desktop/dist
 cp -r apps/web/out apps/desktop/dist
 ```
 
 On Windows:
 ```bat
+if exist backend\static rmdir /s /q backend\static
+xcopy /E /I /Q apps\web\out backend\static
+
 if exist apps\desktop\dist rmdir /s /q apps\desktop\dist
 xcopy /E /I /Q apps\web\out apps\desktop\dist
 ```
@@ -254,11 +265,14 @@ In dev mode:
 3. The setup hook:
    a. Resolves the app data directory (OS-specific)
    b. Creates the SQLite database path
-   c. Finds a free port on localhost
-   d. Spawns the sidecar binary with `--port PORT --db-path DB_PATH --seed`
-   e. Waits for the backend to respond to health checks
-   f. Injects the API port into the frontend via JavaScript
-4. The frontend loads and connects to `http://localhost:PORT`
+   c. Finds a free port on localhost (tries 8000–8005, then any free port)
+   d. Spawns the sidecar binary with `--port PORT --host 127.0.0.1 --db-path DB_PATH --seed`
+   e. **Immediately** injects a loading screen ("Starting local server… First launch can take a minute or two") so the window is never blank while the sidecar boots
+   f. On a background thread, waits up to **120 seconds** for the backend `/health` endpoint to respond
+4. When the backend is healthy, the window navigates to `http://localhost:PORT/#ftport=PORT`. The backend serves the static frontend (same origin as the API), and the frontend reads the port from the `#ftport` hash
+5. If the backend does not respond within 120s, the window shows a **self-healing recovery page** that keeps polling `/health` (with a "Retry now" button) and navigates automatically as soon as the backend comes up
+
+> **Why the wait is so long**: the onefile PyInstaller sidecar re-extracts the whole bundle to a temp directory on *every* launch, and on first run Gatekeeper/antivirus also scans it. A cold start can take **40–120 seconds**. This is normal — the loading screen is expected, not a hang.
 
 ### Sidecar lifecycle
 
@@ -275,6 +289,12 @@ The SQLite database is stored in the OS app data directory:
 | macOS | `~/Library/Application Support/com.financetracker.app/finance.db` |
 | Windows | `C:\Users\<user>\AppData\Local\com.financetracker.app\finance.db` |
 | Linux | `~/.local/share/com.financetracker.app/finance.db` |
+
+The macOS path contains a space (`Application Support`). Earlier builds URL-encoded this to `Application%20Support`, which either crashed Alembic's config parser (`%` is interpolation syntax) or made SQLAlchemy look for a literal `%20` directory — the backend never started. This is fixed in `app/__main__.py`: the path is passed to the SQLite URL verbatim (raw spaces, no percent-encoding), and any `%` handed to Alembic is escaped as `%%`.
+
+### Database schema upgrades
+
+On every launch (whenever a concrete `--db-path` is given), the sidecar runs Alembic migrations and then an **additive schema reconciliation** pass (`_reconcile_schema` in `app/__main__.py`). It creates any tables and adds any columns the current models expect but the existing database lacks — it never drops, renames, or rewrites anything. This guarantees a database created by an *older* app version keeps working after installing a *newer* build, regardless of whether the schema was originally created via Alembic or `create_all()`. Reconciliation failures are logged but never block startup.
 
 ### CORS handling
 
@@ -466,6 +486,10 @@ Install required system packages:
 ```bash
 sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 ```
+
+### First launch shows a loading spinner for up to two minutes
+
+This is expected, not a hang. The onefile sidecar re-extracts its bundle on every launch, and on first run Gatekeeper/antivirus also scans it, so a cold start can take **40–120 seconds**. The window shows a "Starting local server…" spinner and navigates to the app automatically once the backend is healthy. If it exceeds 120s, a self-healing recovery page appears that keeps polling and includes a "Retry now" button — leave it open and it will recover on its own once the backend responds.
 
 ### Backend sidecar doesn't start
 

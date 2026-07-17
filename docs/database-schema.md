@@ -9,7 +9,7 @@ FinanceTracker uses **SQLAlchemy 2.0** in async mode with **Alembic** for migrat
 - **Development**: SQLite via `aiosqlite`
 - **Production**: PostgreSQL via `asyncpg`
 
-The database currently has **19 tables**. All tables use integer autoincrement primary keys and include a `created_at` timestamp (most also have `updated_at`).
+The database currently has **21 tables**. All tables use integer autoincrement primary keys and include a `created_at` timestamp (most also have `updated_at`).
 
 ---
 
@@ -76,6 +76,8 @@ The central user account table.
 | `email` | VARCHAR(255) | UNIQUE, NOT NULL, INDEX | Login email address |
 | `password_hash` | VARCHAR(255) | NOT NULL | bcrypt-hashed password |
 | `totp_secret` | VARCHAR(255) | NULLABLE | TOTP 2FA secret (stored in plaintext) |
+| `phone` | VARCHAR(32) | NULLABLE | E.164 phone (e.g. +919876543210) for WhatsApp/SMS notification channels |
+| `telegram_chat_id` | VARCHAR(64) | NULLABLE | Per-user Telegram chat id (alerts go to each user, not one global chat) |
 | `display_name` | VARCHAR(255) | NOT NULL, DEFAULT '' | Name shown in UI |
 | `preferred_currency` | VARCHAR(10) | NOT NULL, DEFAULT 'INR' | INR, EUR, or USD |
 | `theme_preference` | VARCHAR(20) | NOT NULL, DEFAULT 'dark' | dark, light, system |
@@ -124,6 +126,7 @@ The central table representing a stock position within a portfolio. Contains all
 | `stock_name` | VARCHAR(255) | NOT NULL | Full company name |
 | `exchange` | VARCHAR(20) | NOT NULL | NSE, BSE, XETRA, FRA, etc. |
 | `currency` | VARCHAR(10) | NOT NULL, DEFAULT 'INR' | Holding currency |
+| `fund_type` | VARCHAR(30) | NULLABLE | Fund/instrument class for German Teilfreistellung (null/STOCK, EQUITY_ETF, MIXED_ETF, BOND_ETF, REAL_ESTATE_ETF) |
 | `cumulative_quantity` | DECIMAL(18,6) | NOT NULL | Net shares held (auto-calculated from transactions) |
 | `average_price` | DECIMAL(18,4) | NOT NULL | Weighted average purchase price |
 | `current_price` | DECIMAL(18,4) | NULLABLE | Latest market price |
@@ -313,6 +316,7 @@ Tracks mutual fund investments.
 | `scheme_code` | VARCHAR(50) | NOT NULL | AMFI scheme code |
 | `scheme_name` | VARCHAR(255) | NOT NULL | Full scheme name |
 | `folio_number` | VARCHAR(50) | NULLABLE | Folio number from fund house |
+| `fund_type` | VARCHAR(30) | NULLABLE | Fund class for German Teilfreistellung (EQUITY_ETF 30%, MIXED_ETF 15%, BOND_ETF 0%, REAL_ESTATE_ETF 60/80%) |
 | `units` | DECIMAL(18,6) | NOT NULL | Total units held |
 | `nav` | DECIMAL(18,4) | NOT NULL | Latest NAV |
 | `invested_amount` | DECIMAL(18,4) | NOT NULL | Total money invested |
@@ -491,6 +495,7 @@ Stores UI preferences for the holdings table and dashboard layout.
 | `table_density` | VARCHAR(20) | NOT NULL, DEFAULT 'comfortable' | compact, comfortable, spacious |
 | `default_chart_days` | INTEGER | NOT NULL, DEFAULT 30 | Default chart period |
 | `theme` | VARCHAR(20) | NOT NULL, DEFAULT 'dark' | dark, light, system |
+| `tax_settings` | JSON | NULLABLE, DEFAULT '{}' | German tax election + misc tax settings (e.g. `{"filing": "single"\|"joint", "church_tax": bool}`) used by Sparer-Pauschbetrag / Vorabpauschale logic |
 | `updated_at` | TIMESTAMP | NULLABLE, auto-update | Last modification |
 
 **Custom Columns JSON:**
@@ -585,6 +590,52 @@ P&L is computed on the fly by the API (`unrealized_pnl` in responses), not store
 
 ---
 
+### password_resets
+
+Single-use password-reset tokens. Only a SHA-256 hash of the token is stored -- the raw token is only ever emailed to the user.
+
+| Column | Type | Constraints | Description |
+|---|---|---|---|
+| `id` | INTEGER | PK, autoincrement | Unique identifier |
+| `user_id` | INTEGER | FK -> users.id, NOT NULL, INDEX | Token owner |
+| `token_hash` | VARCHAR(64) | NOT NULL, INDEX | SHA-256 hex digest of the raw reset token |
+| `expires_at` | TIMESTAMP | NOT NULL | When the token expires |
+| `used_at` | TIMESTAMP | NULLABLE | When the token was consumed (null while unused; set makes it work exactly once) |
+| `created_at` | TIMESTAMP | NOT NULL, DEFAULT now() | Record creation time |
+
+**Indexes:**
+- `ix_password_resets_user_id` on `user_id`
+- `ix_password_resets_token_hash` on `token_hash`
+
+**Constraints:**
+- FK `user_id` REFERENCES `users(id)` ON DELETE CASCADE
+
+---
+
+### corporate_actions
+
+Detected corporate actions (stock splits, bonus issues, etc.) recorded so quantity/cost-basis adjustments are auditable and applied exactly once per holding.
+
+| Column | Type | Constraints | Description |
+|---|---|---|---|
+| `id` | INTEGER | PK, autoincrement | Unique identifier |
+| `holding_id` | INTEGER | FK -> holdings.id, NOT NULL, INDEX | Affected holding |
+| `action_type` | VARCHAR(30) | NOT NULL | SPLIT, BONUS, MERGER, SPINOFF, etc. |
+| `ex_date` | DATE | NOT NULL | Ex-date of the corporate action |
+| `ratio` | FLOAT | NOT NULL | Multiplicative ratio applied to quantity (price divided by it); e.g. 2:1 split -> 2.0, 3:2 -> 1.5 |
+| `status` | VARCHAR(20) | NOT NULL, DEFAULT 'DETECTED' | DETECTED (awaiting confirmation), APPLIED, DISMISSED |
+| `applied_at` | TIMESTAMP | NULLABLE | When the adjustment was applied |
+| `details` | JSON | NULLABLE, DEFAULT '{}' | Additional metadata about the action |
+| `created_at` | TIMESTAMP | NOT NULL, DEFAULT now() | Record creation time |
+
+**Indexes:**
+- `ix_corporate_actions_holding_id` on `holding_id`
+
+**Constraints:**
+- FK `holding_id` REFERENCES `holdings(id)` ON DELETE CASCADE
+
+---
+
 ## Migration Strategy
 
 All schema changes are managed through Alembic migrations:
@@ -607,11 +658,13 @@ cd backend && uv run alembic history
 
 Migration files use Alembic's default hash-prefixed pattern: `<revision_hash>_<description>.py`
 
-Examples (current migrations in `backend/alembic/versions/`):
+The 6 current migrations in `backend/alembic/versions/` (head is `d2e3f4a5b6c7`):
 - `b388e46e4f03_initial_schema.py`
 - `9ec39aff1e92_add_currency_to_holdings.py`
 - `8809e230b920_add_unique_constraint_holding_portfolio_.py`
 - `abf5040f074b_add_asset_and_fno_position_tables.py`
+- `c1f2a3b4d5e6_add_phone_telegram_and_password_resets.py` -- adds `users.phone`, `users.telegram_chat_id`, and the `password_resets` table
+- `d2e3f4a5b6c7_add_fund_type_tax_settings_corp_actions.py` -- adds `holdings.fund_type`, `mutual_funds.fund_type`, `user_preferences.tax_settings`, and the `corporate_actions` table
 
 ---
 

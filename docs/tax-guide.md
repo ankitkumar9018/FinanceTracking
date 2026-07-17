@@ -10,11 +10,11 @@ FinanceTracker automatically tracks tax implications for your investment gains a
 
 ## Indian Tax Rules
 
-### Current Limitations
+### How Capital Gains Are Matched
 
-- **Average-cost basis, not per-lot FIFO**: when a sale is taxed, the cost basis is the holding's overall average purchase price and the purchase date is approximated by the earliest BUY transaction — individual lots are not matched FIFO, so holdings with mixed-age lots are an approximation.
+- **Per-lot FIFO matching**: when a SELL is taxed, its quantity is matched against earlier BUY lots **first-in-first-out**. Each matched lot keeps its own buy price and buy date, so a single sale can straddle the STCG/LTCG boundary — producing **both** an STCG record and an LTCG record (one `TaxRecord` per gain-type bucket). Trigger it with `POST /tax/compute/{transaction_id}`, which returns the list of records created.
 - **LTCG boundary**: a gain is LTCG only when the holding period is **more than 12 calendar months** (calendar months, not 365 days — a 365-day hold across a leap year is still STCG).
-- **Idempotent recomputation**: recomputing tax for a sale that already has a tax record returns the existing record instead of creating a duplicate (which would double-count gains and deplete the LTCG exemption twice).
+- **Idempotent recomputation**: recomputing tax for a SELL that already has records first deletes those old records and then recreates them from scratch, so a recompute never double-counts gains or depletes the LTCG exemption twice.
 
 ### Short-Term Capital Gains (STCG)
 
@@ -67,8 +67,8 @@ Tax = Taxable LTCG * 12.5%   (only if Taxable LTCG > 0)
 
 **Important Notes**:
 - The 1,25,000 exemption is per financial year (April to March), not per transaction
-- Grandfathering rules apply for shares purchased before 1 Feb 2018 (cost of acquisition is higher of actual cost or fair market value as on 31 Jan 2018)
-- Grandfathering (31-Jan-2018 FMV) is **not yet supported** by FinanceTracker — gains on pre-Feb-2018 purchases use the recorded cost basis
+- Grandfathering rules apply for shares purchased before 1 Feb 2018 (§55(2)(ac)): the cost of acquisition becomes `max(actual cost, min(31-Jan-2018 FMV, sale price))`
+- **Grandfathering is implemented and auto-applied**: for every pre-1-Feb-2018 FIFO lot that qualifies as LTCG, FinanceTracker substitutes the grandfathered cost basis above (per lot, LTCG only — STCG lots are unaffected). The 31-Jan-2018 fair-market value is fetched from market data and cached; if it cannot be retrieved the actual cost is used, so grandfathering can only ever lower the taxable gain, never raise it.
 
 ### Dividend Tax (India)
 
@@ -145,11 +145,11 @@ German investors can claim a tax-free allowance on capital gains:
 | Single | 1,000 EUR per year |
 | Married (joint assessment) | 2,000 EUR per year |
 
-**How it works in FinanceTracker**:
-1. Go to Settings and set your filing status (single/married) and exemption remaining
-2. The app tracks how much of your exemption you have used this year
-3. Once the exemption is exhausted, remaining gains are taxed at 26.375%
-4. Multiple broker accounts: you can split the Freistellungsauftrag (the app tracks the total across all accounts)
+**How it works in FinanceTracker** (`GET /tax/allowance`):
+1. Set your filing status (single/joint) with `PUT /tax/settings` — this selects the EUR 1000 or EUR 2000 total allowance.
+2. The tracker computes how much of the allowance is **used** this year as positive net German capital gains **plus** German dividends, each reduced by its fund's Teilfreistellung and capped at the allowance; losses net against gains before the allowance is consumed.
+3. It returns `{total_allowance, used, remaining, filing}`. Once the allowance is exhausted, remaining gains are taxed at 26.375%.
+4. The same joint-filing total and Teilfreistellung reduction are honored by the Freibetrag netting inside automatic transaction tax computation.
 
 ### Vorabpauschale (Advance Lump Sum for Accumulating Funds)
 
@@ -157,24 +157,26 @@ Germany taxes accumulating (non-distributing) investment funds with an annual no
 
 **Calculation**:
 ```
-Basiszins = ECB base rate (set annually by Bundesfinanzministerium)
-           2024: 2.29%, 2025: varies
+Basiszins = base rate set annually by the Bundesministerium der Finanzen
+           2023: 2.55%, 2024: 2.29%, 2025: 2.53% (negative-rate years floored to 0%)
 
-Basisertrag = Fund value at start of year * Basiszins * 0.7
-Vorabpauschale = min(Basisertrag, actual fund gain in calendar year)
+Basisertrag    = value at start of year * Basiszins * 0.7  (pro-rated by months held)
+Vorabpauschale = max(0, min(Basisertrag - distributions, value at end - value at start))
 
-Tax = Vorabpauschale * 26.375% * Teilfreistellung factor
+Tax = Vorabpauschale * (1 - Teilfreistellung) * 26.375%   (loss years => 0)
 ```
 
 **Teilfreistellung (Partial Exemption)**:
-| Fund Type | Exemption |
-|---|---|
-| Equity fund (>= 51% equity) | 30% exempt |
-| Mixed fund (>= 25% equity) | 15% exempt |
-| Property fund (>= 51% property) | 60% exempt |
-| Other funds | 0% exempt |
+| Fund Type | `fund_type` | Exemption |
+|---|---|---|
+| Equity fund (>= 51% equity) | `EQUITY_ETF` | 30% exempt |
+| Mixed fund (>= 25% equity) | `MIXED_ETF` | 15% exempt |
+| Property fund (>= 51% property) | `REAL_ESTATE_ETF` | 60% exempt |
+| Bond fund / individual stock | `BOND_ETF` / `STOCK` | 0% exempt |
 
-**Not yet supported**: Vorabpauschale tracking and Teilfreistellung are not implemented in FinanceTracker (the code contains only an unused `VORABPAUSCHALE` gain-type label). The rules above are provided for reference only.
+**Teilfreistellung is implemented.** Set a holding's fund class with `PUT /tax/fund-type/{holding_id}`; the matching exemption is then applied automatically to that holding's German capital gains, dividends, allowance usage, and Vorabpauschale. It reduces the gross gain **before** the Sparer-Pauschbetrag and Abgeltungssteuer are applied.
+
+**Vorabpauschale is implemented** via `GET /tax/vorabpauschale/{portfolio_id}`, which returns a per-fund **estimate** for a portfolio's German (XETRA) fund holdings. Because exact start- and end-of-year fund values are not stored, the cost basis is used as a proxy for the year-start value and the current market value as the year-end value, so the response is flagged `is_estimate: true`. The Basiszins comes from a built-in table (2018-2025; 2023 = 2.55%, 2024 = 2.29%, 2025 = 2.53%), with negative-rate years (2021, 2022) floored to 0% and unknown years defaulting to 2.29%. Individual stocks have no Vorabpauschale and are excluded; church tax is excluded from the estimate.
 
 ### Verlustverrechnung (Loss Offsetting)
 
@@ -300,18 +302,20 @@ FinanceTracker shows holding period information:
 - Transaction-wise breakdown with holding period classification
 - LTCG exemption utilization (1,25,000)
 - Recommended format for CA / ITR filing
-- Grandfathering adjustments (pre-Feb 2018 purchases): not yet supported
+- Grandfathering adjustments (pre-Feb 2018 purchases): applied automatically per FIFO lot (see the LTCG section)
 
 **German Tax Report (Calendar year basis)**:
 - Summary: Total gains, losses, Freistellungsauftrag usage
 - Foreign dividend withholding tax (Quellensteuer)
 - Data for Anlage KAP
-- Separate loss pots (Verlustverrechnung), Vorabpauschale, and Teilfreistellung: not yet supported
+- Vorabpauschale and Teilfreistellung: now implemented — Teilfreistellung is reflected in the per-record German tax amounts, and Vorabpauschale has its own estimate at `GET /tax/vorabpauschale/{portfolio_id}`. Separate loss pots (Verlustverrechnung) remain unsupported — losses net in a single pool.
 
 ### Export Formats
 
-- **PDF**: Formatted report with tables and summaries
-- **Excel**: Raw data for further analysis or import into tax software
+The consolidated capital-gains report is served by `GET /tax/report/{financial_year}` (query params `jurisdiction=IN|DE`, `format=csv|html`):
+
+- **CSV**: an ITR-ready per-record table followed by a totals summary; cells are guarded against spreadsheet-formula injection. Import into tax software or a CA's spreadsheet.
+- **HTML**: a self-contained, printable capital-gains statement with summary cards and a per-record table.
 
 ---
 
@@ -319,11 +323,11 @@ FinanceTracker shows holding period information:
 
 ### Setting Your Tax Jurisdiction
 
-Go to **Settings** and set:
-- **Primary jurisdiction**: India (IN) or Germany (DE)
-- **Filing status** (Germany): Single or Married/Joint
-- **Freistellungsauftrag remaining** (Germany): How much exemption you have left
-- **Church tax** (Germany): Enabled/disabled (fixed 8% rate; not yet applied to automatic transaction tax computation)
+- **Primary jurisdiction**: India (IN) or Germany (DE) — inferred from each holding's exchange (NSE/BSE => IN, XETRA => DE)
+- **Filing status** (Germany): Single or Joint — set with `PUT /tax/settings` (`filing`); selects the EUR 1000 / EUR 2000 Sparer-Pauschbetrag
+- **Fund class** (Germany): set per holding with `PUT /tax/fund-type/{holding_id}` to drive Teilfreistellung (equity ETF 30% / mixed 15% / real-estate 60%)
+- **Church tax** (Germany): flag stored via `PUT /tax/settings` (`church_tax`); fixed 8% rate; still not applied to automatic transaction tax computation
+- **Allowance usage** (Germany): computed automatically from realized gains + dividends — no manual "remaining" entry needed (see `GET /tax/allowance`)
 
 The app can track both jurisdictions simultaneously for users investing in both markets.
 

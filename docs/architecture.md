@@ -47,7 +47,7 @@ FinanceTracker is a full-stack, cross-platform investment tracking application b
   +----------------------------------------------------------------------+
            |                    |                        |
            v                    v                        v
-  SERVICES LAYER (~30 services)
+  SERVICES LAYER (~40 services)
   -----------------------------
   +------------------+  +------------------+  +---------------------+
   |  Portfolio       |  |  Market Data     |  |  Notification       |
@@ -58,9 +58,9 @@ FinanceTracker is a full-stack, cross-platform investment tracking application b
   +------------------+  +------------------+  |  - SMS (Twilio)     |
   +------------------+  +------------------+  |  - In-App Toast     |
   |  Alert Service   |  |  Tax Service     |  +---------------------+
-  |  - Range checks  |  |  - Indian STCG   |  +---------------------+
-  |  - RSI alerts    |  |  - Indian LTCG   |  |  Forex Service      |
-  |  - Custom rules  |  |  - German Abgelt.|  |  - yfinance rates   |
+  |  - Range checks  |  |  - STCG/LTCG FIFO|  +---------------------+
+  |  - RSI alerts    |  |  - IN grandfath. |  |  Forex Service      |
+  |  - Custom rules  |  |  - German advncd.|  |  - yfinance rates   |
   +------------------+  |  - Tax harvest   |  |  - DB rate cache    |
   +------------------+  +------------------+  +---------------------+
   |  Broker Service  |  +------------------+  +---------------------+
@@ -92,6 +92,17 @@ FinanceTracker is a full-stack, cross-platform investment tracking application b
   |  - SMA crossover |  |  - Alert trigger |
   |  - Bollinger     |  +------------------+
   +------------------+
+  +------------------+  +------------------+  +---------------------+
+  |  Concentration   |  |  FIRE Service    |  |  Screener Service   |
+  |  - HHI / N_eff   |  |  - Retirement    |  |  - Liquid universe  |
+  |  - Cap buckets   |  |    projection    |  |  - RSI/yield/52wk   |
+  |  - Diversif grade|  |  - SIP step-up   |  |    filters          |
+  +------------------+  +------------------+  +---------------------+
+  +------------------+  +------------------+
+  |  Corporate Actn  |  |  Economic Cal.   |
+  |  - Split/bonus   |  |  - Macro/earnings|
+  |    detect+apply  |  |    catalysts     |
+  +------------------+  +------------------+
            |                    |                        |
            v                    v                        v
   ML / AI LAYER
@@ -316,6 +327,28 @@ DATABASE_URL = "postgresql+asyncpg://user:pass@host/db" # Prod
 
 When Redis is available, Celery provides distributed task execution with a beat scheduler running two periodic tasks (`fetch-prices`, `check-alerts`). When Redis or Celery is not installed (common for local development), the system falls back to APScheduler's `AsyncIOScheduler` running the same two interval jobs inside the FastAPI process.
 
+### Service Layer Additions & Extensions
+
+Beyond the representative services shown in the diagram above, the service layer includes several newer modules:
+
+**New services:**
+
+- `concentration_service` -- portfolio concentration and diversification scoring via the Herfindahl-Hirschman Index (HHI), effective holding count (`N_eff = 1/HHI`), market-cap buckets, and a letter grade (`GET /analytics/concentration/{portfolio_id}`).
+- `fire_service` -- FIRE / retirement corpus projection and SIP step-up modelling (`GET /goals/fire`, `GET /goals/sip-projection`).
+- `corporate_actions_service` -- detects stock splits and bonuses from yfinance and lets the user apply or dismiss them per holding (`/corporate-actions/*`), backed by the new `CorporateAction` model.
+- `screener_service` -- stock screener over a curated liquid universe with RSI, dividend-yield, and 52-week filters (`GET /market/screener`).
+- `economic_calendar_service` -- macro / earnings catalysts for a portfolio's holdings (`GET /analytics/economic-calendar/{portfolio_id}`).
+
+**Extended services:**
+
+- `tax_service` -- per-lot **FIFO** capital-gains matching (STCG/LTCG split per lot), Indian LTCG grandfathering (31-Jan-2018 FMV cost basis), German Teilfreistellung partial exemption, Vorabpauschale advance-tax estimate, and the Sparer-Pauschbetrag allowance tracker.
+- `dividend_service` -- dividend income forecast and yield-on-cost (`GET /dividends/forecast`).
+- `mutual_fund_service` -- real XIRR plus fund-overlap X-ray and expense / fee analysis (`GET /mutual-funds/overlap`, `/mutual-funds/expense-analysis`).
+- `export_service` -- consolidated, ITR-ready capital-gains tax report (CSV + HTML).
+- `portfolio_service` / `net_worth_service` -- optional, additive `display_currency` conversion on summary and net-worth responses (existing response fields are left unchanged).
+
+**New models this cycle:** `PasswordReset` (single-use, SHA-256-hashed password-reset tokens with a 1-hour expiry) and `CorporateAction` (detected splits / bonuses with apply/dismiss state). See [security.md](security.md) for the password-reset flow.
+
 ---
 
 ## Frontend Architecture
@@ -331,6 +364,8 @@ apps/web/src/
 |   +-- (auth)/
 |   |   +-- login/page.tsx
 |   |   +-- register/page.tsx
+|   |   +-- forgot-password/page.tsx  # Request a reset email
+|   |   +-- reset-password/page.tsx   # Set a new password via token
 |   +-- (dashboard)/
 |       +-- layout.tsx          # Dashboard shell: sidebar, top bar
 |       +-- page.tsx            # Portfolio overview (main table)
@@ -353,6 +388,10 @@ apps/web/src/
 |       +-- whatif/             # What-if simulator
 |       +-- earnings/           # Earnings calendar
 |       +-- market-heatmap/     # Sector heatmap
+|       +-- screener/           # Stock screener (liquid universe)
+|       +-- compare/            # Side-by-side stock comparison
+|       +-- corporate-actions/  # Splits & bonuses detect/apply
+|       +-- economic-calendar/  # Macro & earnings catalysts
 |       +-- fno/                # Futures & Options positions
 |       +-- sip-calendar/       # SIP calendar grid
 |       +-- ipo/                # IPO tracker
@@ -362,7 +401,7 @@ apps/web/src/
 |       +-- settings/           # User settings
 |       +-- help/               # Help center + topic pages
 +-- components/                 # Portfolio table, charts, AI chat, shared UI
-+-- hooks/                      # usePortfolio, useWebSocket, useTheme
++-- hooks/                      # usePortfolio, useWebSocket, useTheme, use-price-stream (live /ws/prices client), use-keyboard-shortcuts
 +-- stores/                     # Zustand stores (auth, portfolio)
 +-- lib/                        # API client, WebSocket manager, utilities
 ```
@@ -414,7 +453,7 @@ The desktop WebView navigates to the backend (`http://localhost:8000`), which se
    b. Determine action_needed state (N / Y with color)
    c. If state changed -> trigger notifications
 6. WebSocket pushes price + alert updates to all connected clients
-7. Frontend animates number transitions in real-time
+7. Frontend subscribes to `/ws/prices` via the `use-price-stream` hook (auto-reconnect with backoff) and animates number transitions in real-time
 ```
 
 There is no real-time broker price feed — all prices come from yfinance; broker connections are used for holdings sync only.
@@ -477,7 +516,7 @@ Every external dependency has a fallback. The core application (portfolio tracki
 See [security.md](security.md) for the full security document. Key points:
 
 - JWT authentication with 15-minute access tokens and 7-day refresh tokens
-- Optional TOTP-based 2FA
+- Optional TOTP-based 2FA with a full setup/disable UI, plus change-password and self-service password reset (single-use, SHA-256-hashed tokens)
 - Fernet encryption for stored API keys and secrets
 - CORS strict origin allowlist
 - Rate limiting via slowapi on auth endpoints (5/min register, 10/min login, 20/min refresh)

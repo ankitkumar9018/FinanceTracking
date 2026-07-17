@@ -41,9 +41,10 @@ Authorization: Bearer <access_token>
 24. [Stop-Loss Tracker](#stop-loss-tracker)
 25. [Settings & Configuration](#settings--configuration)
 26. [WebSocket Channels](#websocket-channels)
-27. [Additional Endpoints](#additional-endpoints)
-28. [Common Response Formats](#common-response-formats)
-29. [Error Handling](#error-handling)
+27. [Corporate Actions](#corporate-actions)
+28. [Additional Endpoints](#additional-endpoints)
+29. [Common Response Formats](#common-response-formats)
+30. [Error Handling](#error-handling)
 
 ---
 
@@ -76,7 +77,9 @@ POST /auth/register
   "theme_preference": "dark",
   "is_active": true,
   "created_at": "2025-01-15T10:30:00Z",
-  "totp_enabled": false
+  "totp_enabled": false,
+  "phone": null,
+  "telegram_chat_id": null
 }
 ```
 
@@ -138,6 +141,51 @@ POST /auth/refresh
   "access_token": "eyJhbGciOiJIUzI1NiIs...",
   "refresh_token": "eyJhbGciOiJIUzI1NiIs...",
   "token_type": "bearer"
+}
+```
+
+### Forgot Password
+
+**Public** -- Start a password reset. Always returns a generic `200` (even for unknown emails) so the endpoint never reveals whether an account exists. If the account exists, a single-use, 1-hour token is stored (hashed) and a reset link is emailed (best-effort — silently degrades if SendGrid is unconfigured).
+
+```
+POST /auth/forgot-password
+```
+
+**Request Body:**
+```json
+{
+  "email": "user@example.com"
+}
+```
+
+**Response** `200 OK`:
+```json
+{
+  "message": "If that email exists, a reset link has been sent."
+}
+```
+
+### Reset Password
+
+**Public** -- Complete a password reset using the single-use token from the reset email. Returns `400` if the token is invalid, already used, or expired. On success the user's other outstanding reset tokens are also invalidated.
+
+```
+POST /auth/reset-password
+```
+
+**Request Body:**
+```json
+{
+  "token": "raw-token-from-email",
+  "new_password": "newPassword456!"
+}
+```
+
+**Response** `200 OK`:
+```json
+{
+  "message": "Password has been reset successfully"
 }
 ```
 
@@ -255,6 +303,11 @@ Returns the main output table data with color-coded action states.
 ```
 GET /portfolios/{portfolio_id}/summary
 ```
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `display_currency` | string | *(native currency)* | Optional target currency (e.g. `INR`/`EUR`/`USD`). When set and different from the native currency, additive `*_display` convenience fields are layered on top — existing native fields are never altered. |
 
 **Response** `200 OK`:
 ```json
@@ -613,6 +666,30 @@ Search for stocks by name or symbol using Yahoo Finance search API.
 }
 ```
 
+### Stock Screener
+
+```
+GET /market/screener
+```
+
+Screens a curated, liquid per-exchange universe (plus any explicit `symbols`) against the given filters — not the whole market, which keeps every scan fast without a paid screener API. Each symbol is fetched from yfinance with bounded concurrency and a per-symbol timeout; unreachable symbols are skipped.
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `exchange` | string | `NSE` | Exchange for the default universe: `NSE`, `XETRA` |
+| `symbols` | string | - | Optional comma-separated symbols to add to the curated universe |
+| `market_cap_min` / `market_cap_max` | float | - | Market-cap bounds |
+| `pe_min` / `pe_max` | float | - | P/E bounds |
+| `dividend_yield_min` | float | - | Minimum dividend yield (%) |
+| `price_min` / `price_max` | float | - | Price bounds |
+| `sector` | string | - | Sector substring match |
+| `rsi_min` / `rsi_max` | float | - | RSI bounds (0–100) |
+| `week52_min` / `week52_max` | float | - | 52-week range position bounds (0–100 %) |
+| `day_change_min` / `day_change_max` | float | - | Day-change % bounds |
+
+All filters are optional; only the provided ones are applied.
+
 ### Get Portfolio Allocation
 
 ```
@@ -660,10 +737,12 @@ POST /alerts
     "price_above": 3000.00,
     "price_below": 2200.00
   },
-  "channels": ["email", "telegram", "push"],
+  "channels": ["email", "telegram", "in_app"],
   "is_active": true
 }
 ```
+
+Valid channels are `in_app`, `email`, `telegram`, `whatsapp`, and `sms`. When omitted, `channels` defaults to `["in_app"]`.
 
 ### Update Alert Channels
 
@@ -671,10 +750,12 @@ POST /alerts
 PUT /alerts/{alert_id}/channels
 ```
 
+Replaces the alert's notification channels. An unrecognized channel returns `400`.
+
 **Request Body:**
 ```json
 {
-  "channels": ["email", "whatsapp", "telegram", "sms", "push"]
+  "channels": ["email", "whatsapp", "telegram", "sms", "in_app"]
 }
 ```
 
@@ -791,6 +872,84 @@ GET /tax/harvesting
 ]
 ```
 
+### Download Tax Report
+
+Download a consolidated, ITR-ready capital-gains statement (per-record rows plus a totals summary) scoped to the current user, as a downloadable CSV or a self-contained printable HTML file.
+
+```
+GET /tax/report/{financial_year}
+```
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `jurisdiction` | string | `IN` | `IN` or `DE` |
+| `format` | string | `csv` | `csv` or `html` (any other value → `400`) |
+
+Returns the file with a `Content-Disposition: attachment` header (`text/csv` or `text/html`).
+
+### German Saver's Allowance (Sparer-Pauschbetrag)
+
+```
+GET /tax/allowance
+```
+
+Returns Sparer-Pauschbetrag usage for a German calendar year: `{ total_allowance, used, remaining, filing }`. The allowance is EUR 1000 (single) / EUR 2000 (joint), read from the user's tax settings. Only Germany is supported — a non-`DE` jurisdiction returns `400`.
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `jurisdiction` | string | `DE` | Only `DE` is supported |
+| `financial_year` | string | *(current year)* | Calendar year, e.g. `2024` |
+
+### German Vorabpauschale Estimate
+
+```
+GET /tax/vorabpauschale/{portfolio_id}
+```
+
+Estimated German Vorabpauschale (advance lump-sum tax) per German fund holding in a portfolio, using the Basiszins table. Because exact fund start/end values are not stored, current holding values are used as a proxy, so the result is flagged `is_estimate: true`.
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `year` | int | *(current year)* | Tax year |
+
+### Update Tax Settings
+
+```
+PUT /tax/settings
+```
+
+Updates the German filing election / church-tax flag stored in `user_preferences.tax_settings`. Only the provided fields change; others are preserved.
+
+**Request Body** (partial update):
+```json
+{
+  "filing": "joint",
+  "church_tax": false
+}
+```
+
+`filing` is `single` or `joint`. Returns the merged `{ "tax_settings": {...} }`.
+
+### Set Holding Fund Type
+
+```
+PUT /tax/fund-type/{holding_id}
+```
+
+Sets a holding's fund class, used for German Teilfreistellung (partial exemption). Pass `null` to clear it.
+
+**Request Body:**
+```json
+{
+  "fund_type": "EQUITY_ETF"
+}
+```
+
+`fund_type` is one of `STOCK`, `EQUITY_ETF`, `MIXED_ETF`, `BOND_ETF`, `REAL_ESTATE_ETF`, or `null`.
+
 ---
 
 ## Goals
@@ -819,6 +978,43 @@ POST /goals
 ```
 
 **Response** includes calculated `monthly_sip_needed`.
+
+### FIRE Projection
+
+Project a path to FIRE (financial independence / early retirement). This is a pure calculator — nothing is persisted.
+
+```
+GET /goals/fire
+```
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `monthly_contribution` | float | *(required)* | Monthly investment (≥ 0) |
+| `annual_return_pct` | float | *(required)* | Expected annual return % |
+| `annual_expenses` | float | *(required)* | Annual expenses (> 0) |
+| `current_net_worth` | float | *(user's net worth)* | Starting corpus; sourced from the user's aggregated net worth when omitted |
+| `withdrawal_rate_pct` | float | 4.0 | Safe withdrawal rate % (> 0) |
+| `step_up_pct` | float | 0.0 | Annual contribution step-up % (≥ 0) |
+
+Returns the projected FIRE number, years/date to reach it, and the `current_net_worth` used.
+
+### SIP Projection
+
+Project a SIP's corpus with vs. without an annual step-up. Pure calculator.
+
+```
+GET /goals/sip-projection
+```
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `monthly_sip` | float | *(required)* | Monthly SIP amount (≥ 0) |
+| `annual_return_pct` | float | *(required)* | Expected annual return % |
+| `years` | int | *(required)* | Investment horizon (1–100) |
+| `current_amount` | float | 0.0 | Existing corpus (≥ 0) |
+| `step_up_pct` | float | 0.0 | Annual SIP step-up % (≥ 0) |
 
 ### Update Goal Progress
 
@@ -869,6 +1065,27 @@ POST /import-export/csv/mutual-funds?portfolio_id={id}
 ```
 
 **Request Body**: Multipart form with `.csv` file (template available at `GET /import-export/export/template/mutual-funds`).
+
+### Portfolio Overlap X-Ray
+
+```
+GET /mutual-funds/overlap
+```
+
+Best-effort overlap analysis across the user's mutual fund holdings. Attempts to fetch each fund's underlying constituents (via yfinance when a scheme maps to a fund/ETF ticker) and returns a pairwise overlap matrix plus look-through single-stock concentration. Funds without constituent data are flagged; the response degrades gracefully and never fabricates holdings.
+
+### Expense / Fee Analysis
+
+```
+GET /mutual-funds/expense-analysis
+```
+
+Value-weighted expense ratio and a multi-year fee-drag projection. Reads expense ratios from yfinance for schemes that map to a ticker; unknown ratios are surfaced and excluded from the weighted average and projection.
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `assumed_return` | float | 0.10 | Assumed gross annual return used to project fee drag (0.0–0.5) |
 
 ---
 
@@ -1194,48 +1411,34 @@ DELETE /columns/{name}
 GET /settings
 ```
 
-Returns all settings for the current user grouped by category.
+Returns all settings for the current user grouped into four categories: `display`, `notifications`, `market`, and `integrations`.
 
 **Response** `200 OK`:
 ```json
 {
-  "profile": {
-    "display_name": "Ankit",
-    "email": "user@example.com",
-    "two_factor_enabled": true
-  },
   "display": {
-    "theme": "dark",
     "preferred_currency": "INR",
-    "table_density": "comfortable",
-    "default_chart_days": 30
+    "theme_preference": "dark",
+    "display_name": "Ankit"
   },
   "notifications": {
     "email_enabled": true,
-    "email_from": "alerts@financetracker.app",
-    "whatsapp_enabled": false,
     "telegram_enabled": true,
-    "telegram_chat_id": "123456789",
+    "whatsapp_enabled": false,
     "sms_enabled": false,
-    "push_enabled": true
+    "in_app_enabled": true,
+    "alert_check_interval": 60
   },
-  "brokers": {
-    "zerodha": {"connected": true, "last_synced": "2025-01-20T09:15:00Z"},
-    "icici_direct": {"connected": false}
+  "market": {
+    "price_refresh_interval": 5,
+    "default_chart_days": 30
   },
-  "ai": {
-    "active_provider": "ollama",
+  "integrations": {
+    "llm_provider": "ollama",
     "ollama_url": "http://localhost:11434",
     "ollama_model": "llama3.2",
-    "openai_configured": false,
-    "claude_configured": false,
-    "gemini_configured": false,
-    "ai_features_enabled": true
-  },
-  "market_data": {
-    "price_refresh_interval": 5,
-    "market_hours_in": "09:15-15:30 IST",
-    "market_hours_de": "09:00-17:30 CET"
+    "has_sendgrid_key": false,
+    "has_telegram_bot": false
   }
 }
 ```
@@ -1246,21 +1449,27 @@ Returns all settings for the current user grouped by category.
 PUT /settings
 ```
 
+The update body is a flat set of optional keys — only the fields you send are changed. Notification toggles (including `sms_enabled`) are merged into `notification_preferences`.
+
 **Request Body** (partial update):
 ```json
 {
-  "display": {
-    "theme": "light",
-    "default_chart_days": 90
-  },
-  "ai": {
-    "active_provider": "openai",
-    "openai_api_key": "sk-..."
+  "preferred_currency": "EUR",
+  "theme_preference": "light",
+  "display_name": "Ankit",
+  "phone": "+491700000000",
+  "telegram_chat_id": "123456789",
+  "notification_preferences": {
+    "email_enabled": true,
+    "telegram_enabled": true,
+    "whatsapp_enabled": false,
+    "sms_enabled": false,
+    "in_app_enabled": true
   }
 }
 ```
 
-Sensitive values (API keys) are encrypted with Fernet before storage.
+`theme_preference` must be `dark`, `light`, or `system`. Returns `{ "status": "updated" }`.
 
 ### Test Notification Channel
 
@@ -1290,16 +1499,16 @@ POST /settings/test/llm
 GET /settings/health
 ```
 
+Returns a flat status string per dependent service. `broker` is `configured` / `not_configured`; `ollama` reports `disabled` or `using_<provider>` when a non-Ollama LLM provider is active; `overall` is `healthy` only when the database is healthy.
+
 **Response** `200 OK`:
 ```json
 {
-  "database": {"status": "healthy", "type": "sqlite", "size_mb": 12.5},
-  "redis": {"status": "unavailable", "fallback": "asyncio"},
-  "ollama": {"status": "healthy", "model": "llama3.2", "url": "http://localhost:11434"},
-  "yfinance": {"status": "healthy", "last_fetch": "2025-01-20T14:25:00Z"},
-  "email": {"status": "not_configured"},
-  "whatsapp": {"status": "not_configured"},
-  "telegram": {"status": "healthy", "bot_name": "@FinanceTrackerBot"}
+  "database": "healthy",
+  "redis": "unavailable",
+  "ollama": "healthy",
+  "broker": "not_configured",
+  "overall": "healthy"
 }
 ```
 
@@ -1392,7 +1601,15 @@ Returns all dividend records for the current user's holdings.
 GET /dividends/summary
 ```
 
-Returns total dividends received, dividend yield, total reinvested, count, and monthly calendar.
+Returns total dividends received, dividend yield, portfolio-wide yield-on-cost, total reinvested, count, and monthly calendar.
+
+### Forecast Dividend Income
+
+```
+GET /dividends/forecast
+```
+
+Best-effort forecast of the next 12 months of dividend income (driven by yfinance dividend history and rate data). Returns a month-by-month projection, the forward yield, the total forward 12-month income, and a per-holding breakdown with yield and yield-on-cost.
 
 ### Add Dividend
 
@@ -1431,6 +1648,11 @@ GET /net-worth
 ```
 
 Returns total net worth with breakdown by asset type (STOCK, CRYPTO, GOLD, FIXED_DEPOSIT, BOND, REAL_ESTATE). Stock values are aggregated from portfolio holdings. Crypto and gold fetch live prices via yfinance.
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `display_currency` | string | *(stored preference)* | Optional currency override (e.g. `INR`/`EUR`/`USD`). When set, totals are converted into this currency for this response only; the stored `preferred_currency` is left unchanged. |
 
 ### Add Asset
 
@@ -1604,6 +1826,20 @@ Sets the target allocation percentage for a specific holding (stored in the hold
 
 **Body:** `{ "target_allocation_pct": 25.0 }` (0–100)
 
+### Concentration & Diversification
+
+```
+GET /analytics/concentration/{portfolio_id}
+```
+
+Analyzes portfolio concentration and diversification. Returns per-holding weights (flagged when over `single_name_threshold`), sector / market-cap / exchange breakdowns, an overall 0–100 diversification score with an A–F grade (anchored on the Herfindahl-Hirschman Index), and human-readable warnings for each flagged concentration.
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `single_name_threshold` | float | 15.0 | Flag any single holding above this weight % (0–100) |
+| `sector_threshold` | float | 40.0 | Flag any sector above this weight % (0–100) |
+
 ### Sector Rotation
 
 ```
@@ -1719,6 +1955,14 @@ Computes daily drawdown from peak for the portfolio over the specified period.
   ]
 }
 ```
+
+### Economic / Macro Calendar
+
+```
+GET /analytics/economic-calendar/{portfolio_id}
+```
+
+Unified upcoming-catalysts feed for a portfolio over a forward ~3-month window, merging: upcoming **earnings** dates for held symbols (yfinance), upcoming **ex-dividend** dates (yfinance, best-effort), and a curated static set of key **macro** events (RBI / ECB rate decisions, US / India CPI prints, US jobs report). Each event is tagged with a `type` (`EARNINGS` / `EX_DIV` / `MACRO`) and a `region`; macro events also carry an `importance`. Events are sorted by date and yfinance failures degrade gracefully.
 
 ---
 
@@ -1842,12 +2086,75 @@ DELETE /comparison/stop-loss/{holding_id}
 
 ---
 
+## Corporate Actions
+
+Detect and apply stock splits and bonus issues. All routes live under the `/corporate-actions` prefix and are auth-scoped (ownership is verified via holding → portfolio → user).
+
+### Detect Corporate Actions
+
+```
+POST /corporate-actions/detect
+```
+
+Scans all of the user's holdings for new splits/bonuses via yfinance, records any newly found action with status `DETECTED`, and returns the full pending (`DETECTED`) list. Best-effort — unreachable tickers are skipped silently.
+
+**Response** `200 OK`:
+```json
+{
+  "count": 1,
+  "actions": [
+    {
+      "id": 1,
+      "holding_id": 3,
+      "stock_symbol": "IRCTC",
+      "action_type": "SPLIT",
+      "ratio": "5:1",
+      "ex_date": "2024-10-28",
+      "status": "DETECTED"
+    }
+  ]
+}
+```
+
+### List Corporate Actions
+
+```
+GET /corporate-actions/
+```
+
+Lists the user's corporate actions, optionally filtered by status.
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `status` | string | *(all)* | Filter by `DETECTED`, `APPLIED`, or `DISMISSED` |
+
+Returns `{ "count": n, "actions": [...] }`.
+
+### Apply Corporate Action
+
+```
+POST /corporate-actions/{action_id}/apply
+```
+
+Applies a detected split/bonus, adjusting the holding's quantity and average price. Idempotent — applying an already-applied action does not double-adjust. Returns `404` if the action is not found, `400` on an invalid state.
+
+### Dismiss Corporate Action
+
+```
+POST /corporate-actions/{action_id}/dismiss
+```
+
+Dismisses a detected corporate action without adjusting the holding.
+
+---
+
 ## Additional Endpoints
 
 Endpoints not covered in detail above, one line each:
 
 ### Auth
-- `GET /auth/me` — get the current authenticated user (includes `totp_enabled`)
+- `GET /auth/me` — get the current authenticated user (includes `totp_enabled`, `phone`, `telegram_chat_id`)
 - `POST /auth/2fa/disable` — disable 2FA after verifying a current TOTP code (`{"code": "123456"}`)
 
 ### Portfolios & Holdings
@@ -1861,7 +2168,7 @@ Endpoints not covered in detail above, one line each:
 
 ### Tax
 - `GET /tax/` — list tax records (`financial_year`, `jurisdiction` filters)
-- `POST /tax/compute/{transaction_id}` — compute tax for a SELL transaction and create a tax record
+- `POST /tax/compute/{transaction_id}` — compute per-lot FIFO tax for a SELL transaction and create tax records; returns a **list** (a single SELL can straddle the STCG/LTCG boundary and yield multiple records). Idempotent recompute.
 - `DELETE /tax/{record_id}` — delete a tax record
 
 ### Goals
@@ -1871,7 +2178,9 @@ Endpoints not covered in detail above, one line each:
 ### Mutual Funds
 - `PUT /mutual-funds/{fund_id}` — update a mutual fund holding
 - `DELETE /mutual-funds/{fund_id}` — delete a mutual fund holding
-- `GET /mutual-funds/summary` — aggregate summary of all mutual fund holdings
+- `GET /mutual-funds/summary` — aggregate summary of all mutual fund holdings (total invested/current value, gain %, and real portfolio `xirr`)
+- `GET /mutual-funds/overlap` — portfolio overlap X-ray across mutual fund holdings (see [Mutual Funds](#mutual-funds))
+- `GET /mutual-funds/expense-analysis` — value-weighted expense ratio and fee-drag projection (see [Mutual Funds](#mutual-funds))
 - `POST /mutual-funds/refresh` — refresh NAVs from mfapi.in
 - `GET /mutual-funds/search?q=` — search schemes by name on mfapi.in
 
