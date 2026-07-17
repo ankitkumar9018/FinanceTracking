@@ -34,13 +34,13 @@ FinanceTracker is a full-stack, cross-platform investment tracking application b
   |  | REST API (v1)    |  | WebSocket Server |  | OpenAPI / Swagger  |  |
   |  | - Auth           |  | - /ws/prices     |  | Auto-generated     |  |
   |  | - Portfolio       |  | - /ws/alerts     |  | docs at /docs      |  |
-  |  | - Holdings       |  | - /ws/chat       |  |                    |  |
-  |  | - Transactions   |  +------------------+  +--------------------+  |
+  |  | - Holdings       |  +------------------+  +--------------------+  |
+  |  | - Transactions   |                                                |
   |  | - Market Data    |                                                |
   |  | - Alerts         |  +------------------------------------------+ |
   |  | - Charts         |  |            Middleware Stack               | |
-  |  | - Tax            |  | - JWT Auth    - CORS     - Rate Limit    | |
-  |  | - AI/ML          |  | - Request ID  - Logging  - Compression   | |
+  |  | - Tax            |  | - CORS   - Rate Limit (slowapi, auth)    | |
+  |  | - AI/ML          |  | - Static file serving (desktop build)    | |
   |  | - Import/Export  |  +------------------------------------------+ |
   |  | - Settings       |                                                |
   |  +------------------+                                                |
@@ -54,14 +54,14 @@ FinanceTracker is a full-stack, cross-platform investment tracking application b
   |  Service         |  |  Service         |  |  Service            |
   |  - Holdings CRUD |  |  - yfinance      |  |  - Email (SendGrid) |
   |  - P&L calc      |  |  - Broker APIs   |  |  - WhatsApp (Twilio)|
-  |  - XIRR          |  |  - Twelve Data   |  |  - Telegram Bot     |
+  |  - XIRR          |  |                  |  |  - Telegram Bot     |
   +------------------+  +------------------+  |  - SMS (Twilio)     |
   +------------------+  +------------------+  |  - In-App Toast     |
   |  Alert Service   |  |  Tax Service     |  +---------------------+
   |  - Range checks  |  |  - Indian STCG   |  +---------------------+
   |  - RSI alerts    |  |  - Indian LTCG   |  |  Forex Service      |
-  |  - Custom rules  |  |  - German Abgelt.|  |  - ECB rates        |
-  +------------------+  |  - Tax harvest   |  |  - yfinance EURINR  |
+  |  - Custom rules  |  |  - German Abgelt.|  |  - yfinance rates   |
+  +------------------+  |  - Tax harvest   |  |  - DB rate cache    |
   +------------------+  +------------------+  +---------------------+
   |  Broker Service  |  +------------------+  +---------------------+
   |  - Zerodha       |  |  Excel/Export    |  |  Net Worth Service  |
@@ -135,25 +135,25 @@ FinanceTracker is a full-stack, cross-platform investment tracking application b
   |  |  SQLAlchemy 2.0 Async  |     |  Celery + Redis                  | |
   |  |  ORM + Alembic         |     |  (Background Tasks)              | |
   |  |                        |     |                                  | |
-  |  |  DEV:  SQLite +        |     |  - fetch_prices (5 min)          | |
-  |  |        aiosqlite       |     |  - check_alerts (1 min)          | |
-  |  |                        |     |  - calculate_rsi (daily)         | |
-  |  |  PROD: PostgreSQL +    |     |  - train_models (nightly)        | |
-  |  |        asyncpg         |     |  - send_notifications            | |
-  |  |                        |     |                                  | |
-  |  |  Zero code changes     |     |  Fallback: asyncio tasks if     | |
-  |  |  between dev and prod  |     |  Redis is unavailable            | |
+  |  |  DEV:  SQLite +        |     |  Beat schedule:                  | |
+  |  |        aiosqlite       |     |  - fetch_prices (5 min)          | |
+  |  |                        |     |  - check_alerts (1 min)          | |
+  |  |  PROD: PostgreSQL +    |     |                                  | |
+  |  |        asyncpg         |     |  Fallback: APScheduler           | |
+  |  |                        |     |  AsyncIOScheduler if Redis /     | |
+  |  |  Zero code changes     |     |  Celery is unavailable           | |
+  |  |  between dev and prod  |     |                                  | |
   |  +------------------------+     +----------------------------------+ |
   |                                                                      |
   +----------------------------------------------------------------------+
 
   EXTERNAL SERVICES
   -----------------
-  +-------------+  +-------------+  +-----------+  +------------------+
-  | yfinance    |  | Broker APIs |  | ECB/FX    |  | News RSS Feeds   |
-  | (Free)      |  | (Kite, etc) |  | (Free)    |  | (MoneyControl,   |
-  |             |  |             |  |           |  |  Economic Times)  |
-  +-------------+  +-------------+  +-----------+  +------------------+
+  +-------------+  +-------------+  +------------------+
+  | yfinance    |  | Broker APIs |  | News RSS Feeds   |
+  | (prices+FX) |  | (Kite, etc) |  | (MoneyControl,   |
+  |             |  |             |  |  Economic Times)  |
+  +-------------+  +-------------+  +------------------+
   +-------------+  +-------------+  +-----------+
   | SendGrid    |  | Twilio      |  | Telegram  |
   | (Email)     |  | (WA/SMS)    |  | Bot API   |
@@ -208,7 +208,7 @@ financeTracking/
 |
 +-- packages/
 |   +-- ui/                    # Shared UI component library
-|       +-- src/components/    # Shadcn/ui based components
+|       +-- src/components/    # Hand-rolled shared components
 |       +-- src/themes/        # Light + dark theme tokens
 |       +-- src/animations/    # Framer Motion animation presets
 |
@@ -242,11 +242,12 @@ Request Flow:
        |
        v
   +-- Middleware Stack --+
-  |  1. Request ID       |
-  |  2. CORS             |
-  |  3. Rate Limiting    |
-  |  4. Compression      |
-  |  5. Logging          |
+  |  1. CORS             |
+  |  2. Rate Limiting    |
+  |     (slowapi, auth   |
+  |      endpoints only) |
+  |  3. Static files     |
+  |     (desktop build)  |
   +----------+-----------+
              |
              v
@@ -296,26 +297,24 @@ DATABASE_URL = "postgresql+asyncpg://user:pass@host/db" # Prod
   |  Beat Schedule:               |
   |  - fetch_prices:   every 5m   |
   |  - check_alerts:   every 1m   |
-  |  - calculate_rsi:  daily 16:00|
-  |  - train_models:   daily 02:00|
-  |  - send_notifs:    on trigger  |
   |                               |
   +-------------------------------+
               |
-              | If Redis unavailable
+              | If Redis/Celery unavailable
               v
-  +-- asyncio Fallback --+
-  |                       |
-  |  In-process scheduler |
-  |  using asyncio.create |
-  |  _task() + sleep loop |
-  |                       |
-  |  Same logic, single   |
-  |  process, no Redis    |
-  +------+----------------+
+  +-- APScheduler Fallback --+
+  |                           |
+  |  AsyncIOScheduler with    |
+  |  interval jobs:           |
+  |  - fetch_prices_job       |
+  |  - check_alerts_job       |
+  |                           |
+  |  Same logic, single       |
+  |  process, no Redis        |
+  +------+--------------------+
 ```
 
-When Redis is available, Celery provides distributed task execution with a beat scheduler. When Redis is not installed (common for local development), the system falls back to `asyncio`-based background tasks running inside the FastAPI process.
+When Redis is available, Celery provides distributed task execution with a beat scheduler running two periodic tasks (`fetch-prices`, `check-alerts`). When Redis or Celery is not installed (common for local development), the system falls back to APScheduler's `AsyncIOScheduler` running the same two interval jobs inside the FastAPI process.
 
 ---
 
@@ -326,10 +325,9 @@ When Redis is available, Celery provides distributed task execution with a beat 
 The web application uses the **App Router** with React Server Components (RSC) and streaming SSR:
 
 ```
-apps/web/
+apps/web/src/
 +-- app/
 |   +-- layout.tsx              # Root: theme provider, fonts, metadata
-|   +-- page.tsx                # Landing page / redirect to login
 |   +-- (auth)/
 |   |   +-- login/page.tsx
 |   |   +-- register/page.tsx
@@ -349,7 +347,7 @@ apps/web/
 |       +-- brokers/            # Broker connection management
 |       +-- backtest/           # Strategy backtesting
 |       +-- optimizer/          # Portfolio optimizer
-|       +-- analytics/          # Correlation, treemap, calendar, drawdown
+|       +-- visualizations/     # Correlation, treemap, calendar, drawdown
 |       +-- net-worth/          # Multi-asset net worth
 |       +-- esg/                # ESG scoring gauges
 |       +-- whatif/             # What-if simulator
@@ -363,12 +361,9 @@ apps/web/
 |       +-- import/             # Excel/CSV import
 |       +-- settings/           # User settings
 |       +-- help/               # Help center + topic pages
-+-- components/
-|   +-- dashboard/              # Portfolio table, summary cards, heatmap
-|   +-- charts/                 # TradingView, ECharts, Recharts wrappers
-|   +-- ai/                     # Chat panel, voice input
-|   +-- shared/                 # Common UI wrappers
++-- components/                 # Portfolio table, charts, AI chat, shared UI
 +-- hooks/                      # usePortfolio, useWebSocket, useTheme
++-- stores/                     # Zustand stores (auth, portfolio)
 +-- lib/                        # API client, WebSocket manager, utilities
 ```
 
@@ -377,8 +372,7 @@ apps/web/
 | Library | Purpose | Size |
 |---|---|---|
 | TradingView Lightweight Charts v4.2 | Candlestick, OHLCV, real-time price | ~45KB |
-| Apache ECharts 5 | Heatmaps, treemaps, donut/pie, rich tooltips | ~300KB (tree-shaken) |
-| Recharts + D3.js | Goal progress, risk gauges, sparklines | ~60KB |
+| Recharts 2.15 | Donut/pie, goal progress, analytics charts | ~60KB |
 
 ### Tauri v2 Desktop Application
 
@@ -388,20 +382,19 @@ The desktop app wraps the same React components in a native shell:
 apps/desktop/
 +-- src-tauri/
 |   +-- Cargo.toml              # Rust dependencies
-|   +-- tauri.conf.json         # Window config, permissions, updater
-|   +-- src/lib.rs              # Tauri commands, system tray, plugins
+|   +-- tauri.conf.json         # Window config, permissions
+|   +-- src/lib.rs              # Tauri setup and plugins
 |   +-- capabilities/           # Fine-grained permission model
 +-- src/
-|   +-- App.tsx                 # Root component (shared with web)
-|   +-- main.tsx                # Tauri-specific entry point
+|   +-- index.html              # Loader page that navigates to the backend-served frontend
 ```
+
+The desktop WebView navigates to the backend (`http://localhost:8000`), which serves the Next.js static export — so frontend and API are same-origin.
 
 **Tauri Advantages over Electron:**
 - Bundle size: 5-10MB vs Electron's 100MB+
 - Memory usage: ~30MB vs Electron's 100-200MB
-- Native OS integration via Rust plugins
-- System tray with alert badge count
-- Auto-updater built in
+- Native OS integration via Rust plugins (shell, notifications)
 
 ---
 
@@ -411,11 +404,10 @@ apps/desktop/
 
 ```
 1. Market opens (09:15 IST / 09:00 CET)
-2. Celery beat triggers fetch_prices task every 5 minutes
+2. Scheduler (Celery beat or APScheduler) triggers fetch_prices every 5 minutes
 3. For each holding:
-   a. If broker connected -> use broker WebSocket (real-time, <1s latency)
-   b. Else -> poll yfinance (15-min delayed for NSE)
-   c. If yfinance fails -> serve cached price with "stale" flag
+   a. Poll yfinance (15-min delayed for NSE)
+   b. If yfinance fails -> serve cached price with "stale" flag
 4. Price stored in price_history table
 5. check_alerts task runs every 1 minute:
    a. Compare current_price against holding range levels
@@ -425,20 +417,20 @@ apps/desktop/
 7. Frontend animates number transitions in real-time
 ```
 
+There is no real-time broker price feed — all prices come from yfinance; broker connections are used for holdings sync only.
+
 ### Excel Import Flow
 
 ```
 1. User uploads .xlsx file via drag-and-drop
 2. Backend parses with openpyxl
 3. Column mapping validated (Stock, Date, Qty, Price, Ranges...)
-4. Preview table returned to user for confirmation
-5. On confirm:
+4. Import runs in one shot (no preview/confirm step):
    a. Create/update holdings with range levels
    b. Create transactions (BUY/SELL records)
    c. Calculate cumulative_quantity and average_price
-   d. Fetch current prices for new stocks
-   e. Run alert check on new holdings
-6. Dashboard updates in real-time via WebSocket
+5. Response returns rows_parsed / holdings_created / transactions_created
+6. Dashboard reflects the new holdings on next refresh
 ```
 
 ---
@@ -449,8 +441,8 @@ Every external dependency has a fallback. The core application (portfolio tracki
 
 | Service | If Missing | Fallback |
 |---|---|---|
-| Redis | Not installed | asyncio in-process task queue |
-| Celery | Not installed | asyncio scheduled tasks within FastAPI |
+| Redis | Not installed | APScheduler in-process scheduler |
+| Celery | Not installed | APScheduler scheduled jobs within FastAPI |
 | Ollama / LLM | Not installed | AI features show "AI offline" banner; all other features work |
 | yfinance | Rate limited | Show last cached price with "stale" timestamp |
 | Broker API | Connection fails | Manual data entry; show "Broker disconnected" badge |
@@ -487,11 +479,10 @@ See [security.md](security.md) for the full security document. Key points:
 - JWT authentication with 15-minute access tokens and 7-day refresh tokens
 - Optional TOTP-based 2FA
 - Fernet encryption for stored API keys and secrets
-- HTTPS-only with HSTS headers
 - CORS strict origin allowlist
-- Rate limiting via slowapi (100 req/min general, 5/min register, 10/min login, 20/min refresh)
+- Rate limiting via slowapi on auth endpoints (5/min register, 10/min login, 20/min refresh)
 - SQLAlchemy ORM prevents SQL injection (no raw SQL)
-- React auto-escaping + CSP headers prevent XSS
+- React auto-escaping prevents XSS
 - All secrets in `.env` files, never committed to git
 
 ---

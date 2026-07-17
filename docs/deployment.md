@@ -8,10 +8,10 @@ FinanceTracker supports multiple deployment configurations:
 
 | Environment | Backend | Frontend | Database | Task Queue |
 |---|---|---|---|---|
-| **Local Dev** | uvicorn (reload) | next dev | SQLite | asyncio fallback |
+| **Local Dev** | uvicorn (reload) | next dev | SQLite | APScheduler fallback |
 | **Docker Dev** | Docker Compose | Docker Compose | SQLite/PostgreSQL | Celery + Redis |
 | **Production Web** | Docker / Railway | Vercel | PostgreSQL | Celery + Redis |
-| **Desktop** | Bundled | Tauri .dmg/.msi | SQLite (local) | asyncio fallback |
+| **Desktop** | Bundled | Tauri .dmg/.msi | SQLite (local) | APScheduler fallback |
 
 ---
 
@@ -335,16 +335,7 @@ vercel env add NEXT_PUBLIC_API_URL
 # Enter: https://your-api-domain.com
 ```
 
-**Vercel Configuration** (`apps/web/vercel.json`):
-
-```json
-{
-  "buildCommand": "cd ../.. && pnpm --filter web build",
-  "outputDirectory": ".next",
-  "installCommand": "cd ../.. && pnpm install",
-  "framework": "nextjs"
-}
-```
+There is no checked-in `vercel.json`; configure the monorepo build in the Vercel dashboard (root directory `apps/web`, install command `pnpm install` from the repo root, build command `pnpm --filter @finance-tracker/web build`).
 
 ### Desktop App (Tauri Builds)
 
@@ -443,16 +434,16 @@ Returns:
 ```json
 {
   "status": "healthy",
-  "version": "1.0.0",
-  "database": "connected",
-  "redis": "connected",
-  "uptime_seconds": 86400
+  "app": "FinanceTracker",
+  "version": "1.0.0"
 }
 ```
 
+For per-service status (database, Redis, Ollama, notification channels), use the authenticated `GET /api/v1/settings/health` endpoint instead.
+
 ### Logging
 
-- Backend logs: structured JSON via `structlog`
+- Backend logs: standard Python `logging`
 - Log levels: DEBUG (dev), INFO (production)
 - Log aggregation: stdout (captured by Docker/Railway)
 
@@ -472,7 +463,7 @@ Returns:
 # Database:     OK (SQLite, 12.5 MB)
 # Redis:        WARN (not running, using fallback)
 # Ollama:       OK (llama3.2 loaded)
-# Celery:       WARN (not running, using asyncio)
+# Celery:       WARN (not running, using APScheduler)
 ```
 
 ---

@@ -13,7 +13,7 @@ A highly visual, cross-platform portfolio tracking application designed for non-
 - **Manual Entry** — Add stocks, transactions, and price ranges directly from the dashboard
 - **Custom Columns** — Add your own columns and reorder the table to your liking
 - **Cumulative Holdings** — Automatic calculation of quantity and weighted average price
-- **Real-time Prices** — Live stock prices via broker WebSocket or yfinance
+- **Real-time Prices** — Live stock prices via yfinance (auto-refreshed on a schedule)
 - **RSI Tracking** — 14-period RSI calculated and displayed for every holding
 
 ### Intelligent Alerts (Color-Coded)
@@ -35,9 +35,9 @@ A highly visual, cross-platform portfolio tracking application designed for non-
 - **Auto-Sync** — Holdings, positions, and transactions sync automatically
 
 ### Tax Tracking
-- **India** — STCG/LTCG classification, tax harvesting suggestions, ITR report generation
+- **India** — STCG/LTCG classification, tax harvesting suggestions
 - **Germany** — Abgeltungssteuer, Vorabpauschale, Freistellungsauftrag tracking, Anlage KAP support
-- **Multi-Currency** — INR + EUR with real-time forex rates from ECB
+- **Multi-Currency** — INR + EUR with forex rates via yfinance
 
 ### AI Assistant
 - **Natural Language Queries** — Ask "Which stocks are underperforming?" or "How much LTCG tax will I owe?"
@@ -46,7 +46,7 @@ A highly visual, cross-platform portfolio tracking application designed for non-
 - **Graceful Degradation** — App works 100% without AI; AI features are optional enhancements
 
 ### Additional Features
-- **Mutual Fund Tracking** — Import CAS from CAMS/KFintech, AMFI NAV data
+- **Mutual Fund Tracking** — CSV bulk import, AMFI NAV data via mfapi.in
 - **Dividend Tracking** — DRIP support, dividend calendar, tax implications
 - **Goal-Based Investing** — Set financial goals, track progress with visual gauges
 - **Portfolio Analytics** — XIRR, Sharpe Ratio, Sortino Ratio, VaR, Max Drawdown
@@ -65,8 +65,8 @@ A highly visual, cross-platform portfolio tracking application designed for non-
 | Python Packages | uv (by Astral) |
 | Web App | Next.js 15 + React 19 + TypeScript |
 | Desktop App | Tauri v2 + React (Windows, macOS, Linux) |
-| UI Components | Shadcn/ui + Tailwind CSS 4 + Framer Motion |
-| Charts | TradingView Lightweight Charts + Apache ECharts |
+| UI Components | Hand-rolled component library (`packages/ui`) + Tailwind CSS 4 + Framer Motion |
+| Charts | TradingView Lightweight Charts + Recharts |
 | Database | SQLite (dev) / PostgreSQL (prod) via SQLAlchemy |
 | ML/AI | PyTorch, scikit-learn, pandas_ta, LangChain |
 | LLM | Ollama + Llama 3.2 (local) / OpenAI / Claude / Gemini |
@@ -213,8 +213,8 @@ See [docs/desktop-app.md](docs/desktop-app.md) for the full step-by-step build g
               ▼                  ▼                   ▼
      ┌────────────────┐ ┌───────────────┐ ┌─────────────────┐
      │  Price Engine   │ │  Alert Engine │ │   AI Assistant  │
-     │  (yfinance +   │ │ (Color-coded  │ │ (Ollama/LLM +   │
-     │   broker API)  │ │  ranges)      │ │  LangChain)     │
+     │  (yfinance)    │ │ (Color-coded  │ │ (Ollama/LLM +   │
+     │                │ │  ranges)      │ │  LangChain)     │
      └────────────────┘ └───────────────┘ └─────────────────┘
               │                  │                   │
               └──────────────────┼───────────────────┘
@@ -254,7 +254,7 @@ financeTracking/
 │   ├── web/          # Next.js 15 web application
 │   └── desktop/      # Tauri v2 desktop app (Windows, macOS, Linux)
 ├── packages/
-│   └── ui/           # Shared UI components (Shadcn/ui)
+│   └── ui/           # Shared UI components (hand-rolled)
 ├── docs/             # Comprehensive documentation
 ├── scripts/          # Setup, start, stop, health-check scripts
 ├── PROJECT_PLAN.md   # Detailed implementation plan with phases
@@ -301,11 +301,8 @@ The application includes a built-in Help Center accessible from every page:
 # Run backend tests
 cd backend && uv run pytest -v --cov=app
 
-# Run frontend tests
-pnpm --filter web test
-
-# Run E2E tests
-pnpm --filter web test:e2e
+# Run frontend E2E tests (Playwright)
+pnpm --filter @finance-tracker/web test:e2e
 
 # Run all tests
 pnpm test

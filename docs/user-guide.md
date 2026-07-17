@@ -80,20 +80,15 @@ Your Excel file (.xlsx) should have these columns:
 | Sale Price | No | 2700.00 |
 | Sale Date | No | 2024-06-20 |
 
-The column names do not need to match exactly -- the app will try to map them automatically and let you confirm.
+The column names do not need to match exactly -- the app will try to map them automatically.
 
 ### Step 2: Upload
 
 1. Go to **Import** from the sidebar
-2. Drag and drop your file onto the upload area, or click to browse
-3. Wait for the file to be parsed
-
-### Step 3: Review and Confirm
-
-1. A preview table shows all the data the app found in your file
-2. Any errors are highlighted in red (for example, an invalid price format)
-3. Fix any issues or accept the preview
-4. Click **Confirm Import**
+2. Choose the portfolio to import into
+3. Drag and drop your file onto the upload area, or click to browse
+4. The file is parsed and imported in one step -- there is no separate preview/confirm screen
+5. A summary shows how many rows were parsed and how many holdings/transactions were created
 
 After import, your dashboard will show all your holdings with current prices fetched automatically.
 
@@ -134,6 +129,8 @@ The app automatically recalculates your cumulative quantity and average price.
 
 You can click directly on any range value in the table (base level, mid ranges, top level) to edit it inline. Press Enter to save.
 
+The **Edit Holding** dialog (on the Holdings page) also has a **Target %** field -- set a target allocation percentage there and the Alerts page will warn you when the holding drifts away from it.
+
 ---
 
 ## Understanding the Dashboard
@@ -148,7 +145,13 @@ At the top, you see cards showing:
 - **Top Gainer** -- Your best-performing stock today
 - **Top Loser** -- Your worst-performing stock today
 
+Below these, **XIRR** and **Benchmark** cards show your portfolio's annualized return (XIRR) and how it compares against an index such as NIFTY50.
+
 These numbers update in real-time with animated transitions.
+
+### Switching and Creating Portfolios
+
+The portfolio selector in the top bar lets you switch between portfolios. Click the **+** button next to it to create another portfolio (e.g., separate Indian and German portfolios) without leaving the page.
 
 ### Holdings Table (Center)
 
@@ -295,27 +298,25 @@ You can choose which alert types go to which channels. For example:
 
 ## Connecting Your Broker
 
-Connecting a broker lets the app automatically sync your holdings and get real-time prices.
+Connecting a broker lets the app sync your holdings automatically.
 
 ### Supported Brokers
 
-**India**: Zerodha, ICICI Direct, Angel One, Upstox, 5Paisa
-**Germany**: Deutsche Bank, comdirect
+**India**: Zerodha, ICICI Direct (Angel One, Groww, Upstox, and 5Paisa are listed as "coming soon")
+**Germany**: Deutsche Bank, comdirect (coming soon)
 
 ### How to Connect
 
-1. Go to **Settings** then **Brokers**
+1. Go to **Brokers** in the sidebar
 2. Click **Connect** next to your broker
 3. Enter your API credentials (API key and secret)
-4. You will be redirected to your broker's login page
-5. Log in and grant access
-6. You will be redirected back to FinanceTracker
+4. For Zerodha, the app then shows a broker login link -- open it, log in, and copy the `request_token` from the page you are redirected to
+5. Paste the `request_token` back into the connect form to finish
 
 ### After Connecting
 
-- Your holdings are automatically imported
-- Current prices update in real-time via your broker's feed
-- New transactions appear automatically
+- Your holdings can be synced into your portfolio with the **Sync** button
+- Prices still come from yfinance (there is no real-time broker price feed)
 - You still set range levels manually -- the broker does not control those
 
 ---
@@ -359,7 +360,6 @@ If no AI provider is available, you will see an "AI assistant offline" message. 
 FinanceTracker automatically classifies your gains:
 - **STCG (Short-Term Capital Gains)**: Stocks held less than 12 months, taxed at 20%
 - **LTCG (Long-Term Capital Gains)**: Stocks held over 12 months, taxed at 12.5% (amounts above 1.25 lakh are exempt per FY)
-- **Dividend TDS**: Tax deducted at source on dividends above 5,000
 
 ### German Tax Tracking
 
@@ -373,8 +373,8 @@ Go to **Tax** in the sidebar to see:
 - Year-wise summary of gains and losses
 - STCG vs LTCG breakdown
 - Tax harvesting suggestions ("sell these losing stocks to save on tax")
-- Holding period timer ("stock X becomes LTCG eligible in 45 days")
-- Export tax report as PDF or Excel for your accountant
+
+Tax records can also be bulk-imported/exported as CSV from the Import and Reports pages.
 
 ---
 
@@ -408,16 +408,16 @@ When you hit 25%, 50%, 75%, and 100% of your goal, you see a celebration animati
 
 ### Mutual Funds
 
-- Add mutual fund holdings manually or import from your CAS (Consolidated Account Statement)
-- NAV (Net Asset Value) updates daily from AMFI
-- XIRR returns calculated automatically
+- Add mutual fund holdings manually or bulk-import them from a CSV file (a template is available on the Import page)
+- NAV (Net Asset Value) can be refreshed from mfapi.in
+- XIRR for mutual funds is not calculated yet (shown as a placeholder)
 
 ### Dividends
 
 - Record dividends received on each holding
 - Track if dividends were reinvested (DRIP)
-- Dividend calendar shows upcoming dividend dates
-- Tax implications shown for each dividend
+- Dividend calendar shows monthly dividend totals
+- Delete a dividend record with the trash button on its row
 
 ---
 
@@ -453,6 +453,7 @@ Track your total net worth across all asset types, not just stocks.
 3. Click **+ Add Asset** to add other assets (crypto, gold, FD, bonds, real estate)
 4. For crypto and gold with a ticker symbol, prices update automatically
 5. For fixed deposits and real estate, update values manually
+6. Remove an asset with the delete button on its card
 
 The page shows a donut chart breakdown by asset type and a total net worth figure.
 
@@ -512,7 +513,7 @@ Track your derivatives positions alongside your equity holdings.
 2. Click **+ Add Position** to enter a new position
 3. Choose instrument type: **FUT** (futures), **CE** (call option), or **PE** (put option)
 4. For options, enter the strike price and expiry date
-5. Summary cards show total P&L, margin used, and open position count
+5. Summary cards show realized and unrealized P&L and open position count
 
 ---
 
@@ -542,10 +543,17 @@ View all your recurring investments (SIPs), dividends, and earnings in one calen
 3. Click **+ Add Custom Column** to create your own (name and type: text, number, or date)
 4. Drag columns to reorder them
 
+### Security
+
+The **Security** section in Settings covers your account protection:
+
+- **Change Password**: Enter your current password and a new one
+- **Two-Factor Authentication (2FA)**: Set up an authenticator app (scan the QR / enter the secret, then confirm with a code). You can disable 2FA later with a current code.
+
 ### Data Backup
 
-- **Export All Data**: Settings then Advanced then Export (creates a full backup)
-- **Import Data**: Settings then Advanced then Import (restore from a backup)
+- **Export**: Go to the **Reports** page for holdings/transactions CSV, a JSON portfolio backup, an HTML report, and Google Sheets export
+- **Import**: Go to the **Import** page to restore a JSON backup or import Excel/CSV files
 
 ---
 

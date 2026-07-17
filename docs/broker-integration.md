@@ -31,97 +31,97 @@ All broker integrations implement a common interface defined in `backend/app/bro
 
 ```python
 from abc import ABC, abstractmethod
-from typing import Optional
-from datetime import datetime, date
+from datetime import datetime
 
 class BrokerAdapter(ABC):
-    """Abstract base class for all broker integrations."""
+    """Abstract interface for all broker integrations."""
+
+    BROKER_NAME: str = ""
 
     @abstractmethod
-    async def connect(self, api_key: str, api_secret: str, **kwargs) -> bool:
-        """Establish connection and authenticate with the broker."""
-        ...
+    async def connect(self, api_key: str, api_secret: str, **kwargs) -> dict:
+        """Initialize connection and return access-token info.
+
+        Returns a dict with at least ``{"access_token": ..., "login_url": ...}``
+        depending on the broker's OAuth flow.
+        """
 
     @abstractmethod
     async def disconnect(self) -> None:
-        """Revoke tokens and clean up connection."""
-        ...
+        """Clean up the connection / invalidate session."""
 
     @abstractmethod
-    async def get_auth_url(self) -> str:
-        """Return the OAuth authorization URL for user consent."""
-        ...
+    async def get_holdings(self) -> list[BrokerHolding]:
+        """Fetch demat holdings."""
 
     @abstractmethod
-    async def handle_callback(self, request_token: str) -> dict:
-        """Process OAuth callback and store access token."""
-        ...
+    async def get_positions(self) -> list[BrokerPosition]:
+        """Fetch current-day positions."""
 
     @abstractmethod
-    async def get_holdings(self) -> list[HoldingData]:
-        """Fetch current demat holdings."""
-        ...
-
-    @abstractmethod
-    async def get_positions(self) -> list[PositionData]:
-        """Fetch open intraday/delivery positions."""
-        ...
-
-    @abstractmethod
-    async def get_orders(self, from_date: date, to_date: date) -> list[OrderData]:
-        """Fetch order history for a date range."""
-        ...
+    async def get_orders(
+        self, from_date: datetime | None = None, to_date: datetime | None = None
+    ) -> list[BrokerOrder]:
+        """Fetch order history, optionally filtered by date range."""
 
     @abstractmethod
     async def get_historical_data(
-        self, symbol: str, from_date: date, to_date: date, interval: str = "day"
-    ) -> list[OHLCVData]:
-        """Fetch historical OHLCV candle data."""
-        ...
+        self,
+        symbol: str,
+        exchange: str,
+        from_date: datetime,
+        to_date: datetime,
+        interval: str = "day",
+    ) -> list[dict]:
+        """Fetch OHLCV candles as dicts with keys date/open/high/low/close/volume."""
 
     @abstractmethod
-    async def get_quote(self, symbol: str) -> QuoteData:
-        """Fetch current market quote for a symbol."""
-        ...
+    def is_connected(self) -> bool:
+        """Return True if the session is active and usable. (Synchronous.)"""
 
-    @abstractmethod
-    async def is_connected(self) -> bool:
-        """Check if the connection is active and token is valid."""
-        ...
-
-    async def get_funds(self) -> Optional[FundsData]:
-        """Fetch available margin/funds. Optional."""
+    async def get_live_price(self, symbol: str, exchange: str) -> float | None:
+        """Get the live price for a symbol. Optional — default returns None."""
         return None
-
-    async def subscribe_prices(self, symbols: list[str], callback) -> None:
-        """Subscribe to real-time price streaming. Optional."""
-        raise NotImplementedError("This broker does not support WebSocket streaming")
 ```
+
+Note that there are no separate `get_auth_url` / `handle_callback` methods: the OAuth round-trip is handled entirely inside `connect()` (call it without a token to get a `login_url`, call it again with the token to complete the exchange — see the Zerodha flow below).
 
 ### Data Transfer Objects
 
-All brokers return standardized data objects:
+All brokers return standardized dataclasses defined in `base.py`:
 
 ```python
 @dataclass
-class HoldingData:
+class BrokerHolding:
     symbol: str
-    exchange: str         # NSE, BSE, XETRA, etc.
+    exchange: str         # NSE, BSE, etc.
     quantity: float
     average_price: float
-    current_price: float
-    pnl: float
-    isin: Optional[str]
+    last_price: float | None = None
 
 @dataclass
-class OHLCVData:
-    date: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: int
+class BrokerOrder:
+    order_id: str
+    symbol: str
+    exchange: str
+    order_type: str       # BUY / SELL
+    quantity: float
+    price: float
+    status: str           # COMPLETE / PENDING / CANCELLED
+    timestamp: datetime | None = None
+
+@dataclass
+class BrokerPosition:
+    symbol: str
+    exchange: str
+    quantity: float
+    average_price: float
+    last_price: float
+    pnl: float
+    day_change: float
 ```
+
+Historical candles are returned as plain dicts (`date`, `open`, `high`, `low`, `close`, `volume`) rather than a dedicated OHLCV dataclass.
 
 ---
 
@@ -141,15 +141,21 @@ class OHLCVData:
 
 #### OAuth Flow
 
+There is no dedicated callback route — the whole round-trip goes through `POST /api/v1/broker/connect` (router prefix is `/broker`, singular):
+
 ```
-1. User clicks "Connect Zerodha" in Settings -> Brokers
-2. App redirects to Kite login page:
+1. User clicks "Connect Zerodha" in the Brokers page
+2. Frontend calls POST /api/v1/broker/connect with api_key + api_secret
+   (no request_token yet)
+3. Backend returns a connect response whose login_url points to the
+   Kite login page:
    https://kite.zerodha.com/connect/login?v=3&api_key=YOUR_API_KEY
-3. User logs in and grants permissions
-4. Kite redirects back to:
-   http://localhost:8000/api/v1/brokers/zerodha/callback?request_token=TOKEN&status=success
-5. Backend exchanges request_token for access_token using API secret
-6. Access token stored (Fernet-encrypted) in broker_connections table
+4. User logs in and grants permissions; Kite redirects to the app's
+   configured redirect URL with request_token=TOKEN
+5. Frontend calls POST /api/v1/broker/connect again, passing the
+   request_token in additional_params
+6. Backend exchanges request_token for access_token using the API secret
+7. Access token stored (Fernet-encrypted) in broker_connections table
 ```
 
 #### Available Endpoints
@@ -173,48 +179,37 @@ class OHLCVData:
 
 #### Implementation Notes
 
+The adapter class is `ZerodhaBroker` (in `brokers/zerodha.py`). `kiteconnect` is an optional dependency — if it is not installed, `connect()` raises a clear "install kiteconnect" error. The two-phase OAuth handshake lives entirely in `connect()`:
+
 ```python
-from kiteconnect import KiteConnect, KiteTicker
+class ZerodhaBroker(BrokerAdapter):
+    BROKER_NAME = "zerodha"
 
-class ZerodhaAdapter(BrokerAdapter):
-    def __init__(self):
-        self.kite = None
-        self.ticker = None
+    async def connect(self, api_key: str, api_secret: str, **kwargs) -> dict:
+        self._kite = KiteConnect(api_key=api_key)
 
-    async def connect(self, api_key: str, api_secret: str, **kwargs):
-        self.kite = KiteConnect(api_key=api_key)
-        if "access_token" in kwargs:
-            self.kite.set_access_token(kwargs["access_token"])
-            return True
-        return False
+        request_token = kwargs.get("request_token")
+        if request_token:
+            # Phase 2: complete the token exchange
+            data = self._kite.generate_session(request_token, api_secret=api_secret)
+            self._access_token = data["access_token"]
+            self._kite.set_access_token(self._access_token)
+            return {"access_token": self._access_token, "login_url": None}
 
-    async def get_auth_url(self) -> str:
-        return self.kite.login_url()
+        # Phase 1: return login URL so the frontend can redirect
+        return {"access_token": None, "login_url": self._kite.login_url()}
 
-    async def handle_callback(self, request_token: str) -> dict:
-        data = self.kite.generate_session(
-            request_token, api_secret=self.api_secret
-        )
-        self.kite.set_access_token(data["access_token"])
-        return {
-            "access_token": data["access_token"],
-            "user_id": data["user_id"],
-            "login_time": data["login_time"]
-        }
-
-    async def get_holdings(self) -> list[HoldingData]:
-        holdings = self.kite.holdings()
+    async def get_holdings(self) -> list[BrokerHolding]:
+        raw_holdings = self._kite.holdings()
         return [
-            HoldingData(
-                symbol=h["tradingsymbol"],
-                exchange=h["exchange"],
-                quantity=h["quantity"],
-                average_price=h["average_price"],
-                current_price=h["last_price"],
-                pnl=h["pnl"],
-                isin=h["isin"]
+            BrokerHolding(
+                symbol=h.get("tradingsymbol", ""),
+                exchange=EXCHANGE_MAP.get(h.get("exchange", "NSE"), "NSE"),
+                quantity=float(h.get("quantity", 0)),
+                average_price=float(h.get("average_price", 0)),
+                last_price=float(h["last_price"]) if h.get("last_price") else None,
             )
-            for h in holdings
+            for h in raw_holdings
         ]
 ```
 
@@ -258,32 +253,28 @@ class ZerodhaAdapter(BrokerAdapter):
 
 #### Implementation Notes
 
+The adapter class is `ICICIDirectBroker` (in `brokers/icici_direct.py`). `breeze_connect` is an optional dependency. Like Zerodha, the OAuth handshake is two calls to `connect()` — the first returns a `login_url` (`https://api.icicidirect.com/apiuser/login?api_key=...`), the second passes `session_token` in `additional_params` to complete `generate_session`:
+
 ```python
-from breeze_connect import BreezeConnect
+class ICICIDirectBroker(BrokerAdapter):
+    BROKER_NAME = "icici_direct"
 
-class ICICIDirectAdapter(BrokerAdapter):
-    def __init__(self):
-        self.breeze = None
+    async def connect(self, api_key: str, api_secret: str, **kwargs) -> dict:
+        self._breeze = BreezeConnect(api_key=api_key)
 
-    async def connect(self, api_key: str, api_secret: str, **kwargs):
-        self.breeze = BreezeConnect(api_key=api_key)
-        if "session_token" in kwargs:
-            self.breeze.generate_session(
+        session_token = kwargs.get("session_token")
+        if session_token:
+            # Phase 2: complete the session generation
+            self._breeze.generate_session(
                 api_secret=api_secret,
-                session_token=kwargs["session_token"]
+                session_token=session_token,
             )
-            return True
-        return False
+            self._session_token = session_token
+            return {"access_token": session_token, "login_url": None}
 
-    async def get_historical_data(self, symbol, from_date, to_date, interval="1day"):
-        data = self.breeze.get_historical_data_v2(
-            interval=interval,
-            from_date=from_date.isoformat(),
-            to_date=to_date.isoformat(),
-            stock_code=symbol,
-            exchange_code="NSE"
-        )
-        return [self._to_ohlcv(candle) for candle in data["Success"]]
+        # Phase 1: return login URL for the user to authenticate
+        login_url = f"https://api.icicidirect.com/apiuser/login?api_key={api_key}"
+        return {"access_token": None, "login_url": login_url}
 ```
 
 ICICI Direct Breeze stands out for providing up to 10 years of historical data with 1-second OHLCV resolution, which is significantly more granular than most other brokers.
@@ -417,33 +408,7 @@ German brokers are accessed through the PSD2 Open Banking framework, which manda
 
 #### Implementation Notes
 
-```python
-class DeutscheBankAdapter(BrokerAdapter):
-    PSD2_BASE_URL = "https://api.db.com/gw/dbapi/banking/v2"
-
-    async def get_auth_url(self) -> str:
-        return (
-            f"https://simulator-api.db.com/gw/oidc/authorize"
-            f"?response_type=code"
-            f"&client_id={self.client_id}"
-            f"&redirect_uri={self.redirect_uri}"
-            f"&scope=read_accounts read_transactions"
-        )
-
-    async def handle_callback(self, authorization_code: str) -> dict:
-        # Exchange auth code for access token
-        response = await self.http.post(
-            "https://simulator-api.db.com/gw/oidc/token",
-            data={
-                "grant_type": "authorization_code",
-                "code": authorization_code,
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "redirect_uri": self.redirect_uri
-            }
-        )
-        return response.json()
-```
+The adapter class is `DeutscheBankBroker` (in `brokers/german/deutsche_bank.py`). It is currently a stub: every method raises `NotImplementedError`, and the API surfaces it as HTTP 501. The PSD2 flow above describes the planned integration only.
 
 ---
 
@@ -487,24 +452,21 @@ comdirect uses a multi-step authentication process:
 
 All broker credentials are encrypted before storage:
 
-1. **API Keys / Secrets**: Encrypted with Fernet symmetric encryption. The encryption key is derived from the `SECRET_KEY` environment variable.
+1. **API Keys / Secrets**: Encrypted with Fernet symmetric encryption. The key comes from the dedicated `FERNET_KEY` environment variable (`backend/app/config.py`) — it is **not** derived from `SECRET_KEY`.
 2. **Access Tokens**: Encrypted at rest, decrypted only when making API calls.
 3. **Token Rotation**: Access tokens are refreshed before expiry when possible.
 4. **Disconnection**: Revoking a broker connection deletes all encrypted credentials from the database.
 
+Encryption is done via module-level functions in `backend/app/utils/security.py` (there is no `CredentialManager` class):
+
 ```python
-from cryptography.fernet import Fernet
+from app.utils.security import encrypt_value, decrypt_value
 
-class CredentialManager:
-    def __init__(self, secret_key: str):
-        self.fernet = Fernet(secret_key.encode())
-
-    def encrypt(self, value: str) -> str:
-        return self.fernet.encrypt(value.encode()).decode()
-
-    def decrypt(self, encrypted: str) -> str:
-        return self.fernet.decrypt(encrypted.encode()).decode()
+encrypted = encrypt_value(api_secret)   # before DB storage
+plaintext = decrypt_value(encrypted)    # when making API calls
 ```
+
+If `FERNET_KEY` is unset, an **ephemeral key is generated at startup** (with a warning): encrypted data becomes unrecoverable after a restart. Set `FERNET_KEY` in `.env` for persistence.
 
 ---
 
@@ -555,11 +517,10 @@ When a broker is connected, the sync process follows this pattern:
 To add a new broker integration:
 
 1. Create a new file in `backend/app/brokers/` (e.g., `new_broker.py`)
-2. Implement the `BrokerAdapter` abstract class
-3. Register the adapter in `backend/app/brokers/__init__.py`
-4. Add UI elements in Settings -> Brokers (web app)
-5. Add OAuth redirect route in `backend/app/api/v1/broker.py`
-6. Write tests in `backend/tests/test_brokers/test_new_broker.py`
+2. Implement the `BrokerAdapter` abstract class (handle any OAuth handshake inside `connect()` via the `login_url` / `additional_params` pattern)
+3. Register the adapter in `BROKER_REGISTRY` in `backend/app/brokers/__init__.py`
+4. Add UI elements in the Brokers page (web app)
+5. Write tests in `backend/tests/test_brokers/test_new_broker.py`
 
 ---
 

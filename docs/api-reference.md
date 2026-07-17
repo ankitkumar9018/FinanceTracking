@@ -41,8 +41,9 @@ Authorization: Bearer <access_token>
 24. [Stop-Loss Tracker](#stop-loss-tracker)
 25. [Settings & Configuration](#settings--configuration)
 26. [WebSocket Channels](#websocket-channels)
-27. [Common Response Formats](#common-response-formats)
-28. [Error Handling](#error-handling)
+27. [Additional Endpoints](#additional-endpoints)
+28. [Common Response Formats](#common-response-formats)
+29. [Error Handling](#error-handling)
 
 ---
 
@@ -68,11 +69,14 @@ POST /auth/register
 **Response** `201 Created`:
 ```json
 {
-  "id": "uuid",
+  "id": 1,
   "email": "user@example.com",
   "display_name": "Ankit",
   "preferred_currency": "INR",
-  "created_at": "2025-01-15T10:30:00Z"
+  "theme_preference": "dark",
+  "is_active": true,
+  "created_at": "2025-01-15T10:30:00Z",
+  "totp_enabled": false
 }
 ```
 
@@ -100,10 +104,18 @@ The `totp_code` field is only required if the user has 2FA enabled.
 {
   "access_token": "eyJhbGciOiJIUzI1NiIs...",
   "refresh_token": "eyJhbGciOiJIUzI1NiIs...",
-  "token_type": "bearer",
-  "expires_in": 900
+  "token_type": "bearer"
 }
 ```
+
+If 2FA is enabled and no `totp_code` was provided, the response is instead:
+```json
+{
+  "requires_2fa": true,
+  "message": "Please provide TOTP code"
+}
+```
+Re-submit the login request with the `totp_code` field to receive tokens.
 
 ### Refresh Token
 
@@ -124,14 +136,37 @@ POST /auth/refresh
 ```json
 {
   "access_token": "eyJhbGciOiJIUzI1NiIs...",
-  "token_type": "bearer",
-  "expires_in": 900
+  "refresh_token": "eyJhbGciOiJIUzI1NiIs...",
+  "token_type": "bearer"
+}
+```
+
+### Change Password
+
+Change the current user's password (requires the current password).
+
+```
+POST /auth/change-password
+```
+
+**Request Body:**
+```json
+{
+  "current_password": "oldPassword123!",
+  "new_password": "newPassword456!"
+}
+```
+
+**Response** `200 OK`:
+```json
+{
+  "message": "Password updated successfully"
 }
 ```
 
 ### Setup 2FA
 
-Enable TOTP-based two-factor authentication.
+Enable TOTP-based two-factor authentication. The secret is NOT persisted yet — call `/auth/2fa/verify` with the secret and a valid code to activate it. Returns `400` if 2FA is already enabled.
 
 ```
 POST /auth/2fa/setup
@@ -140,15 +175,14 @@ POST /auth/2fa/setup
 **Response** `200 OK`:
 ```json
 {
-  "secret": "JBSWY3DPEHPK3PXP",
-  "provisioning_uri": "otpauth://totp/FinanceTracker:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=FinanceTracker",
-  "qr_code_base64": "data:image/png;base64,..."
+  "totp_secret": "JBSWY3DPEHPK3PXP",
+  "totp_uri": "otpauth://totp/FinanceTracker:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=FinanceTracker"
 }
 ```
 
 ### Verify 2FA
 
-Confirm 2FA setup by verifying a TOTP code.
+Confirm 2FA setup by verifying a TOTP code against the secret from `/auth/2fa/setup`. The secret is only persisted on success. Returns `400` if 2FA is already enabled (disable it first).
 
 ```
 POST /auth/2fa/verify
@@ -157,17 +191,20 @@ POST /auth/2fa/verify
 **Request Body:**
 ```json
 {
-  "totp_code": "123456"
+  "secret": "JBSWY3DPEHPK3PXP",
+  "code": "123456"
 }
 ```
 
 **Response** `200 OK`:
 ```json
 {
-  "two_factor_enabled": true,
-  "backup_codes": ["abc123", "def456", "ghi789", "jkl012", "mno345"]
+  "verified": true,
+  "message": "2FA is now active"
 }
 ```
+
+There are no backup codes; keep the TOTP secret safe.
 
 ---
 
@@ -183,16 +220,14 @@ GET /portfolios
 ```json
 [
   {
-    "id": "uuid",
+    "id": 1,
+    "user_id": 1,
     "name": "Indian Stocks",
     "description": "NSE/BSE equity portfolio",
     "currency": "INR",
     "is_default": true,
-    "total_value": 1250000.00,
-    "total_pnl": 87500.00,
-    "total_pnl_percent": 7.53,
-    "holdings_count": 15,
-    "created_at": "2025-01-15T10:30:00Z"
+    "created_at": "2025-01-15T10:30:00Z",
+    "updated_at": null
   }
 ]
 ```
@@ -221,92 +256,56 @@ Returns the main output table data with color-coded action states.
 GET /portfolios/{portfolio_id}/summary
 ```
 
-**Query Parameters:**
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `sort_by` | string | `stock_name` | Column to sort by |
-| `sort_order` | string | `asc` | `asc` or `desc` |
-| `filter_action` | string | `all` | `all`, `Y`, `N`, `DARK_RED`, `DARK_GREEN` |
-
 **Response** `200 OK`:
 ```json
 {
-  "portfolio_id": "uuid",
+  "portfolio_id": 1,
   "portfolio_name": "Indian Stocks",
   "currency": "INR",
-  "summary": {
-    "total_value": 1250000.00,
-    "total_invested": 1162500.00,
-    "total_pnl": 87500.00,
-    "total_pnl_percent": 7.53,
-    "day_pnl": 3200.00,
-    "day_pnl_percent": 0.26,
-    "top_gainer": {"symbol": "TCS.NS", "pnl_percent": 12.5},
-    "top_loser": {"symbol": "INFY.NS", "pnl_percent": -3.2}
-  },
+  "total_invested": 1162500.00,
+  "total_current_value": 1250000.00,
+  "total_pnl_percent": 7.53,
   "holdings": [
     {
-      "id": "uuid",
-      "stock_symbol": "RELIANCE.NS",
+      "holding_id": 1,
+      "stock_symbol": "RELIANCE",
       "stock_name": "Reliance Industries Ltd",
       "exchange": "NSE",
-      "cumulative_quantity": 50,
-      "average_price": 2450.00,
+      "currency": "INR",
+      "quantity": 50,
+      "avg_price": 2450.00,
       "current_price": 2680.50,
-      "current_rsi": 62.3,
-      "pnl_amount": 11525.00,
-      "pnl_percent": 9.41,
-      "day_change": 15.50,
-      "day_change_percent": 0.58,
       "action_needed": "N",
-      "action_color": null,
-      "lower_mid_range_1": 2400.00,
-      "lower_mid_range_2": 2200.00,
-      "upper_mid_range_1": 2800.00,
-      "upper_mid_range_2": 2950.00,
-      "base_level": 2000.00,
-      "top_level": 3100.00,
-      "sector": "Energy",
-      "custom_fields": {"target_pe": 25},
-      "last_updated": "2025-01-20T14:30:00Z"
+      "rsi": 62.3,
+      "pnl_percent": 9.41,
+      "sector": "Energy"
     },
     {
-      "id": "uuid",
-      "stock_symbol": "HDFCBANK.NS",
+      "holding_id": 2,
+      "stock_symbol": "HDFCBANK",
       "stock_name": "HDFC Bank Ltd",
       "exchange": "NSE",
-      "cumulative_quantity": 30,
-      "average_price": 1650.00,
+      "currency": "INR",
+      "quantity": 30,
+      "avg_price": 1650.00,
       "current_price": 1580.00,
-      "current_rsi": 28.5,
-      "pnl_amount": -2100.00,
+      "action_needed": "Y_LOWER_MID",
+      "rsi": 28.5,
       "pnl_percent": -4.24,
-      "day_change": -12.00,
-      "day_change_percent": -0.75,
-      "action_needed": "Y",
-      "action_color": "LIGHT_RED",
-      "lower_mid_range_1": 1600.00,
-      "lower_mid_range_2": 1500.00,
-      "upper_mid_range_1": 1800.00,
-      "upper_mid_range_2": 1900.00,
-      "base_level": 1400.00,
-      "top_level": 2000.00,
-      "sector": "Banking",
-      "custom_fields": {},
-      "last_updated": "2025-01-20T14:30:00Z"
+      "sector": "Banking"
     }
   ]
 }
 ```
 
-**Action Color Values:**
+**Action Needed Values:**
 | Value | Meaning | Visual |
 |---|---|---|
-| `null` | Price not in any alert range | No highlight |
-| `LIGHT_RED` | Price in lower mid range (LMR2 to LMR1) | Light red background pulse |
-| `LIGHT_GREEN` | Price in upper mid range (UMR1 to UMR2) | Light green background pulse |
-| `DARK_RED` | Price at/below base level | Dark red with warning icon |
-| `DARK_GREEN` | Price at/above top level | Dark green with celebration icon |
+| `N` | Price not in any alert range | No highlight |
+| `Y_LOWER_MID` | Price in lower mid range (LMR2 to LMR1) | Light red background pulse |
+| `Y_UPPER_MID` | Price in upper mid range (UMR1 to UMR2) | Light green background pulse |
+| `Y_DARK_RED` | Price at/below base level | Dark red with warning icon |
+| `Y_DARK_GREEN` | Price at/above top level | Dark green with celebration icon |
 
 ### Update Portfolio
 
@@ -343,7 +342,7 @@ POST /holdings
 **Request Body:**
 ```json
 {
-  "portfolio_id": "uuid",
+  "portfolio_id": 1,
   "stock_symbol": "TCS.NS",
   "stock_name": "Tata Consultancy Services",
   "exchange": "NSE",
@@ -385,31 +384,30 @@ DELETE /holdings/{holding_id}
 
 ## Transactions
 
-### List Transactions for a Holding
+### List Transactions
 
 ```
-GET /holdings/{holding_id}/transactions
+GET /transactions/
 ```
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `type` | string | `all` | `all`, `BUY`, `SELL` |
-| `start_date` | date | - | Filter from this date |
-| `end_date` | date | - | Filter until this date |
-| `page` | int | 1 | Page number |
-| `per_page` | int | 50 | Items per page |
+| `holding_id` | int | - | Filter by holding |
+| `skip` | int | 0 | Number of records to skip |
+| `limit` | int | 200 | Max records to return (1–1000) |
 
 ### Create Transaction
 
 ```
-POST /holdings/{holding_id}/transactions
+POST /transactions/
 ```
 
 **Request Body:**
 ```json
 {
-  "type": "BUY",
+  "holding_id": 1,
+  "transaction_type": "BUY",
   "date": "2025-01-15",
   "quantity": 10,
   "price": 2450.00,
@@ -472,14 +470,14 @@ GET /market/history/{symbol}
 **Query Parameters:**
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `days` | int | 30 | Number of days of history |
-| `interval` | string | `1d` | `1d`, `1wk`, `1mo`, `1h`, `5m` |
+| `exchange` | string | `NSE` | Exchange: NSE, BSE, XETRA, etc. |
+| `days` | int | 30 | Number of trading days (1–730) |
 
 **Response** `200 OK`:
 ```json
 {
   "symbol": "RELIANCE.NS",
-  "interval": "1d",
+  "exchange": "NSE",
   "data": [
     {
       "date": "2025-01-20",
@@ -495,88 +493,76 @@ GET /market/history/{symbol}
 
 ### Get Price Chart Data
 
-TradingView Lightweight Charts compatible format.
+OHLCV data for candlestick charts.
 
 ```
-GET /charts/price/{symbol}?days=30
+GET /charts/price/{symbol}?exchange=NSE&days=30
 ```
 
 **Response** `200 OK`:
 ```json
 {
-  "symbol": "RELIANCE.NS",
-  "chart_data": [
+  "symbol": "RELIANCE",
+  "exchange": "NSE",
+  "data": [
     {
-      "time": "2024-12-21",
+      "date": "2024-12-21",
       "open": 2610.00,
       "high": 2635.00,
       "low": 2600.00,
-      "close": 2625.00
+      "close": 2625.00,
+      "volume": 7823400
     }
-  ],
-  "volume_data": [
-    {
-      "time": "2024-12-21",
-      "value": 7823400,
-      "color": "#26a69a"
-    }
-  ],
-  "range_lines": {
-    "base_level": 2000.00,
-    "lower_mid_range_2": 2200.00,
-    "lower_mid_range_1": 2400.00,
-    "upper_mid_range_1": 2800.00,
-    "upper_mid_range_2": 2950.00,
-    "top_level": 3100.00
-  }
+  ]
 }
 ```
 
 ### Get RSI Chart Data
 
 ```
-GET /charts/rsi/{symbol}?days=30
+GET /charts/rsi/{symbol}?exchange=NSE&days=30&period=14
 ```
 
 **Response** `200 OK`:
 ```json
 {
-  "symbol": "RELIANCE.NS",
-  "rsi_data": [
-    {"time": "2024-12-21", "value": 55.2},
-    {"time": "2024-12-22", "value": 57.8}
-  ],
-  "overbought_level": 70,
-  "oversold_level": 30
+  "symbol": "RELIANCE",
+  "exchange": "NSE",
+  "period": 14,
+  "data": [
+    {"date": "2024-12-21", "close": 2625.00, "rsi": 55.2},
+    {"date": "2024-12-22", "close": 2641.50, "rsi": 57.8}
+  ]
 }
 ```
 
 ### Get Technical Indicators
 
+Computes all indicators in one call (no per-indicator selection).
+
 ```
-GET /charts/indicators/{symbol}
+GET /indicators/technical/{symbol}
 ```
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `days` | int | 90 | Data window |
-| `indicators` | string | `all` | Comma-separated: `rsi,macd,bbands,sma,ema,fibonacci` |
+| `exchange` | string | `NSE` | Exchange |
+| `days` | int | 90 | Data window (7–365) |
 
 **Response** `200 OK`:
 ```json
 {
-  "symbol": "RELIANCE.NS",
-  "indicators": {
-    "rsi_14": [{"time": "2025-01-20", "value": 62.3}],
-    "macd": [{"time": "2025-01-20", "macd": 15.2, "signal": 12.8, "histogram": 2.4}],
-    "bollinger_bands": [{"time": "2025-01-20", "upper": 2750.0, "middle": 2650.0, "lower": 2550.0}],
-    "sma_20": [{"time": "2025-01-20", "value": 2648.0}],
-    "ema_50": [{"time": "2025-01-20", "value": 2620.0}],
-    "support_levels": [2600.0, 2450.0, 2300.0],
-    "resistance_levels": [2700.0, 2850.0, 3000.0],
-    "fibonacci": {"0.0": 2220.0, "0.236": 2410.0, "0.382": 2527.0, "0.5": 2622.0, "0.618": 2717.0, "1.0": 3024.0}
-  }
+  "symbol": "RELIANCE",
+  "exchange": "NSE",
+  "dates": ["2025-01-20"],
+  "rsi": [62.3],
+  "macd": {"macd_line": [15.2], "signal_line": [12.8], "histogram": [2.4]},
+  "bollinger_bands": {"upper": [2750.0], "middle": [2650.0], "lower": [2550.0], "bandwidth": [7.5]},
+  "sma": {"sma_20": [2648.0], "sma_50": [2610.0]},
+  "ema": {"ema_20": [2652.0], "ema_50": [2620.0]},
+  "support_resistance": {"supports": [2600.0, 2450.0], "resistances": [2700.0, 2850.0]},
+  "fibonacci": {"high": 3024.0, "low": 2220.0, "levels": {"0.236": 2410.0, "0.382": 2527.0, "0.5": 2622.0, "0.618": 2717.0}}
 }
 ```
 
@@ -630,15 +616,15 @@ Search for stocks by name or symbol using Yahoo Finance search API.
 ### Get Portfolio Allocation
 
 ```
-GET /charts/portfolio/allocation?portfolio_id={id}
+GET /charts/portfolio/allocation/{portfolio_id}
 ```
 
-Returns data for donut/treemap chart.
+Returns data for donut/treemap chart (`by_stock` and `by_sector` breakdowns with percentages).
 
 ### Get Portfolio Performance
 
 ```
-GET /charts/portfolio/performance?portfolio_id={id}&days=90
+GET /charts/portfolio/performance/{portfolio_id}?days=90
 ```
 
 Returns portfolio value over time for a line chart.
@@ -656,8 +642,8 @@ GET /alerts
 **Query Parameters:**
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `is_active` | bool | `true` | Filter active/inactive alerts |
-| `alert_type` | string | `all` | `all`, `PRICE_RANGE`, `RSI`, `CUSTOM` |
+| `skip` | int | 0 | Number of records to skip |
+| `limit` | int | 200 | Max records to return (1–1000) |
 
 ### Create Alert
 
@@ -668,7 +654,7 @@ POST /alerts
 **Request Body:**
 ```json
 {
-  "holding_id": "uuid",
+  "holding_id": 1,
   "alert_type": "PRICE_RANGE",
   "condition": {
     "price_above": 3000.00,
@@ -698,19 +684,13 @@ PUT /alerts/{alert_id}/channels
 DELETE /alerts/{alert_id}
 ```
 
-### Get Notification History
+### Get Alert / Notification History
 
 ```
-GET /notifications/history
+GET /alerts/history
 ```
 
-**Query Parameters:**
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `channel` | string | `all` | `all`, `email`, `whatsapp`, `telegram`, `sms`, `push`, `in_app` |
-| `status` | string | `all` | `all`, `SENT`, `FAILED`, `QUEUED` |
-| `page` | int | 1 | Page number |
-| `per_page` | int | 50 | Items per page |
+Returns all previously triggered alerts (most recent first) and also runs a live check of all current alerts.
 
 ---
 
@@ -731,7 +711,8 @@ POST /watchlist
 **Request Body:**
 ```json
 {
-  "stock_symbol": "BAJFINANCE.NS",
+  "stock_symbol": "BAJFINANCE",
+  "stock_name": "Bajaj Finance Ltd",
   "exchange": "NSE",
   "target_buy_price": 6800.00,
   "lower_mid_range_1": 7000.00,
@@ -789,37 +770,26 @@ GET /tax/summary
 ### Get Tax Harvesting Suggestions
 
 ```
-GET /tax/harvesting-suggestions
-```
-
-**Response** `200 OK`:
-```json
-{
-  "suggestions": [
-    {
-      "holding": "INFY.NS",
-      "unrealized_loss": -15000.00,
-      "gain_type": "STCG",
-      "potential_tax_saving": 3000.00,
-      "recommendation": "Consider selling before March 31 to offset STCG gains"
-    }
-  ]
-}
-```
-
-### Export Tax Report
-
-```
-GET /export/tax-report/{financial_year}
+GET /tax/harvesting
 ```
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `jurisdiction` | string | `IN` | `IN` or `DE` |
-| `format` | string | `pdf` | `pdf` or `xlsx` |
 
-Returns a downloadable file.
+**Response** `200 OK`:
+```json
+[
+  {
+    "holding_id": 3,
+    "stock_symbol": "INFY",
+    "unrealized_loss": -15000.00,
+    "potential_tax_saving": 3000.00,
+    "gain_type": "STCG"
+  }
+]
+```
 
 ---
 
@@ -844,7 +814,7 @@ POST /goals
   "target_amount": 2500000.00,
   "target_date": "2027-12-31",
   "category": "HOUSE",
-  "linked_portfolio_id": "uuid"
+  "linked_portfolio_id": 1
 }
 ```
 
@@ -881,7 +851,7 @@ POST /mutual-funds
 **Request Body:**
 ```json
 {
-  "portfolio_id": "uuid",
+  "portfolio_id": 1,
   "scheme_code": "119551",
   "scheme_name": "Axis Bluechip Fund - Direct Growth",
   "folio_number": "1234567890",
@@ -890,28 +860,40 @@ POST /mutual-funds
 }
 ```
 
-### Import CAS Statement
+### Import Mutual Funds from CSV
+
+There is no CAS (PDF) import. Bulk import is done via CSV upload:
 
 ```
-POST /mutual-funds/import-cas
+POST /import-export/csv/mutual-funds?portfolio_id={id}
 ```
 
-**Request Body**: Multipart form with PDF file.
+**Request Body**: Multipart form with `.csv` file (template available at `GET /import-export/export/template/mutual-funds`).
 
 ---
 
 ## Broker Connections
 
+All broker routes live under the `/broker` prefix (singular).
+
 ### List Connected Brokers
 
 ```
-GET /brokers
+GET /broker/
 ```
+
+### List Available Brokers
+
+```
+GET /broker/available
+```
+
+Returns each registered broker's name, display name, and status (`available` or `coming_soon`).
 
 ### Connect Broker
 
 ```
-POST /brokers/connect
+POST /broker/connect
 ```
 
 **Request Body:**
@@ -919,45 +901,33 @@ POST /brokers/connect
 {
   "broker_name": "zerodha",
   "api_key": "your_api_key",
-  "api_secret": "your_api_secret"
+  "api_secret": "your_api_secret",
+  "additional_params": null
 }
 ```
 
 API keys are encrypted with Fernet before storage.
 
-### Start OAuth Flow
+**Response** `201 Created` includes an optional `login_url` field. For OAuth brokers (e.g. Zerodha), `login_url` is set — open it in a browser, authorize, then complete the connection by re-POSTing `/broker/connect` with `"additional_params": {"request_token": "token_from_redirect"}`. There are no separate auth-url/callback endpoints.
+
+### Check Connection Status
 
 ```
-GET /brokers/{broker_name}/auth-url
-```
-
-Returns the OAuth redirect URL for the broker.
-
-### Complete OAuth Callback
-
-```
-POST /brokers/{broker_name}/callback
-```
-
-**Request Body:**
-```json
-{
-  "request_token": "token_from_redirect"
-}
+GET /broker/{connection_id}/status
 ```
 
 ### Sync Holdings from Broker
 
 ```
-POST /brokers/{broker_name}/sync
+POST /broker/{connection_id}/sync
 ```
 
-Fetches latest holdings, positions, and transactions from the broker.
+Fetches latest holdings from the broker into the local portfolio. Returns `holdings_synced`, `new_holdings`, `updated_holdings`, and `errors`.
 
 ### Disconnect Broker
 
 ```
-DELETE /brokers/{broker_name}
+DELETE /broker/{connection_id}
 ```
 
 ---
@@ -974,18 +944,19 @@ POST /ai/chat
 ```json
 {
   "message": "Which of my stocks are underperforming the Nifty 50 this month?",
-  "session_id": "uuid-or-null-for-new"
+  "session_id": null
 }
 ```
+
+Pass an existing integer `session_id` to continue a conversation, or `null` to start a new session.
 
 **Response** `200 OK`:
 ```json
 {
-  "session_id": "uuid",
+  "session_id": 1,
   "response": "Based on your portfolio, 3 stocks are underperforming Nifty 50 this month:\n\n1. **INFY.NS** (-3.2% vs Nifty +1.8%)\n2. **HDFCBANK.NS** (-0.75% vs Nifty +1.8%)\n3. **WIPRO.NS** (-1.5% vs Nifty +1.8%)\n\nInfosys has the widest gap. Its RSI is at 35, approaching oversold territory.",
   "provider": "ollama",
-  "model": "llama3.2",
-  "tools_used": ["portfolio_data", "market_data"]
+  "model": "llama3.2"
 }
 ```
 
@@ -1019,13 +990,14 @@ GET /ai/insights
 ### Get Price Prediction
 
 ```
-GET /ml/prediction/{symbol}
+GET /ai/prediction/{symbol}
 ```
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `horizon` | int | 5 | Prediction horizon in days (1, 5, 10) |
+| `exchange` | string | `NSE` | Exchange |
+| `days_ahead` | int | 5 | Prediction horizon in days (1–30) |
 
 **Response** `200 OK`:
 ```json
@@ -1033,18 +1005,18 @@ GET /ml/prediction/{symbol}
   "symbol": "RELIANCE.NS",
   "current_price": 2680.50,
   "predictions": [
-    {"day": 1, "predicted_price": 2695.00, "confidence": 0.72},
-    {"day": 5, "predicted_price": 2720.00, "confidence": 0.58}
+    {"date": "2025-01-21", "predicted_price": 2695.00, "confidence": 0.72}
   ],
-  "model": "lstm_v1",
-  "last_trained": "2025-01-20T02:00:00Z"
+  "model_accuracy": 0.81,
+  "direction": "up",
+  "confidence": 0.72
 }
 ```
 
 ### Get News Sentiment
 
 ```
-GET /ml/sentiment/{symbol}
+GET /ai/sentiment/{symbol}
 ```
 
 **Response** `200 OK`:
@@ -1053,47 +1025,46 @@ GET /ml/sentiment/{symbol}
   "symbol": "RELIANCE.NS",
   "overall_sentiment": "bullish",
   "sentiment_score": 0.65,
-  "articles_analyzed": 12,
-  "recent_articles": [
+  "news_items": [
     {
       "title": "Reliance Jio Adds 5M Subscribers in December",
       "source": "Economic Times",
+      "date": "2025-01-19",
       "sentiment": "positive",
       "score": 0.82,
-      "published_at": "2025-01-19T08:00:00Z"
+      "url": "https://..."
     }
-  ]
+  ],
+  "analysis_method": "keyword"
 }
 ```
 
 ### Get Portfolio Risk Metrics
 
 ```
-GET /ml/risk
+GET /indicators/risk/{portfolio_id}
 ```
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `portfolio_id` | uuid | default | Portfolio to analyze |
+| `days` | int | 252 | Lookback window (30–1000) |
+| `benchmark` | string | `^NSEI` | Benchmark symbol |
 
 **Response** `200 OK`:
 ```json
 {
-  "portfolio_id": "uuid",
-  "metrics": {
-    "sharpe_ratio": 1.82,
-    "sortino_ratio": 2.15,
-    "max_drawdown": -12.5,
-    "max_drawdown_period": "2024-10-01 to 2024-10-15",
-    "value_at_risk_95": -45000.00,
-    "beta": 0.92,
-    "annualized_return": 14.3,
-    "annualized_volatility": 18.7
-  },
-  "concentration_warnings": [
-    "RELIANCE.NS represents 22% of portfolio (threshold: 20%)"
-  ]
+  "sharpe_ratio": 1.82,
+  "sortino_ratio": 2.15,
+  "max_drawdown": -12.5,
+  "max_drawdown_duration_days": 14,
+  "value_at_risk_95": -45000.00,
+  "value_at_risk_99": -68000.00,
+  "volatility_annual": 18.7,
+  "beta": 0.92,
+  "alpha": 2.1,
+  "information_ratio": 0.45,
+  "calmar_ratio": 1.1
 }
 ```
 
@@ -1104,10 +1075,10 @@ GET /ml/risk
 ### Import from Excel
 
 ```
-POST /import/excel
+POST /import-export/excel?portfolio_id={id}
 ```
 
-**Request**: Multipart form data with `.xlsx` file.
+**Request**: Multipart form data with `.xlsx` file. The import is one-shot — holdings and transactions are created immediately (no preview/confirm step).
 
 **Expected Excel Columns:**
 | Column | Required | Description |
@@ -1126,37 +1097,21 @@ POST /import/excel
 | Sale Price | No | Sale price per share |
 | Sale Date | No | Date of sale |
 
-**Response** `200 OK` (preview mode):
+**Response** `200 OK`:
 ```json
 {
-  "parsed_rows": 15,
-  "valid_rows": 14,
-  "errors": [
-    {"row": 7, "column": "Purchase Price", "error": "Invalid number format"}
-  ],
-  "preview": [...],
-  "import_token": "temp_token_for_confirm"
-}
-```
-
-### Confirm Import
-
-```
-POST /import/excel/confirm
-```
-
-**Request Body:**
-```json
-{
-  "import_token": "temp_token_for_confirm",
-  "portfolio_id": "uuid"
+  "status": "success",
+  "rows_parsed": 15,
+  "holdings_created": 14,
+  "transactions_created": 15,
+  "holdings_updated": 1
 }
 ```
 
 ### Export to Excel
 
 ```
-GET /export/excel/{portfolio_id}
+GET /import-export/export/excel/{portfolio_id}
 ```
 
 Returns downloadable `.xlsx` file.
@@ -1311,12 +1266,10 @@ Sensitive values (API keys) are encrypted with Fernet before storage.
 
 ```
 POST /settings/test/email
-POST /settings/test/whatsapp
 POST /settings/test/telegram
-POST /settings/test/sms
 ```
 
-Sends a test notification and returns success/failure.
+Sends a test notification and returns success/failure. (There are no test endpoints for WhatsApp or SMS.)
 
 ### Test LLM Provider
 
@@ -1354,30 +1307,34 @@ GET /settings/health
 
 ## WebSocket Channels
 
+There are two WebSocket channels: `/ws/prices` and `/ws/alerts`. Both authenticate via a `token` query parameter carrying the JWT access token; an invalid token closes the connection with code `4001`.
+
 ### Price Stream
 
 ```
-WS /ws/prices
+WS /ws/prices?token=<access_token>
 ```
 
 **Subscribe** (client sends):
 ```json
 {
   "action": "subscribe",
-  "symbols": ["RELIANCE.NS", "TCS.NS", "SAP.DE"]
+  "symbols": ["RELIANCE", "TCS", "SAP"]
 }
 ```
+
+Server confirms with `{"type": "subscribed", "symbols": [...]}`.
 
 **Price Update** (server sends):
 ```json
 {
   "type": "price_update",
-  "symbol": "RELIANCE.NS",
-  "price": 2681.00,
-  "change": 16.00,
-  "change_percent": 0.60,
-  "volume": 8543200,
-  "timestamp": "2025-01-20T14:30:05Z"
+  "symbol": "RELIANCE",
+  "data": {
+    "price": 2681.00,
+    "change": 16.00,
+    "change_percent": 0.60
+  }
 }
 ```
 
@@ -1385,58 +1342,37 @@ WS /ws/prices
 ```json
 {
   "action": "unsubscribe",
-  "symbols": ["SAP.DE"]
+  "symbols": ["SAP"]
 }
 ```
+
+Server confirms with `{"type": "unsubscribed", "symbols": [...]}`.
 
 ### Alert Stream
 
 ```
-WS /ws/alerts
+WS /ws/alerts?token=<access_token>
 ```
 
 **Alert Triggered** (server sends):
 ```json
 {
-  "type": "alert_triggered",
-  "holding_id": "uuid",
-  "stock_symbol": "HDFCBANK.NS",
-  "stock_name": "HDFC Bank Ltd",
+  "type": "alert",
+  "alert_id": 1,
   "alert_type": "PRICE_RANGE",
-  "action_needed": "Y",
-  "action_color": "DARK_RED",
-  "current_price": 1395.00,
-  "base_level": 1400.00,
+  "stock_symbol": "HDFCBANK",
   "message": "HDFC Bank has dropped below base level (1400.00). Current price: 1395.00",
-  "timestamp": "2025-01-20T14:31:00Z"
+  "channels": ["in_app"],
+  "triggered_at": "2025-01-20T14:31:00Z"
 }
 ```
 
-### Chat Stream
-
-```
-WS /ws/chat
-```
-
-Used for streaming LLM responses token by token.
-
-**Client sends:**
+**Acknowledge** (client sends):
 ```json
-{
-  "action": "message",
-  "session_id": "uuid",
-  "content": "What is the RSI trend for Reliance?"
-}
+{"action": "ack", "alert_id": 1}
 ```
 
-**Server streams:**
-```json
-{"type": "chat_token", "token": "Based"}
-{"type": "chat_token", "token": " on"}
-{"type": "chat_token", "token": " the"}
-...
-{"type": "chat_complete", "session_id": "uuid"}
-```
+Server confirms with `{"type": "ack_confirmed", "alert_id": 1}`.
 
 ---
 
@@ -1515,17 +1451,13 @@ POST /net-worth/assets
 }
 ```
 
-### Update Asset
-
-```
-PUT /net-worth/assets/{asset_id}
-```
-
 ### Delete Asset
 
 ```
 DELETE /net-worth/assets/{asset_id}
 ```
+
+(There is no update endpoint — delete and re-add an asset to change it.)
 
 ---
 
@@ -1534,7 +1466,7 @@ DELETE /net-worth/assets/{asset_id}
 ### Get Portfolio ESG
 
 ```
-GET /esg
+GET /esg/{portfolio_id}
 ```
 
 Returns ESG (Environmental, Social, Governance) scores for all holdings using yfinance sustainability data, with a portfolio-level weighted average.
@@ -1542,7 +1474,7 @@ Returns ESG (Environmental, Social, Governance) scores for all holdings using yf
 ### Get Stock ESG
 
 ```
-GET /esg/{symbol}
+GET /esg/stock/{symbol}
 ```
 
 Returns individual stock ESG scores.
@@ -1576,15 +1508,15 @@ Returns simulated returns with benchmark comparison.
 ### Get Portfolio Earnings
 
 ```
-GET /earnings
+GET /earnings/{portfolio_id}
 ```
 
-Returns upcoming earnings dates for all stocks in the user's portfolios.
+Returns upcoming earnings dates for all stocks in the portfolio.
 
 ### Get Stock Earnings
 
 ```
-GET /earnings/{symbol}
+GET /earnings/stock/{symbol}
 ```
 
 Returns earnings dates for a specific stock.
@@ -1596,18 +1528,18 @@ Returns earnings dates for a specific stock.
 ### List Positions
 
 ```
-GET /fno/positions
+GET /fno/positions/{portfolio_id}
 ```
 
-Returns all futures & options positions for the current user.
+Returns all futures & options positions for the portfolio.
 
-### Get Position Summary
+### Get P&L Summary
 
 ```
-GET /fno/summary
+GET /fno/pnl/{portfolio_id}
 ```
 
-Returns total P&L, margin used, and position counts.
+Returns total realized/unrealized P&L and open/closed position counts.
 
 ### Add Position
 
@@ -1618,6 +1550,7 @@ POST /fno/positions
 **Request Body:**
 ```json
 {
+  "portfolio_id": 1,
   "symbol": "NIFTY",
   "exchange": "NSE",
   "instrument_type": "CE",
@@ -1626,11 +1559,11 @@ POST /fno/positions
   "lot_size": 50,
   "quantity": 1,
   "entry_price": 150.00,
-  "position_type": "LONG"
+  "side": "BUY"
 }
 ```
 
-For `instrument_type: "FUT"`, `strike_price` is optional (null).
+`side` is `BUY` or `SELL`. For `instrument_type: "FUT"`, `strike_price` is optional (null).
 
 ### Update Position
 
@@ -1664,12 +1597,12 @@ Detects allocation drift from target weights stored in holdings' `custom_fields`
 ### Set Target Allocation
 
 ```
-POST /analytics/drift/{portfolio_id}/holding/{holding_id}/target
+PUT /analytics/drift/{holding_id}
 ```
 
-Sets the target allocation percentage for a specific holding.
+Sets the target allocation percentage for a specific holding (stored in the holding's `custom_fields` under `target_allocation_pct`).
 
-**Body:** `{ "target_allocation_pct": 25.0 }`
+**Body:** `{ "target_allocation_pct": 25.0 }` (0–100)
 
 ### Sector Rotation
 
@@ -1720,7 +1653,7 @@ Returns staleness status for each holding with exchange-aware market hours.
 ### Google Sheets Export
 
 ```
-GET /analytics/sheets-export/{portfolio_id}
+GET /analytics/export/sheets/{portfolio_id}
 ```
 
 Returns CSV content with 3 sections (summary, holdings, transactions) for Google Sheets import.
@@ -1836,34 +1769,50 @@ Returns IPO listings from public market data sources. Currently supports Indian 
 ### Benchmark Comparison
 
 ```
-GET /benchmark
+GET /portfolios/{portfolio_id}/benchmark
 ```
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `benchmark` | string | `NIFTY50` | `NIFTY50`, `SENSEX`, `DAX`, `SP500`, `NASDAQ` |
-| `days` | int | 90 | Comparison period |
+| `days` | int | 90 | Comparison period (7–365) |
 
 ### Stock Comparison
 
 ```
-GET /comparison
+GET /comparison/compare
 ```
 
 **Query Parameters:**
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `symbols` | string | Yes | Comma-separated (up to 3): `RELIANCE.NS,TCS.NS,INFY.NS` |
-| `days` | int | No | Comparison period (default 90) |
+| `symbols` | string | Yes | Comma-separated (up to 3): `RELIANCE,TCS,INFY` |
+| `exchanges` | string | No | Comma-separated exchanges (default `NSE`) |
+| `days` | int | No | Comparison period (default 90, 7–365) |
 
 ### XIRR Calculation
 
 ```
-GET /xirr/{holding_id}
+GET /portfolios/{portfolio_id}/xirr
 ```
 
-Returns the XIRR (Extended Internal Rate of Return) for a holding based on its transactions.
+Returns the XIRR (Extended Internal Rate of Return) for the whole portfolio based on all buy/sell transactions plus current value.
+
+**Response** `200 OK`:
+```json
+{
+  "portfolio_id": 1,
+  "xirr": 14.32,
+  "xirr_decimal": 0.1432,
+  "total_current_value": 1250000.00,
+  "num_cash_flows": 12,
+  "used_stale_prices": false,
+  "status": "calculated"
+}
+```
+
+`used_stale_prices` is `true` when a holding had no fetched current price and its average price was used as the terminal value.
 
 ---
 
@@ -1872,24 +1821,105 @@ Returns the XIRR (Extended Internal Rate of Return) for a holding based on its t
 ### Get Stop-Losses
 
 ```
-GET /stop-loss
+GET /comparison/stop-loss/{portfolio_id}
 ```
 
-Returns stop-loss levels for all holdings (stored in `custom_fields` JSON).
+Returns stop-loss levels for all holdings in the portfolio (stored in `custom_fields` JSON), plus a `triggered_count`.
 
 ### Set Stop-Loss
 
 ```
-PUT /stop-loss/{holding_id}
+PUT /comparison/stop-loss/{holding_id}?price=2200.00
 ```
 
-**Request Body:**
-```json
-{
-  "stop_loss_price": 2200.00,
-  "stop_loss_type": "FIXED"
-}
+The stop-loss price is passed as the `price` query parameter (must be > 0).
+
+### Remove Stop-Loss
+
 ```
+DELETE /comparison/stop-loss/{holding_id}
+```
+
+---
+
+## Additional Endpoints
+
+Endpoints not covered in detail above, one line each:
+
+### Auth
+- `GET /auth/me` — get the current authenticated user (includes `totp_enabled`)
+- `POST /auth/2fa/disable` — disable 2FA after verifying a current TOTP code (`{"code": "123456"}`)
+
+### Portfolios & Holdings
+- `GET /portfolios/{portfolio_id}` — get a single portfolio
+- `GET /holdings/` — list holdings (`portfolio_id`, `skip`, `limit` query params)
+
+### Transactions
+- `GET /transactions/{transaction_id}` — get a single transaction
+- `PATCH /transactions/{transaction_id}` — update a transaction (recalculates the holding)
+- `POST /transactions/backfill?holding_id={id}` — seed a BUY transaction for a pre-existing holding with no transactions (idempotent)
+
+### Tax
+- `GET /tax/` — list tax records (`financial_year`, `jurisdiction` filters)
+- `POST /tax/compute/{transaction_id}` — compute tax for a SELL transaction and create a tax record
+- `DELETE /tax/{record_id}` — delete a tax record
+
+### Goals
+- `GET /goals/{goal_id}` — get a single goal
+- `POST /goals/{goal_id}/sync` — sync goal progress from its linked portfolio
+
+### Mutual Funds
+- `PUT /mutual-funds/{fund_id}` — update a mutual fund holding
+- `DELETE /mutual-funds/{fund_id}` — delete a mutual fund holding
+- `GET /mutual-funds/summary` — aggregate summary of all mutual fund holdings
+- `POST /mutual-funds/refresh` — refresh NAVs from mfapi.in
+- `GET /mutual-funds/search?q=` — search schemes by name on mfapi.in
+
+### Forex
+- `GET /forex/rate?from_currency=&to_currency=` — current exchange rate
+- `POST /forex/convert` — convert an amount between currencies
+- `GET /forex/history` — historical exchange rates
+
+### Backtesting & Optimization
+- `POST /backtest/` — run a backtest (RSI, SMA crossover, or Bollinger strategy)
+- `GET /backtest/strategies` — list available strategies and their parameters
+- `POST /backtest/optimize/{portfolio_id}` — run mean-variance portfolio optimization
+- `GET /backtest/optimize/{portfolio_id}/suggestions` — rebalancing suggestions from the optimizer
+
+### Indicators & Risk
+- `GET /indicators/risk/{portfolio_id}/holdings` — per-holding risk metrics (beta, correlation, volatility, weight)
+
+### AI Sessions & ML
+- `GET /ai/sessions` — list chat sessions
+- `GET /ai/sessions/{session_id}` — get a session with all messages
+- `DELETE /ai/sessions/{session_id}` — delete a chat session
+- `GET /ai/status` — AI provider availability (Ollama, OpenAI, Anthropic, Google)
+- `GET /ai/anomalies/{symbol}` — Isolation Forest price/volume anomaly detection
+- `GET /ai/insights` — AI-generated portfolio insights
+
+### Import / Export
+- `POST /import-export/csv?portfolio_id=` — import holdings/transactions from CSV
+- `GET /import-export/export/csv/{portfolio_id}` — export holdings as CSV
+- `GET /import-export/export/csv/{portfolio_id}/transactions` — export transactions as CSV
+- `POST /import-export/csv/dividends?portfolio_id=` — import dividends from CSV
+- `POST /import-export/csv/mutual-funds?portfolio_id=` — import mutual funds from CSV
+- `POST /import-export/csv/tax-records` — import tax records from CSV (user-level)
+- `GET /import-export/export/template` — blank Excel import template
+- `GET /import-export/export/template/csv` — blank CSV import template
+- `GET /import-export/export/template/dividends` — dividend CSV template
+- `GET /import-export/export/template/mutual-funds` — mutual fund CSV template
+- `GET /import-export/export/template/tax-records` — tax record CSV template
+- `GET /import-export/export/json/{portfolio_id}` — full portfolio backup as JSON
+- `POST /import-export/json` — restore a portfolio from a JSON backup
+- `GET /import-export/export/pdf/{portfolio_id}` — PDF report (requires xhtml2pdf, else `501`)
+- `GET /import-export/export/report/{portfolio_id}` — styled HTML report
+- `GET /import-export/export/backup/sqlite` — download the raw SQLite database (instance owner only; `501` on PostgreSQL)
+- `GET /import-export/aa/providers` — list Account Aggregator providers (stubs)
+- `POST /import-export/aa/consent` — initiate AA consent (`501` — coming soon)
+- `GET /import-export/aa/consent/{consent_id}/status` — AA consent status (`501` — coming soon)
+
+### Misc
+- `GET /health` — public health check at the server root (not under `/api/v1`); returns `{"status", "app", "version"}`
 
 ---
 
@@ -1897,16 +1927,17 @@ PUT /stop-loss/{holding_id}
 
 ### Pagination
 
-All list endpoints support pagination:
+There is no pagination envelope — list endpoints return bare JSON arrays. Endpoints that support paging (holdings, transactions, alerts) take `skip` and `limit` query parameters:
+
+```
+GET /transactions/?skip=0&limit=200
+```
 
 ```json
-{
-  "items": [...],
-  "total": 150,
-  "page": 1,
-  "per_page": 50,
-  "pages": 3
-}
+[
+  { "id": 1, ... },
+  { "id": 2, ... }
+]
 ```
 
 ### Timestamps
@@ -1950,12 +1981,10 @@ All errors follow a consistent format:
 
 ### Rate Limits
 
-| Endpoint Group | Limit |
+Rate limiting applies only to the auth endpoints:
+
+| Endpoint | Limit |
 |---|---|
-| General API | 100 requests/minute |
 | Register | 5 requests/minute |
 | Login | 10 requests/minute |
 | Token Refresh | 20 requests/minute |
-| Import/Export | 5 requests/minute |
-| AI/Chat | 30 requests/minute |
-| WebSocket | 5 connections per user |

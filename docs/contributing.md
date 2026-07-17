@@ -45,8 +45,8 @@ cp .env.example .env
 # Run database migrations
 uv run alembic upgrade head
 
-# Seed development data (optional)
-uv run python -m app.scripts.seed
+# Seed development data (optional, creates a demo user)
+uv run python -m app --seed
 
 # Start the backend server
 uv run uvicorn app.main:app --reload --port 8000
@@ -61,7 +61,7 @@ The API is now available at http://localhost:8000 and Swagger docs at http://loc
 pnpm install
 
 # Start the web app
-pnpm --filter web dev
+pnpm --filter @finance-tracker/web dev
 ```
 
 The web app is now available at http://localhost:3000.
@@ -165,13 +165,9 @@ async def calculate_rsi(
 
 ### TypeScript / JavaScript (Frontend)
 
-**Formatter**: [Prettier](https://prettier.io/)
-**Linter**: [ESLint](https://eslint.org/) with Next.js and TypeScript rules
+**Linter**: [ESLint](https://eslint.org/) with Next.js and TypeScript rules (no separate Prettier setup)
 
 ```bash
-# Format all frontend code
-pnpm format
-
 # Lint all frontend code
 pnpm lint
 
@@ -265,36 +261,24 @@ async def test_create_holding(client: AsyncClient, auth_headers: dict):
     assert data["cumulative_quantity"] == 0
 ```
 
-### Frontend Tests (vitest)
+### Frontend Tests (Playwright)
 
-```bash
-# Run all frontend tests
-pnpm --filter web test
-
-# Run in watch mode
-pnpm --filter web test:watch
-
-# Run with coverage
-pnpm --filter web test:coverage
-```
-
-**Test conventions**:
-- Test files: `*.test.ts` or `*.test.tsx` (colocated with source files)
-- Use `@testing-library/react` for component tests
-- Mock API calls with `msw` (Mock Service Worker)
-
-### End-to-End Tests (Playwright)
+The frontend has no unit-test setup (no vitest/jest) — all frontend testing is done end-to-end with Playwright:
 
 ```bash
 # Install Playwright browsers (first time)
-pnpm --filter web exec playwright install
+pnpm --filter @finance-tracker/web exec playwright install
 
 # Run E2E tests
-pnpm --filter web test:e2e
+pnpm --filter @finance-tracker/web test:e2e
 
 # Run with UI mode
-pnpm --filter web exec playwright test --ui
+pnpm --filter @finance-tracker/web test:e2e:ui
 ```
+
+**Test conventions**:
+- E2E specs live in `apps/web/e2e/`
+- Cover new pages/flows with at least a smoke test
 
 **Critical E2E flows**:
 1. Register -> Login -> See empty dashboard
@@ -308,8 +292,11 @@ pnpm --filter web exec playwright test --ui
 ### Running All Tests
 
 ```bash
-# From project root
-pnpm test           # Runs all tests via Turborepo
+# Backend
+cd backend && uv run pytest -v
+
+# Frontend E2E (from project root)
+pnpm test:e2e       # Runs Playwright via Turborepo
 ```
 
 ---
@@ -375,7 +362,7 @@ main (production-ready)
 
 1. **Run all tests locally** and make sure they pass
 2. **Run linters** (`ruff check`, `pnpm lint`) and fix any issues
-3. **Run formatters** (`ruff format`, `pnpm format`)
+3. **Run the backend formatter** (`ruff format`)
 4. **Update documentation** if your change affects API, schema, or user-facing features
 5. **Add/update tests** for new or modified functionality
 
@@ -453,7 +440,7 @@ Typical steps for a new feature:
 5. **API Route**: Add endpoint in `backend/app/api/v1/`
 6. **Tests**: Write backend tests
 7. **Frontend**: Add UI components and pages
-8. **Frontend Tests**: Write component tests
+8. **Frontend Tests**: Add Playwright E2E coverage
 9. **Documentation**: Update relevant docs
 
 ---

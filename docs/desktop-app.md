@@ -23,7 +23,7 @@ FinanceTracker ships as a native desktop app built with **Tauri v2**. It bundles
 
 ```
 +-------------------------------------------------------+
-|  Tauri Shell (native window, system tray, menus)      |
+|  Tauri Shell (native window)                          |
 |  - Rust binary (~3 MB)                                |
 |  - Uses OS webview (WebKit/WebView2/WebKitGTK)        |
 |                                                        |
@@ -340,7 +340,7 @@ The sidecar sets `CORS_ORIGINS=*` because:
 
 - Uses WebKitGTK (must be installed as a system dependency)
 - AppImage is self-contained and runs on most distros
-- System tray requires `libappindicator3-dev` (or equivalent)
+- `libappindicator3-dev` is part of the standard Tauri build dependencies (the app itself has no system tray)
 
 **Debian/Ubuntu:**
 ```bash

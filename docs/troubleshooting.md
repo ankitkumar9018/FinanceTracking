@@ -28,15 +28,16 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 **Cause**: Multiple processes are trying to write to SQLite simultaneously. This typically happens when both the API server and a Celery worker access the same SQLite file.
 
 **Solution**:
-1. For development, stop the Celery worker and rely on the asyncio fallback
+1. For development, stop the Celery worker and rely on the APScheduler fallback
 2. For production, switch to PostgreSQL:
    ```
    DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/financetracker
    ```
-3. If you must use SQLite with Celery, configure SQLAlchemy with WAL mode:
-   ```python
-   engine = create_async_engine(url, connect_args={"check_same_thread": False})
+3. If you must use SQLite with Celery, enable WAL journal mode on the database:
+   ```sql
+   PRAGMA journal_mode=WAL;
    ```
+   Note: the app's `backend/app/database.py` passes `check_same_thread=False` and sets `PRAGMA foreign_keys=ON` per connection — neither enables WAL; you would need to add a `PRAGMA journal_mode=WAL` to the same connect hook (or run it once against the file, since WAL is persistent).
 
 ---
 
@@ -176,15 +177,16 @@ This is a Zerodha limitation -- tokens cannot be refreshed automatically.
 
 ---
 
-### "OAuth redirect URI mismatch" error
+### OAuth broker (Zerodha) connection does not complete
 
-**Cause**: The redirect URL registered with your broker API does not match the one used by the app.
+**Cause**: OAuth brokers require a browser login step. The app has no OAuth callback route — `POST /api/v1/broker/connect` returns a `login_url` that you must open and authorize, then the flow is completed by re-submitting the connect request with the `request_token` from the redirect.
 
 **Solution**:
-1. Log in to your broker's developer portal
-2. Set the redirect URL to: `http://localhost:8000/api/v1/brokers/{broker_name}/callback`
-3. For production: `https://your-api-domain.com/api/v1/brokers/{broker_name}/callback`
-4. The URL must match exactly, including the protocol (http vs https) and trailing slash
+1. Connect the broker from the Brokers page (or `POST /api/v1/broker/connect` with your API key/secret)
+2. Open the returned `login_url` in a browser and log in to the broker
+3. Copy the `request_token` from the redirect URL you land on
+4. Re-submit the connection with `additional_params: {"request_token": "..."}` (the Brokers page prompts for this automatically)
+5. The redirect URL registered in your broker's developer portal can be any page you can read the `request_token` from — it does not point at the FinanceTracker API
 
 ---
 
@@ -197,8 +199,7 @@ This is a Zerodha limitation -- tokens cannot be refreshed automatically.
 **Solution**:
 1. Check if the market is open (NSE: 9:15-15:30 IST, XETRA: 9:00-17:30 CET)
 2. If the market is open, the app will retry automatically every 5 minutes
-3. Connect a broker for real-time prices
-4. Check your internet connection
+3. Check your internet connection
 
 ---
 
@@ -332,7 +333,7 @@ cp backend/finance.db backend/finance_backup_$(date +%Y%m%d).db
 pg_dump -Fc financetracker > backup_$(date +%Y%m%d).dump
 ```
 
-**In-app**: Settings -> Advanced -> Export All Data (creates a full backup in JSON format).
+**In-app**: Reports page -> export cards (holdings/transactions CSV, JSON portfolio backup, HTML report; the SQLite database download is available to the instance owner).
 
 ---
 
@@ -481,7 +482,7 @@ Always use `uv run` to ensure the correct venv is used.
 
 ## Still Stuck?
 
-1. Check the backend logs: `tail -f backend/app.log`
+1. Check the backend logs: `tail -f logs/backend.log`
 2. Check the browser console for frontend errors (F12 -> Console)
 3. Run the health check script: `./scripts/health-check.sh` (or `.\scripts\health-check.ps1` on Windows)
 4. Open a GitHub issue with:

@@ -69,7 +69,7 @@ Optional TOTP-based 2FA using RFC 6238.
 4. Server stores the TOTP secret (encrypted) and enables 2FA
 5. On subsequent logins, user must enter their password AND the current TOTP code
 
-**Backup codes:** When 2FA is enabled, the server generates 5 backup codes. Each can be used once to bypass TOTP if the user loses access to their authenticator app.
+Backup codes are not implemented — if the user loses access to their authenticator app, 2FA must be reset through direct database access.
 
 ---
 
@@ -89,25 +89,23 @@ All sensitive data is encrypted before storage using Fernet symmetric encryption
 | TOTP secrets | `users.totp_secret` | Fernet |
 | Sensitive app settings | `app_settings.value` (where `is_encrypted=true`) | Fernet |
 
-**Key derivation:**
+**Encryption key:**
 
-The Fernet encryption key is derived from the `SECRET_KEY` environment variable. This key must be:
-- At least 32 characters long
-- Randomly generated (not human-memorable)
+The Fernet key comes from a dedicated `FERNET_KEY` environment variable (`backend/app/config.py`) — it is **not** derived from `SECRET_KEY`. Encryption and decryption go through the module functions `encrypt_value()` / `decrypt_value()` in `backend/app/utils/security.py`:
+
+```python
+from app.utils.security import encrypt_value, decrypt_value
+
+encrypted = encrypt_value(api_key)       # before DB storage
+plaintext = decrypt_value(encrypted)     # when needed
+```
+
+The key must be:
+- A valid Fernet key (generate with `Fernet.generate_key()`)
 - Never committed to version control
 - Rotated if there is any suspicion of compromise
 
-```python
-from cryptography.fernet import Fernet
-import base64
-import hashlib
-
-def get_fernet_key(secret_key: str) -> Fernet:
-    # Derive a 32-byte key from SECRET_KEY using SHA-256
-    key = hashlib.sha256(secret_key.encode()).digest()
-    fernet_key = base64.urlsafe_b64encode(key)
-    return Fernet(fernet_key)
-```
+If `FERNET_KEY` is unset, an ephemeral key is generated at startup (with a logged warning) — encrypted data then becomes **unrecoverable after a restart**, so always set `FERNET_KEY` in `.env`.
 
 ### Encryption in Transit
 
@@ -135,27 +133,17 @@ is_valid = pwd_context.verify("user_password", hashed)
 
 ### CORS (Cross-Origin Resource Sharing)
 
-Strict origin allowlist prevents unauthorized domains from accessing the API:
+Strict origin allowlist prevents unauthorized domains from accessing the API. Allowed origins come from the `CORS_ORIGINS` environment variable (comma-separated, `backend/app/config.py`), which defaults to:
 
-```python
-from fastapi.middleware.cors import CORSMiddleware
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",       # Web dev
-        "https://app.financetracker.com",  # Production web
-        "tauri://localhost",           # Tauri desktop app
-    ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
-)
 ```
+http://localhost:3000,http://localhost:1420,https://tauri.localhost
+```
+
+(web dev server, Tauri dev server, and the packaged Tauri desktop app respectively). Set `CORS_ORIGINS` to your production domain(s) when deploying.
 
 ### Rate Limiting
 
-Rate limiting prevents brute-force attacks and API abuse:
+Rate limiting (via `slowapi`) prevents brute-force attacks on authentication. Limits are applied **only to the auth endpoints** — other endpoints are currently unlimited:
 
 ```python
 from slowapi import Limiter
@@ -175,25 +163,13 @@ async def login(request: Request): ...
 @app.post("/api/v1/auth/refresh")
 @limiter.limit("20/minute")  # Token refresh
 async def refresh(request: Request): ...
-
-@app.get("/api/v1/portfolios")
-@limiter.limit("100/minute")  # General API limit
-async def list_portfolios(request: Request): ...
-
-@app.post("/api/v1/import/excel")
-@limiter.limit("5/minute")  # File upload limit
-async def import_excel(request: Request): ...
 ```
 
-| Endpoint Group | Rate Limit |
+| Endpoint | Rate Limit |
 |---|---|
 | Register | 5 requests/minute |
 | Login | 10 requests/minute |
 | Token Refresh | 20 requests/minute |
-| General API | 100 requests/minute |
-| Import/Export | 5 requests/minute |
-| AI/Chat | 30 requests/minute |
-| WebSocket connections | 5 per user |
 
 ### Input Validation
 
@@ -231,7 +207,7 @@ result = await db.execute(
 ### XSS Prevention
 
 - React automatically escapes all rendered content
-- Content Security Policy (CSP) headers restrict script sources
+- Content Security Policy (CSP) headers should be added at the deployment layer (see Security Headers below)
 - No use of `dangerouslySetInnerHTML` except for sanitized MDX help content
 - All user-generated content (notes, custom field values) is escaped on display
 - Server-side HTML export uses `html.escape()` on all user-generated content (`export_service.py`) to prevent stored XSS in generated reports
@@ -306,16 +282,25 @@ ANTHROPIC_API_KEY=sk-ant-xxx
 
 ### .gitignore Rules
 
-The following patterns are in `.gitignore`:
+The relevant patterns in the root `.gitignore`:
 
 ```
+# Environment & Secrets
 .env
-.env.*
-!.env.example
-*.key
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
 *.pem
-*.p12
-finance.db
+*.key
+*.cert
+credentials.json
+service-account.json
+
+# Database
+*.db
+*.sqlite
 *.sqlite3
 ```
 
@@ -323,8 +308,9 @@ finance.db
 
 If `SECRET_KEY` needs to be rotated:
 1. All existing JWT tokens will be invalidated (users must re-login)
-2. All Fernet-encrypted data must be re-encrypted with the new key
-3. A migration script handles the re-encryption process
+
+If `FERNET_KEY` needs to be rotated:
+1. All Fernet-encrypted data (broker credentials, TOTP secrets, encrypted settings) must be decrypted with the old key and re-encrypted with the new one — there is currently no migration script for this, so it must be done manually before discarding the old key
 
 ---
 
@@ -370,17 +356,15 @@ For German users, the app follows GDPR principles:
 
 ## Audit Logging
 
-All sensitive actions are logged with timestamp, user ID, and details:
+Audit logging currently covers three auth actions (via `audit_log()` calls in `backend/app/api/v1/auth.py`):
 
 | Action | Logged Data |
 |---|---|
-| Login success/failure | User email, IP, timestamp, failure reason |
-| 2FA enable/disable | User ID, timestamp |
-| Broker connect/disconnect | User ID, broker name, timestamp |
-| Settings change | User ID, setting key, timestamp (not the value for sensitive keys) |
-| Data export | User ID, export type, timestamp |
-| Account deletion | User ID, timestamp |
-| Import execution | User ID, file size, row count, timestamp |
+| Registration | User ID, IP, timestamp |
+| Login (success) | User ID, IP, timestamp |
+| Password change | User ID, timestamp |
+
+Failed logins, 2FA changes, broker connections, settings changes, exports, and deletions are not yet audit-logged.
 
 Audit logs are written to Python's structured logging system (`app/utils/audit.py`) with `[AUDIT]` prefix, including user ID, action, resource type/ID, IP address, and timestamp. These can be shipped to any log aggregation system (ELK, CloudWatch, etc.).
 
@@ -388,16 +372,14 @@ Audit logs are written to Python's structured logging system (`app/utils/audit.p
 
 ## Security Headers
 
-The following HTTP headers are set on all responses:
+The backend does **not** currently set security headers (HSTS, CSP, X-Frame-Options, etc.) — the only middleware active on responses is CORS. In production, security headers should be added at the reverse proxy / deployment layer (nginx, Caddy, a CDN, or a dedicated FastAPI middleware). Recommended headers to configure there:
 
 ```
 Strict-Transport-Security: max-age=31536000; includeSubDomains
 X-Content-Type-Options: nosniff
 X-Frame-Options: DENY
-X-XSS-Protection: 0
 Referrer-Policy: strict-origin-when-cross-origin
 Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'
-Permissions-Policy: camera=(), microphone=(self), geolocation=()
 ```
 
 ---

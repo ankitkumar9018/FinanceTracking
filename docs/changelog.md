@@ -205,9 +205,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 | Metric | Count |
 |---|---|
-| API endpoints | 132 |
+| API endpoints | 152 |
 | Backend tests passing | 245 |
-| Frontend routes | 34 |
+| Frontend routes | 32 |
 | E2E tests | 32 |
 | SQLAlchemy models | 19 |
 | Sidebar nav items | 28 |

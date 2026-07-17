@@ -22,10 +22,10 @@ FinanceTracker includes a suite of ML/AI features designed to enhance portfolio 
   +----------------------------------------+
 
   +-- Price Predictor (PyTorch LSTM) ------+
-  |  Next 1/5/10 day price prediction      |
-  |  Trained on OHLCV + indicators         |
-  |  Confidence scoring                    |
-  |  Runs: Nightly retrain via Celery      |
+  |  Next N-day price prediction (def. 5)  |
+  |  Trained on OHLCV                      |
+  |  Confidence scoring (R2-based)         |
+  |  Runs: On-demand, trained per request  |
   +----------------------------------------+
 
   +-- Anomaly Detector (Isolation Forest) -+
@@ -55,7 +55,7 @@ FinanceTracker includes a suite of ML/AI features designed to enhance portfolio 
   |  Runs: On-demand via API               |
   +----------------------------------------+
 
-  +-- LLM Assistant (LangChain) ----------+
+  +-- LLM Assistant (httpx providers) ----+
   |  Primary: Ollama + Llama 3.2 (local)   |
   |  Optional: OpenAI, Claude, Gemini      |
   |  Graceful degradation chain            |
@@ -79,57 +79,55 @@ FinanceTracker includes a suite of ML/AI features designed to enhance portfolio 
 | **RSI-14** | `ta.rsi(close, length=14)` | <30 = oversold, >70 = overbought |
 | **MACD** | `ta.macd(close, fast=12, slow=26, signal=9)` | MACD crossing above signal = bullish |
 | **Bollinger Bands** | `ta.bbands(close, length=20, std=2)` | Price near lower band = potentially undervalued |
-| **SMA-20** | `ta.sma(close, length=20)` | Short-term trend direction |
-| **SMA-50** | `ta.sma(close, length=50)` | Medium-term trend direction |
-| **SMA-200** | `ta.sma(close, length=200)` | Long-term trend direction |
-| **EMA-12** | `ta.ema(close, length=12)` | Fast exponential moving average |
-| **EMA-50** | `ta.ema(close, length=50)` | Medium exponential moving average |
+| **SMA-20** | `close.rolling(20).mean()` | Short-term trend direction |
+| **SMA-50** | `close.rolling(50).mean()` | Medium-term trend direction |
+| **EMA-20** | `close.ewm(span=20).mean()` | Short-term exponential moving average |
+| **EMA-50** | `close.ewm(span=50).mean()` | Medium exponential moving average |
 
 ### Support & Resistance Detection
 
 Custom algorithm based on swing high/low detection:
 
 ```python
-def find_support_resistance(df: pd.DataFrame, window: int = 20) -> dict:
+def find_support_resistance(
+    highs: pd.Series,
+    lows: pd.Series,
+    closes: pd.Series,
+    window: int = 5,
+    num_levels: int = 3,
+) -> SupportResistance:
     """
     Detect support and resistance levels from price action.
 
     Algorithm:
-    1. Find local minima (support) and maxima (resistance)
-       using a rolling window of N days
+    1. Find swing lows (support) and swing highs (resistance):
+       a bar that is the min/max of the surrounding +/- `window` bars
     2. Cluster nearby levels (within 2% of each other)
-    3. Score by number of touches and recency
-    4. Return top 3 support and top 3 resistance levels
+    3. Rank clusters by number of touches (most touches first)
+    4. Return the top `num_levels` support and resistance levels
     """
-    highs = df['high'].rolling(window, center=True).max()
-    lows = df['low'].rolling(window, center=True).min()
-
-    resistance_levels = df[df['high'] == highs]['high'].unique()
-    support_levels = df[df['low'] == lows]['low'].unique()
-
-    # Cluster and score...
-    return {
-        "support": sorted(clustered_supports)[:3],
-        "resistance": sorted(clustered_resistances, reverse=True)[:3]
-    }
 ```
+
+The result is a `SupportResistance` dataclass with sorted `support_levels` and `resistance_levels` lists.
 
 ### Fibonacci Retracements
 
-Calculated from the most recent swing high to swing low:
+Calculated from the swing high down to the swing low (period max/min of the series):
 
 ```python
-def calculate_fibonacci(high: float, low: float) -> dict:
+def calculate_fibonacci(highs: pd.Series, lows: pd.Series) -> FibonacciLevels:
+    high, low = float(highs.max()), float(lows.min())
     diff = high - low
-    return {
-        "0.0": low,
-        "0.236": low + 0.236 * diff,
-        "0.382": low + 0.382 * diff,
-        "0.5": low + 0.5 * diff,
-        "0.618": low + 0.618 * diff,
-        "0.786": low + 0.786 * diff,
-        "1.0": high
+    levels = {
+        "0.0": high,
+        "0.236": high - 0.236 * diff,
+        "0.382": high - 0.382 * diff,
+        "0.5": high - 0.5 * diff,
+        "0.618": high - 0.618 * diff,
+        "0.786": high - 0.786 * diff,
+        "1.0": low,
     }
+    return FibonacciLevels(high=high, low=low, levels=levels)
 ```
 
 ### Calculation Schedule
@@ -151,30 +149,21 @@ def calculate_fibonacci(high: float, low: float) -> dict:
 
 ```
 Input Features (per time step):
-  - Open, High, Low, Close, Volume (normalized)
-  - RSI-14
-  - MACD value
-  - Bollinger Band width
-  - SMA-20 distance (close/sma20 - 1)
-  - Day of week (one-hot encoded)
+  - Open, High, Low, Close, Volume (min-max normalized)
 
-  Total: 12 features per time step
-  Sequence length: 60 days (lookback window)
+  Total: 5 features per time step
+  Sequence length: 30 days (lookback window)
 
 Model:
-  +-- Input (batch, 60, 12) --+
-  |                            |
-  +-- LSTM Layer 1 (128 units, dropout=0.2) --+
-  |                                            |
-  +-- LSTM Layer 2 (64 units, dropout=0.2)  --+
-  |                                            |
-  +-- Fully Connected (64 -> 32)             --+
-  |                                            |
-  +-- ReLU Activation                        --+
-  |                                            |
-  +-- Fully Connected (32 -> 1)              --+
-  |                                            |
-  +-- Output: predicted next-day close price --+
+  +-- Input (batch, 30, 5) --+
+  |                           |
+  +-- LSTM (2 layers, 64 hidden units, dropout=0.2) --+
+  |                                                    |
+  +-- Linear (64 -> 32) -> ReLU -> Dropout(0.2)      --+
+  |                                                    |
+  +-- Linear (32 -> 1)                               --+
+  |                                                    |
+  +-- Output: predicted next-day close (normalized)  --+
 ```
 
 ### PyTorch Implementation
@@ -184,79 +173,66 @@ import torch
 import torch.nn as nn
 
 class LSTMPredictor(nn.Module):
-    def __init__(self, input_size=12, hidden_size=128, num_layers=2, dropout=0.2):
+    def __init__(self, input_size=5, hidden_size=64, num_layers=2, dropout=0.2):
         super().__init__()
         self.lstm = nn.LSTM(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
+            input_size,
+            hidden_size,
+            num_layers,
             batch_first=True,
-            dropout=dropout
+            dropout=dropout if num_layers > 1 else 0,
         )
-        self.fc1 = nn.Linear(hidden_size, 32)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(32, 1)
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_size, 32),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(32, 1),
+        )
 
     def forward(self, x):
-        lstm_out, _ = self.lstm(x)
-        last_hidden = lstm_out[:, -1, :]  # Take last time step
-        out = self.fc1(last_hidden)
-        out = self.relu(out)
-        out = self.fc2(out)
-        return out
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size)
+        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size)
+        out, _ = self.lstm(x, (h0, c0))
+        return self.fc(out[:, -1, :])
 ```
 
 ### Training Pipeline
 
 ```
 1. Data Collection:
-   - Fetch 2+ years of daily OHLCV from price_history table
-   - Calculate all technical indicators
+   - Fetch up to 1 year of daily OHLCV from price_history table
+   - Requires at least lookback + 30 rows (and 50+ training windows)
 
 2. Preprocessing:
-   - Normalize features using MinMaxScaler (fitted on training data)
-   - Create sliding windows of 60 days
-   - Split: 80% train, 10% validation, 10% test
+   - Manual per-feature min-max normalization (no sklearn scaler)
+   - Create sliding windows of 30 days
+   - Split: 80% train, 20% test (no separate validation set)
 
 3. Training:
    - Loss function: MSE (Mean Squared Error)
    - Optimizer: Adam (lr=0.001)
-   - Epochs: 100 with early stopping (patience=10)
-   - Batch size: 32
+   - Epochs: 50, no early stopping
+   - Full-tensor training (entire training set per step, no mini-batches)
 
 4. Evaluation:
-   - Metrics: RMSE, MAE, directional accuracy
-   - If directional accuracy < 50%, model is not deployed
+   - R² on the 20% test split, reported as model_accuracy
 
 5. Prediction:
-   - Multi-step: predict day 1, feed back, predict day 2, etc.
-   - Confidence score: inverse of prediction variance across multiple
-     dropout-enabled forward passes (Monte Carlo dropout)
+   - Multi-step: predict day 1, roll the window forward with the
+     predicted close, predict day 2, etc. (default 5 days, weekends skipped)
 ```
 
 ### Training Schedule
 
-- **Nightly retrain**: Celery task at 2 AM for each stock with sufficient data (200+ days)
-- **Model storage**: Serialized PyTorch models saved per stock symbol
-- **Fallback**: If model not available for a stock, prediction endpoint returns 404
+- **Per-request training**: the model is trained fresh on every prediction request — there is no model persistence, no nightly retrain, and no per-stock stored models.
+- **Fallback**: if PyTorch is not installed or there is insufficient data, the endpoint returns an empty prediction (direction "neutral", confidence 0) rather than an error.
 
 ### Confidence Scoring
 
-Uses Monte Carlo Dropout to estimate prediction uncertainty:
+Confidence is derived from the test-set R², decaying for each step further into the future (no Monte Carlo dropout):
 
 ```python
-def predict_with_confidence(model, input_data, n_samples=100):
-    model.train()  # Keep dropout active
-    predictions = []
-    for _ in range(n_samples):
-        with torch.no_grad():
-            pred = model(input_data)
-            predictions.append(pred.item())
-
-    mean_pred = np.mean(predictions)
-    std_pred = np.std(predictions)
-    confidence = max(0, 1 - (std_pred / abs(mean_pred)))
-    return mean_pred, confidence
+confidence_for_step_i = max(0.0, min(1.0, r_squared - (i * 0.05)))
 ```
 
 ---
@@ -269,48 +245,39 @@ def predict_with_confidence(model, input_data, n_samples=100):
 
 ### What It Detects
 
-- Unusual price spikes or crashes (beyond 3x normal daily movement)
-- Abnormal volume surges (volume > 5x 20-day average)
-- Price-volume divergences (large price move on low volume or vice versa)
-- Sudden RSI extreme shifts
+Detected anomalies are classified into four types:
+
+- `volume_surge` -- volume more than 3x the 20-day average
+- `price_gap` -- opening gap of more than 3% from the previous close
+- `price_spike` -- daily return beyond +/-5%
+- `pattern` -- any other unusual combination of price/volume features
 
 ### Implementation
+
+Implemented as a module-level async function (no class). `detect_anomalies()` fetches price history from the database, builds a feature matrix (returns, high-low range, volume ratios, rolling volatility, gaps), standardizes it, and fits an Isolation Forest per request:
 
 ```python
 from sklearn.ensemble import IsolationForest
 
-class AnomalyDetector:
-    def __init__(self, contamination=0.05):
-        self.model = IsolationForest(
-            contamination=contamination,
-            random_state=42,
-            n_estimators=100
-        )
-
-    def detect(self, df: pd.DataFrame) -> list[AnomalyAlert]:
-        """
-        Detect anomalies in recent price/volume data.
-
-        Features used:
-        - daily_return: (close - prev_close) / prev_close
-        - volume_ratio: volume / sma_volume_20
-        - rsi_change: rsi - prev_rsi
-        - high_low_range: (high - low) / close
-        """
-        features = self._extract_features(df)
-        predictions = self.model.fit_predict(features)
-
-        anomalies = []
-        for i, pred in enumerate(predictions):
-            if pred == -1:  # Anomaly
-                anomalies.append(AnomalyAlert(
-                    date=df.index[i],
-                    type=self._classify_anomaly(features.iloc[i]),
-                    severity=self._calculate_severity(features.iloc[i]),
-                    description=self._generate_description(df.iloc[i], features.iloc[i])
-                ))
-        return anomalies
+async def detect_anomalies(
+    symbol: str,
+    exchange: str,
+    db,  # AsyncSession
+    days: int = 90,
+    contamination: float = 0.05,
+) -> AnomalyReport:
+    ...
+    iso_forest = IsolationForest(
+        contamination=contamination,
+        random_state=42,
+        n_estimators=100,
+    )
+    predictions = iso_forest.fit_predict(X)
+    scores = iso_forest.score_samples(X)
+    ...
 ```
+
+The result is an `AnomalyReport` dataclass containing a `list[Anomaly]` (each with date, type, severity 0-1, description, price, volume, and the raw isolation-forest score), plus `total_analyzed` and `anomaly_rate`. If scikit-learn is not installed, an empty report is returned.
 
 ### Alert Integration
 
@@ -332,61 +299,48 @@ When an anomaly is detected:
 
 | Source | Type | Feed |
 |---|---|---|
-| MoneyControl | RSS | `https://www.moneycontrol.com/rss/` |
-| Economic Times | RSS | `https://economictimes.indiatimes.com/rss` |
-| LiveMint | RSS | `https://www.livemint.com/rss/` |
-| Reuters India | RSS | Reuters India RSS feed |
-| Google News | RSS | `https://news.google.com/rss/search?q={stock_name}` |
+| Economic Times | RSS | `https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms` |
+| LiveMint | RSS | `https://www.livemint.com/rss/markets` |
+| MoneyControl | RSS | `https://www.moneycontrol.com/rss/marketnews.xml` |
 
 ### Pipeline
 
 ```
-1. Fetch News
-   -> Parse RSS feeds every 30 minutes during market hours
-   -> Filter articles by stock name / symbol keywords
+1. Fetch News (on-demand, per API request)
+   -> Fetch the three RSS feeds via httpx
+   -> Keep items whose title mentions the stock symbol
 
-2. Preprocess
-   -> Extract title and first 512 characters of article
-   -> Clean HTML tags, normalize whitespace
+2. Score with FinBERT (headline only, first 512 chars)
+   -> Output: per-label scores {positive, negative, neutral}
+   -> score = positive - negative
+   -> Label: score > 0.2 -> "bullish"
+             score < -0.2 -> "bearish"
+             else -> "neutral"
+   -> If transformers is not installed (or FinBERT fails),
+      falls back to keyword-based scoring
 
-3. Score with FinBERT
-   -> Input: article text (title + snippet)
-   -> Output: {positive: 0.75, negative: 0.10, neutral: 0.15}
-   -> Sentiment label: positive > 0.6 -> "bullish"
-                        negative > 0.6 -> "bearish"
-                        else -> "neutral"
-
-4. Aggregate per Stock
-   -> Weighted average of recent articles (newer = higher weight)
-   -> Decay factor: 0.9^(hours_since_publication)
+3. Aggregate per Stock
+   -> Simple average of item scores (no recency weighting)
+   -> Overall: avg > 0.15 -> "bullish", avg < -0.15 -> "bearish",
+      else "neutral"
    -> Final score: -1.0 (very bearish) to +1.0 (very bullish)
-
-5. Display
-   -> Sentiment badge on holdings table (green/red/gray)
-   -> Detailed view shows individual articles with scores
 ```
 
 ### FinBERT Model
 
+Implemented as module-level functions (no `SentimentAnalyzer` class). The FinBERT model is lazy-loaded once via the Hugging Face `pipeline` API:
+
 ```python
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import torch
+from transformers import pipeline
 
-class SentimentAnalyzer:
-    def __init__(self):
-        self.tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
-        self.model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
-        self.labels = ["positive", "negative", "neutral"]
-
-    def analyze(self, text: str) -> dict:
-        inputs = self.tokenizer(text, return_tensors="pt",
-                                truncation=True, max_length=512)
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-        probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
-        scores = {label: prob.item() for label, prob in zip(self.labels, probs[0])}
-        return scores
+_sentiment_pipeline = pipeline(
+    "sentiment-analysis",
+    model="ProsusAI/finbert",
+    top_k=None,
+)
 ```
+
+`analyze_sentiment(symbol, max_news=10)` returns a `SentimentResult` dataclass with the overall sentiment, score, the scored news items, and `analysis_method` (`"finbert"`, `"keyword"`, or `"none"` when no news was found).
 
 ### Resource Requirements
 
@@ -400,15 +354,17 @@ class SentimentAnalyzer:
 ## 5. LLM Chat Assistant
 
 **File**: `backend/app/ml/llm_assistant.py`
-**Framework**: LangChain
+**Framework**: None -- hand-rolled providers calling each vendor's HTTP API directly via `httpx`
 **Primary Provider**: Ollama + Llama 3.2 (local, free, private)
 
 ### Provider Registry & Graceful Degradation
 
-```
-Provider Priority Chain:
+The user's preferred provider (`llm_provider` setting) is tried first; if it is unavailable, the remaining providers are tried in this fixed fallback order:
 
-  1. Ollama (Llama 3.2)  -- Primary, local, free
+```
+Fallback Order:
+
+  1. Ollama (Llama 3.2)  -- Local, free
      |
      | If unavailable
      v
@@ -424,104 +380,49 @@ Provider Priority Chain:
      |
      | If ALL unavailable
      v
-  5. AI features show "AI assistant offline" banner
-     Core app continues to work normally
+  5. chat() returns a friendly "AI assistant is currently offline"
+     message (never an exception). Core app continues to work normally.
 ```
 
 ### Implementation
 
+There is no `LLMAssistant` class and no agent framework. The module defines an `LLMProvider` abstract base class with three methods (`chat`, `is_available`, `stream`) and four concrete implementations, each a thin `httpx` wrapper over the vendor's REST API:
+
 ```python
-from langchain_community.llms import Ollama
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain.tools import tool
+class LLMProvider(ABC):
+    NAME: str = ""
 
-class LLMAssistant:
-    def __init__(self, settings: AppSettings):
-        self.providers = self._init_providers(settings)
-        self.tools = self._init_tools()
+    @abstractmethod
+    async def chat(self, messages: list[ChatMessage], system_prompt: str = "") -> ChatResponse: ...
 
-    def _init_providers(self, settings):
-        providers = []
+    @abstractmethod
+    async def is_available(self) -> bool: ...
 
-        # Primary: Ollama (always attempted first)
-        if settings.ollama_url:
-            providers.append(("ollama", Ollama(
-                base_url=settings.ollama_url,
-                model=settings.ollama_model or "llama3.2"
-            )))
+    @abstractmethod
+    async def stream(self, messages: list[ChatMessage], system_prompt: str = "") -> AsyncIterator[str]: ...
 
-        # Optional: OpenAI
-        if settings.openai_api_key:
-            providers.append(("openai", ChatOpenAI(
-                api_key=settings.openai_api_key,
-                model=settings.openai_model or "gpt-4"
-            )))
 
-        # Optional: Anthropic Claude
-        if settings.anthropic_api_key:
-            providers.append(("claude", ChatAnthropic(
-                api_key=settings.anthropic_api_key,
-                model="claude-sonnet-4-20250514"
-            )))
+PROVIDER_REGISTRY = {
+    "ollama": OllamaProvider,      # POST {ollama_url}/api/chat
+    "openai": OpenAIProvider,      # POST https://api.openai.com/v1/chat/completions
+    "anthropic": AnthropicProvider,  # POST https://api.anthropic.com/v1/messages
+    "google": GoogleProvider,      # POST generativelanguage.googleapis.com (gemini-pro)
+}
 
-        # Optional: Google Gemini
-        if settings.google_api_key:
-            providers.append(("gemini", ChatGoogleGenerativeAI(
-                google_api_key=settings.google_api_key,
-                model="gemini-pro"
-            )))
-
-        return providers
-
-    async def chat(self, message: str, user_id: str, session_id: str) -> dict:
-        for provider_name, llm in self.providers:
-            try:
-                agent = create_tool_calling_agent(llm, self.tools, self.prompt)
-                executor = AgentExecutor(agent=agent, tools=self.tools)
-                response = await executor.ainvoke({"input": message})
-                return {
-                    "response": response["output"],
-                    "provider": provider_name,
-                    "tools_used": response.get("intermediate_steps", [])
-                }
-            except Exception as e:
-                logger.warning(f"Provider {provider_name} failed: {e}")
-                continue
-
-        return {
-            "response": "AI assistant is currently offline. All providers are unavailable.",
-            "provider": None,
-            "tools_used": []
-        }
+FALLBACK_ORDER = ["ollama", "openai", "anthropic", "google"]
 ```
 
-### Available Tools (LangChain)
+The public entry points are module-level functions:
 
-The LLM agent has access to these tools for retrieving and analyzing user data:
+- `get_active_provider()` -- returns the first available provider (preferred first, then fallback order), or `None`
+- `chat(messages, user_id, db=None)` -- sends the conversation with a fixed financial-assistant `SYSTEM_PROMPT`; returns a `ChatResponse` dataclass (`message`, `provider`, `model`, `tokens_used`). On provider error or no provider, it returns an apologetic offline/error message instead of raising
+- `check_provider_status()` -- availability map for all four providers
 
-| Tool | Description | Example Query |
-|---|---|---|
-| `portfolio_data` | Fetch user's portfolio holdings and P&L | "Show my portfolio" |
-| `market_data` | Get current price and quote for a stock | "What is Reliance trading at?" |
-| `technical_analysis` | Calculate indicators for a stock | "What is the RSI of TCS?" |
-| `tax_calculator` | Compute tax implications | "How much LTCG tax will I owe?" |
-| `risk_metrics` | Get portfolio risk metrics | "What is my Sharpe ratio?" |
-| `transaction_history` | Fetch buy/sell history | "When did I buy HDFC Bank?" |
-| `alert_status` | Check current alert states | "Which stocks need action?" |
+Availability checks: Ollama pings `GET /api/tags`, OpenAI calls `GET /v1/models` with the key, Anthropic and Google simply check the key is configured. Ollama and OpenAI support true token streaming; the Anthropic and Google `stream()` implementations call `chat()` and yield the full response in one chunk.
 
-### Example Conversations
+### No Tool Calling
 
-**User**: "Which of my stocks are underperforming Nifty 50 this month?"
-**Assistant**: Uses `portfolio_data` + `market_data` tools, compares individual stock returns against Nifty 50 return for the current month.
-
-**User**: "Should I sell Reliance based on RSI?"
-**Assistant**: Uses `technical_analysis` tool, fetches RSI and other indicators, provides analysis (informational only, never direct buy/sell advice).
-
-**User**: "How much tax will I save if I hold INFY for 30 more days?"
-**Assistant**: Uses `tax_calculator` + `transaction_history` tools, calculates STCG vs LTCG difference.
+The assistant has **no tools** -- there is no tool/function-calling and no agent loop. It answers from the conversation history plus the fixed system prompt, which frames it as a financial assistant for the app (portfolio concepts, RSI/MACD/Bollinger, Indian STCG/LTCG and German Abgeltungssteuer) and instructs it to add a "not financial advice" reminder. It cannot look up the user's live portfolio data itself.
 
 ---
 
@@ -536,54 +437,33 @@ The LLM agent has access to these tools for retrieving and analyzing user data:
 |---|---|---|
 | **Sharpe Ratio** | `(Rp - Rf) / sigma_p` | >1 good, >2 great, <0 poor |
 | **Sortino Ratio** | `(Rp - Rf) / sigma_downside` | Like Sharpe but only penalizes downside volatility |
-| **Max Drawdown** | `max(peak - trough) / peak` | Worst peak-to-trough loss |
-| **Value at Risk (95%)** | 5th percentile of return distribution | "95% chance loss won't exceed this" |
+| **Max Drawdown** | `max(peak - trough) / peak` (+ duration in days) | Worst peak-to-trough loss |
+| **Value at Risk (95% / 99%)** | 5th / 1st percentile of return distribution | "95% (99%) chance loss won't exceed this" |
 | **Beta** | `Cov(Ri, Rm) / Var(Rm)` | >1 = more volatile than market |
-| **Annualized Return** | `(1 + total_return)^(365/days) - 1` | Yearly equivalent return |
+| **Alpha** | Excess return vs benchmark (CAPM) | >0 = outperforming risk-adjusted benchmark |
+| **Information Ratio** | Active return / tracking error | Consistency of outperformance |
+| **Calmar Ratio** | Annualized return / max drawdown | Return earned per unit of drawdown risk |
 | **Annualized Volatility** | `daily_std * sqrt(252)` | Yearly equivalent risk |
 
 ### Implementation
 
+Implemented as module-level functions (no `RiskCalculator` class), with the risk-free rate fixed as a module constant:
+
 ```python
-import numpy as np
-from scipy import stats
+RISK_FREE_RATE_ANNUAL = 0.07  # 7% (India 10Y govt bond approx)
+TRADING_DAYS_PER_YEAR = 252
 
-class RiskCalculator:
-    def __init__(self, risk_free_rate: float = 0.065):
-        """
-        Args:
-            risk_free_rate: Annualized risk-free rate
-                           India: ~6.5% (10-year govt bond)
-                           Germany: ~2.5% (10-year Bund)
-        """
-        self.rf = risk_free_rate
+def calculate_sharpe_ratio(returns, risk_free_rate=RISK_FREE_RATE_ANNUAL): ...
+def calculate_sortino_ratio(returns, risk_free_rate=RISK_FREE_RATE_ANNUAL): ...
+def calculate_max_drawdown(cumulative_returns): ...   # -> (max_dd, duration_days)
+def calculate_var(returns, confidence): ...
+def calculate_beta(returns, benchmark_returns): ...
 
-    def sharpe_ratio(self, returns: np.ndarray) -> float:
-        daily_rf = (1 + self.rf) ** (1/252) - 1
-        excess = returns - daily_rf
-        if excess.std() == 0:
-            return 0.0
-        return np.sqrt(252) * excess.mean() / excess.std()
-
-    def sortino_ratio(self, returns: np.ndarray) -> float:
-        daily_rf = (1 + self.rf) ** (1/252) - 1
-        excess = returns - daily_rf
-        downside = returns[returns < 0]
-        if len(downside) == 0 or downside.std() == 0:
-            return float('inf')
-        return np.sqrt(252) * excess.mean() / downside.std()
-
-    def max_drawdown(self, prices: np.ndarray) -> tuple[float, int, int]:
-        peak = np.maximum.accumulate(prices)
-        drawdown = (prices - peak) / peak
-        max_dd = drawdown.min()
-        end_idx = drawdown.argmin()
-        start_idx = prices[:end_idx].argmax()
-        return max_dd, start_idx, end_idx
-
-    def value_at_risk(self, returns: np.ndarray, confidence: float = 0.95) -> float:
-        return np.percentile(returns, (1 - confidence) * 100)
+async def compute_portfolio_risk(...) -> RiskMetrics: ...
+async def compute_holding_risks(...) -> list[HoldingRisk]: ...
 ```
+
+Results are returned as `RiskMetrics` / `HoldingRisk` dataclasses; metrics that cannot be computed (e.g. fewer than 30 return observations) come back as `None` rather than raising.
 
 ### UI Visualization
 
@@ -599,79 +479,47 @@ class RiskCalculator:
 **File**: `backend/app/ml/portfolio_optimizer.py`
 **Libraries**: `scipy.optimize`, `numpy`
 
-### Efficient Frontier Calculation
+### Mean-Variance Optimization
+
+Implemented as a module-level async function (no `PortfolioOptimizer` class):
 
 ```python
-from scipy.optimize import minimize
-
-class PortfolioOptimizer:
-    def optimize(self, returns: pd.DataFrame, risk_tolerance: float) -> dict:
-        """
-        Calculate the optimal portfolio allocation using
-        Modern Portfolio Theory (Mean-Variance Optimization).
-
-        Args:
-            returns: DataFrame of daily returns per stock
-            risk_tolerance: 0 (minimum risk) to 1 (maximum return)
-
-        Returns:
-            Optimal weights per stock, expected return, expected volatility
-        """
-        n_assets = len(returns.columns)
-        mean_returns = returns.mean() * 252
-        cov_matrix = returns.cov() * 252
-
-        # Generate points on efficient frontier
-        target_returns = np.linspace(
-            mean_returns.min(), mean_returns.max(), 50
-        )
-        frontier_volatilities = []
-        frontier_weights = []
-
-        for target in target_returns:
-            result = minimize(
-                self._portfolio_volatility,
-                x0=np.ones(n_assets) / n_assets,
-                args=(cov_matrix,),
-                method='SLSQP',
-                constraints=[
-                    {'type': 'eq', 'fun': lambda w: np.sum(w) - 1},
-                    {'type': 'eq', 'fun': lambda w: w @ mean_returns - target}
-                ],
-                bounds=[(0, 1)] * n_assets
-            )
-            frontier_volatilities.append(result.fun)
-            frontier_weights.append(result.x)
-
-        # Pick point on frontier based on risk tolerance
-        idx = int(risk_tolerance * (len(frontier_weights) - 1))
-        optimal_weights = frontier_weights[idx]
-
-        return {
-            "weights": {col: w for col, w in zip(returns.columns, optimal_weights)},
-            "expected_return": target_returns[idx],
-            "expected_volatility": frontier_volatilities[idx],
-            "frontier": list(zip(frontier_volatilities, target_returns.tolist()))
-        }
+async def optimize_portfolio(
+    portfolio_id: int,
+    user_id: int,
+    risk_tolerance: str,   # "conservative" | "moderate" | "aggressive"
+    db: AsyncSession,
+    days: int = 252,
+) -> tuple[OptimizationResult, list[RebalanceSuggestion]]:
+    ...
 ```
+
+`risk_tolerance` is a string, not a 0-1 float. It maps to the optimization objective:
+
+| risk_tolerance | Objective |
+|---|---|
+| `"conservative"` | Minimum variance |
+| `"moderate"` | Maximum Sharpe ratio |
+| `"aggressive"` | Maximum return |
+
+The function loads the portfolio's holdings (at least 2 with 30+ days of price history required), builds a daily-returns matrix, and optimizes with `scipy.optimize.minimize` (SLSQP, weights bounded 0-1 and summing to 1). If scipy is not installed, it falls back to a Monte Carlo search over 10,000 random portfolios. An efficient frontier is also generated for visualization.
 
 ### Rebalancing Suggestions
 
-The optimizer compares current allocation against optimal allocation and suggests trades:
+The optimizer compares current weights (by market value) against optimal weights and returns a `RebalanceSuggestion` per holding:
 
 ```json
-{
-  "current_allocation": {"TCS.NS": 0.30, "RELIANCE.NS": 0.45, "INFY.NS": 0.25},
-  "optimal_allocation": {"TCS.NS": 0.35, "RELIANCE.NS": 0.35, "INFY.NS": 0.30},
-  "suggestions": [
-    {"stock": "RELIANCE.NS", "action": "reduce", "current": "45%", "target": "35%"},
-    {"stock": "TCS.NS", "action": "increase", "current": "30%", "target": "35%"},
-    {"stock": "INFY.NS", "action": "increase", "current": "25%", "target": "30%"}
-  ]
-}
+[
+  {"symbol": "RELIANCE", "current_weight": 45.0, "target_weight": 35.0,
+   "action": "decrease", "amount_percent": 10.0},
+  {"symbol": "TCS", "current_weight": 30.0, "target_weight": 35.0,
+   "action": "increase", "amount_percent": 5.0},
+  {"symbol": "INFY", "current_weight": 25.5, "target_weight": 26.0,
+   "action": "hold", "amount_percent": 0.5}
+]
 ```
 
-The optimizer only suggests -- it never auto-executes trades.
+Differences under 1% are marked `"hold"`. The optimizer only suggests -- it never auto-executes trades.
 
 ---
 
@@ -680,7 +528,7 @@ The optimizer only suggests -- it never auto-executes trades.
 | Feature | CPU | Memory | GPU | Disk |
 |---|---|---|---|---|
 | Technical Indicators | Low | 50MB | No | - |
-| LSTM Price Prediction | Medium | 200MB per model | Optional (faster with GPU) | ~5MB per model |
+| LSTM Price Prediction | Medium | ~200MB during training | Optional (faster with GPU) | - (models are not persisted) |
 | Anomaly Detection | Low | 100MB | No | - |
 | Sentiment Analysis (FinBERT) | Medium | 1GB | Optional | ~440MB (model) |
 | Risk Calculator | Low | 50MB | No | - |

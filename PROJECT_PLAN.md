@@ -15,7 +15,7 @@ A highly visual, cross-platform personal investment tracking application for non
 | **Web App** | Next.js 15 + React 19 + TypeScript | App Router, RSC, streaming SSR |
 | **Shared UI** | Shadcn/ui + Tailwind CSS 4 + Framer Motion | Beautiful, accessible, highly animated components |
 | **Charts (Financial)** | TradingView Lightweight Charts v5 | 45KB, purpose-built for OHLC/candlestick, real-time |
-| **Charts (Analytics)** | Apache ECharts 5 | Heatmaps, treemaps, portfolio pie/donut, rich tooltips |
+| **Charts (Analytics)** | Recharts (+ CSS grid treemaps) | Heatmaps, treemaps, portfolio pie/donut, rich tooltips |
 | **Charts (Dashboards)** | Recharts + custom D3.js | Goal progress, risk gauges, sparklines |
 | **Database ORM** | SQLAlchemy 2.0 async + Alembic | DB-agnostic (SQLite dev → PostgreSQL prod) |
 | **Task Queue** | Celery + Redis | Background jobs: data fetching, ML training, alerts |
