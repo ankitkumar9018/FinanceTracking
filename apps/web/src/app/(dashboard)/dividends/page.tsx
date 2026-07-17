@@ -11,11 +11,25 @@ import {
   CircleDollarSign,
   Trash2,
   Loader2,
+  CalendarClock,
+  PiggyBank,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { api } from "@/lib/api-client";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, currencyForExchange } from "@/lib/utils";
 import toast from "react-hot-toast";
 import { motion, AnimatePresence } from "framer-motion";
+
+/* Recharts is heavy — load the forecast bar chart lazily, client-only. */
+const DividendForecastChart = dynamic(
+  () => import("@/components/charts/dividend-forecast-chart"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-full w-full animate-pulse rounded-lg bg-[hsl(var(--muted))]/50" />
+    ),
+  },
+);
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -40,9 +54,30 @@ interface Dividend {
 interface DividendSummary {
   total_dividends: number;
   dividend_yield: number | null;
+  yield_on_cost: number | null;
   total_reinvested: number;
   count: number;
   calendar: Array<Record<string, unknown>>;
+}
+
+interface ForecastMonth {
+  month: string; // "YYYY-MM"
+  amount: number;
+}
+
+interface ForecastHolding {
+  symbol: string;
+  exchange: string;
+  annual_estimate: number;
+  yield_pct: number | null;
+  yield_on_cost_pct: number | null;
+}
+
+interface DividendForecast {
+  monthly: ForecastMonth[];
+  total_forward_12m: number;
+  forward_yield_pct: number | null;
+  by_holding: ForecastHolding[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -53,6 +88,8 @@ export default function DividendsPage() {
   const [dividends, setDividends] = useState<Dividend[]>([]);
   const [summary, setSummary] = useState<DividendSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [forecast, setForecast] = useState<DividendForecast | null>(null);
+  const [forecastLoading, setForecastLoading] = useState(true);
 
   /* Add form state */
   const [showAddForm, setShowAddForm] = useState(false);
@@ -83,9 +120,23 @@ export default function DividendsPage() {
     }
   }, []);
 
+  const loadForecast = useCallback(async () => {
+    setForecastLoading(true);
+    try {
+      const data = await api.get<DividendForecast>("/dividends/forecast");
+      setForecast(data);
+    } catch {
+      // Forecasting is best-effort (depends on live market data); fail quietly.
+      toast.error("Couldn't build dividend forecast");
+    } finally {
+      setForecastLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadData();
-  }, [loadData]);
+    loadForecast();
+  }, [loadData, loadForecast]);
 
   async function handleAddDividend() {
     if (!formHoldingId || !formExDate || !formAmountPerShare || !formTotal)
@@ -232,6 +283,148 @@ export default function DividendsPage() {
           })}
         </div>
       )}
+
+      {/* ---- Forward income forecast ---- */}
+      <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5">
+        <div className="flex items-center gap-2">
+          <CalendarClock className="h-5 w-5 text-[hsl(var(--primary))]" />
+          <div>
+            <h2 className="text-lg font-semibold">
+              Forward Income (next 12 months)
+            </h2>
+            <p className="text-xs text-[hsl(var(--muted-foreground))]">
+              Projected from dividend history and rates — best-effort estimate
+            </p>
+          </div>
+        </div>
+
+        {forecastLoading ? (
+          <div className="mt-4 space-y-4">
+            <div className="grid gap-4 sm:grid-cols-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="h-16 animate-pulse rounded-lg bg-[hsl(var(--muted))]/40"
+                />
+              ))}
+            </div>
+            <div className="h-64 w-full animate-pulse rounded-lg bg-[hsl(var(--muted))]/40" />
+          </div>
+        ) : !forecast ||
+          (forecast.by_holding.length === 0 && forecast.total_forward_12m <= 0) ? (
+          <div className="mt-4 flex flex-col items-center justify-center rounded-lg border border-dashed border-[hsl(var(--border))] py-12">
+            <PiggyBank className="h-10 w-10 text-[hsl(var(--muted-foreground))]/30" />
+            <p className="mt-3 text-sm font-medium text-[hsl(var(--muted-foreground))]">
+              No forward dividends projected
+            </p>
+            <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+              Add dividend-paying holdings to see a 12-month income forecast.
+            </p>
+          </div>
+        ) : (
+          <div className="mt-4 space-y-6">
+            {/* Headline metrics */}
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4">
+                <p className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                  Est. 12-Month Income
+                </p>
+                <p className="mt-1 text-2xl font-bold text-[hsl(var(--profit))]">
+                  {formatCurrency(forecast.total_forward_12m)}
+                </p>
+              </div>
+              <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4">
+                <p className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                  Forward Yield
+                </p>
+                <p className="mt-1 text-2xl font-bold text-[hsl(var(--primary))]">
+                  {forecast.forward_yield_pct !== null
+                    ? `${forecast.forward_yield_pct.toFixed(2)}%`
+                    : "—"}
+                </p>
+              </div>
+              <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4">
+                <p className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                  Yield on Cost
+                </p>
+                <p className="mt-1 text-2xl font-bold text-[hsl(var(--primary))]">
+                  {summary && summary.yield_on_cost !== null
+                    ? `${summary.yield_on_cost.toFixed(2)}%`
+                    : "—"}
+                </p>
+              </div>
+            </div>
+
+            {/* Monthly projection chart */}
+            <div
+              className="h-64 w-full"
+              role="img"
+              aria-label="Bar chart of projected dividend income for each of the next 12 months"
+            >
+              <DividendForecastChart data={forecast.monthly} />
+            </div>
+
+            {/* Per-holding breakdown */}
+            {forecast.by_holding.length > 0 && (
+              <div>
+                <h3 className="mb-2 text-sm font-semibold text-[hsl(var(--muted-foreground))]">
+                  By holding
+                </h3>
+                <div
+                  className="max-h-72 overflow-y-auto rounded-lg border border-[hsl(var(--border))]"
+                  aria-label="Per-holding dividend forecast breakdown"
+                >
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-[hsl(var(--card))]">
+                      <tr className="border-b border-[hsl(var(--border))] text-left text-xs text-[hsl(var(--muted-foreground))]">
+                        <th className="px-4 py-2 font-medium">Symbol</th>
+                        <th className="px-4 py-2 font-medium text-right">
+                          Est. Annual
+                        </th>
+                        <th className="px-4 py-2 font-medium text-right">Yield</th>
+                        <th className="px-4 py-2 font-medium text-right">
+                          Yield on Cost
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {forecast.by_holding.map((h) => (
+                        <tr
+                          key={`${h.symbol}-${h.exchange}`}
+                          className="border-b border-[hsl(var(--border))] last:border-0 hover:bg-[hsl(var(--muted))]/50"
+                        >
+                          <td className="px-4 py-2 font-medium">
+                            {h.symbol}
+                            <span className="ml-1 text-xs text-[hsl(var(--muted-foreground))]">
+                              {h.exchange}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono text-[hsl(var(--profit))]">
+                            {formatCurrency(
+                              h.annual_estimate,
+                              currencyForExchange(h.exchange),
+                            )}
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono">
+                            {h.yield_pct !== null
+                              ? `${h.yield_pct.toFixed(2)}%`
+                              : "—"}
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono">
+                            {h.yield_on_cost_pct !== null
+                              ? `${h.yield_on_cost_pct.toFixed(2)}%`
+                              : "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* ---- Dividends table ---- */}
       {loading ? (

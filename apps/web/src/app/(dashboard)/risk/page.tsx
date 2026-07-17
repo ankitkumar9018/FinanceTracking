@@ -9,12 +9,16 @@ import {
   AlertTriangle,
   ChevronDown,
 } from "lucide-react";
+import toast from "react-hot-toast";
 import { api } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio-store";
-import { formatPercent } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
+import {
+  DiversificationCard,
+  type ConcentrationData,
+} from "@/components/diversification-card";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -92,6 +96,9 @@ export default function RiskPage() {
     usePortfolioStore();
   const [metrics, setMetrics] = useState<RiskMetrics | null>(null);
   const [holdingRisks, setHoldingRisks] = useState<HoldingRisk[]>([]);
+  const [concentration, setConcentration] = useState<ConcentrationData | null>(null);
+  const [concentrationLoading, setConcentrationLoading] = useState(true);
+  const [concentrationError, setConcentrationError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -126,11 +133,33 @@ export default function RiskPage() {
     }
   }, []);
 
+  // Diversification loads independently so a slow/failed call (it may hit
+  // yfinance for sector/market-cap) never blocks the core risk metrics.
+  const loadConcentration = useCallback(async (portfolioId: number) => {
+    setConcentrationLoading(true);
+    setConcentrationError(null);
+    try {
+      const data = await api.get<ConcentrationData>(
+        `/analytics/concentration/${portfolioId}?single_name_threshold=15&sector_threshold=40`,
+      );
+      setConcentration(data);
+    } catch (err) {
+      setConcentration(null);
+      setConcentrationError(
+        err instanceof Error ? err.message : "Failed to load diversification data",
+      );
+      toast.error("Couldn't load diversification score");
+    } finally {
+      setConcentrationLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (activePortfolioId) {
       loadRiskData(activePortfolioId);
+      loadConcentration(activePortfolioId);
     }
-  }, [activePortfolioId, loadRiskData]);
+  }, [activePortfolioId, loadRiskData, loadConcentration]);
 
   function handlePortfolioChange(id: number) {
     setActivePortfolio(id);
@@ -334,6 +363,15 @@ export default function RiskPage() {
           </p>
         </div>
       ))}
+
+      {/* ---- Diversification / Concentration ---- */}
+      {showContent && (
+        <DiversificationCard
+          data={concentration}
+          loading={concentrationLoading}
+          error={concentrationError}
+        />
+      )}
 
       {/* ---- Per-Holding Risk Table ---- */}
       {showContent && (loading ? (

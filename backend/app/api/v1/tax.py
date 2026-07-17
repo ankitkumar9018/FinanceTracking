@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +16,10 @@ from app.schemas.tax import (
     TaxRecordCreate,
     TaxRecordResponse,
     TaxSummary,
+)
+from app.services.export_service import (
+    export_tax_report_csv,
+    generate_tax_report_html,
 )
 from app.services.tax_service import (
     compute_tax_for_transaction,
@@ -118,6 +123,66 @@ async def tax_summary(
         db=db,
     )
     return summary
+
+
+@router.get("/report/{financial_year}")
+async def download_tax_report(
+    financial_year: str,
+    jurisdiction: str = Query(default="IN", description="Tax jurisdiction: IN or DE"),
+    format: str = Query(default="csv", description="Report format: csv or html"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Download a consolidated, ITR-ready capital-gains tax report.
+
+    Returns a per-record capital-gains statement plus a totals summary for the
+    given financial year and jurisdiction, scoped to the current user, as a CSV
+    or a self-contained printable HTML file (``format=csv`` | ``format=html``).
+    """
+    fmt = format.lower()
+    if fmt not in ("csv", "html"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="format must be 'csv' or 'html'",
+        )
+
+    jur = jurisdiction.upper()
+    # Filename-safe financial year (e.g. "2024-25" -> stays, but strip anything odd)
+    safe_fy = "".join(c for c in financial_year if c.isalnum() or c in "-_") or "report"
+
+    if fmt == "csv":
+        content = await export_tax_report_csv(
+            user_id=user.id,
+            financial_year=financial_year,
+            jurisdiction=jur,
+            db=db,
+        )
+        return Response(
+            content=content,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": (
+                    f"attachment; filename=tax_report_{safe_fy}_{jur}.csv"
+                )
+            },
+        )
+
+    html = await generate_tax_report_html(
+        user_id=user.id,
+        user_name=user.display_name or user.email,
+        financial_year=financial_year,
+        jurisdiction=jur,
+        db=db,
+    )
+    return Response(
+        content=html,
+        media_type="text/html",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=tax_report_{safe_fy}_{jur}.html"
+            )
+        },
+    )
 
 
 @router.get("/harvesting", response_model=list[TaxHarvestingSuggestion])

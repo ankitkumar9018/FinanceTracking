@@ -16,6 +16,7 @@ from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.transaction import Transaction
 from app.models.tax_record import TaxRecord
+from app.services.tax_service import generate_tax_summary
 
 logger = logging.getLogger(__name__)
 
@@ -238,6 +239,256 @@ async def generate_portfolio_report_html(
 <tbody>{rows_html}</tbody>
 </table>
 <div class="footer">FinanceTracker — Personal Investment Portfolio Tracking | Generated automatically</div>
+</body></html>"""
+
+    return html
+
+
+# ---------------------------------------------------------------------------
+# Capital-gains / ITR-ready tax report export
+# ---------------------------------------------------------------------------
+
+
+async def _load_tax_records(
+    user_id: int,
+    financial_year: str,
+    jurisdiction: str,
+    db: AsyncSession,
+) -> list[TaxRecord]:
+    """Load a user's TaxRecords for a FY + jurisdiction, eager-loading the
+    linked transaction/holding so the stock symbol can be resolved.
+
+    Scoped by ``user_id`` — records are only ever returned for the requesting
+    user. Ordered by gain type then sale date for a stable, readable statement.
+    """
+    result = await db.execute(
+        select(TaxRecord)
+        .options(
+            selectinload(TaxRecord.transaction).selectinload(Transaction.holding)
+        )
+        .where(
+            TaxRecord.user_id == user_id,
+            TaxRecord.financial_year == financial_year,
+            TaxRecord.tax_jurisdiction == jurisdiction,
+        )
+        .order_by(TaxRecord.gain_type, TaxRecord.sale_date)
+    )
+    return list(result.scalars().all())
+
+
+def _record_symbol(record: TaxRecord) -> str:
+    """Resolve the stock symbol for a tax record via its linked transaction's
+    holding, falling back to an empty string when the link is missing (e.g. the
+    transaction was deleted and the FK set to NULL)."""
+    txn = record.transaction
+    if txn is not None and txn.holding is not None:
+        return txn.holding.stock_symbol or ""
+    return ""
+
+
+def _record_quantity(record: TaxRecord) -> float | None:
+    """Best-effort per-bucket quantity for a tax record.
+
+    ``purchase_price`` / ``sale_price`` on a TaxRecord store the *aggregated*
+    cost basis and proceeds for the consumed lots, not per-unit prices. The
+    matched quantity is therefore ``proceeds / sale_unit_price``, where the
+    per-unit sale price comes from the linked SELL transaction. Returns ``None``
+    when it cannot be derived (no transaction, or a zero/absent unit price).
+    """
+    txn = record.transaction
+    if txn is None or record.sale_price is None:
+        return None
+    unit_price = float(txn.price)
+    if unit_price <= 0:
+        return None
+    return round(float(record.sale_price) / unit_price, 4)
+
+
+def _num(value: object) -> float | None:
+    """Coerce a Decimal/None DB numeric to float (or None)."""
+    return float(value) if value is not None else None  # type: ignore[arg-type]
+
+
+async def export_tax_report_csv(
+    user_id: int,
+    financial_year: str,
+    jurisdiction: str,
+    db: AsyncSession,
+) -> str:
+    """Build an ITR-ready capital-gains CSV for a user + FY + jurisdiction.
+
+    Layout: a per-record table (one row per TaxRecord) followed by a totals
+    summary section derived from ``generate_tax_summary``. All free-text /
+    user-influenced cells are passed through ``_sanitize_csv_cell`` to defuse
+    spreadsheet formula injection. An empty record set still produces a valid
+    file with the header, a "no records" note, and a zeroed summary.
+    """
+    records = await _load_tax_records(user_id, financial_year, jurisdiction, db)
+    summary = await generate_tax_summary(
+        user_id=user_id,
+        financial_year=financial_year,
+        jurisdiction=jurisdiction,
+        db=db,
+    )
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow([
+        "Symbol", "Gain Type", "Purchase Date", "Sale Date",
+        "Holding Period (Days)", "Quantity", "Cost Basis", "Proceeds",
+        "Gain Amount", "Tax Amount", "Currency",
+    ])
+
+    if not records:
+        writer.writerow([
+            _sanitize_csv_cell(
+                f"No tax records for {financial_year} ({jurisdiction})"
+            )
+        ])
+    else:
+        for r in records:
+            qty = _record_quantity(r)
+            writer.writerow([
+                _sanitize_csv_cell(_record_symbol(r)),
+                _sanitize_csv_cell(r.gain_type),
+                r.purchase_date.isoformat() if r.purchase_date else "",
+                r.sale_date.isoformat() if r.sale_date else "",
+                r.holding_period_days if r.holding_period_days is not None else "",
+                qty if qty is not None else "",
+                _num(r.purchase_price),
+                _num(r.sale_price),
+                _num(r.gain_amount),
+                _num(r.tax_amount),
+                _sanitize_csv_cell(r.currency),
+            ])
+
+    # ── Totals summary section ─────────────────────────────────────────
+    writer.writerow([])
+    writer.writerow([_sanitize_csv_cell("SUMMARY")])
+    writer.writerow(["Financial Year", _sanitize_csv_cell(summary["financial_year"])])
+    writer.writerow(["Jurisdiction", _sanitize_csv_cell(summary["tax_jurisdiction"])])
+    writer.writerow(["Total STCG", summary["total_stcg"]])
+    writer.writerow(["Total LTCG", summary["total_ltcg"]])
+    writer.writerow(["Total Tax", summary["total_tax"]])
+    writer.writerow(["Exemption Used", summary["exemption_used"]])
+    writer.writerow(["Records Count", summary["records_count"]])
+
+    return output.getvalue()
+
+
+async def generate_tax_report_html(
+    user_id: int,
+    user_name: str,
+    financial_year: str,
+    jurisdiction: str,
+    db: AsyncSession,
+) -> str:
+    """Generate a self-contained, printable capital-gains statement as HTML.
+
+    Mirrors the styling/escaping of ``generate_portfolio_report_html``: a titled
+    statement with a per-record table and a summary block (total STCG, total
+    LTCG, total tax, exemption used). An empty record set produces a valid page
+    noting that no records exist for the period.
+    """
+    records = await _load_tax_records(user_id, financial_year, jurisdiction, db)
+    summary = await generate_tax_summary(
+        user_id=user_id,
+        financial_year=financial_year,
+        jurisdiction=jurisdiction,
+        db=db,
+    )
+
+    _esc = html_mod.escape
+    now = datetime.now().strftime("%B %d, %Y")
+
+    def _fmt(value: object) -> str:
+        num = _num(value)
+        return f"{num:,.2f}" if num is not None else "--"
+
+    if records:
+        rows_html = ""
+        for r in records:
+            gain = _num(r.gain_amount)
+            gain_color = "#16a34a" if (gain is None or gain >= 0) else "#dc2626"
+            qty = _record_quantity(r)
+            rows_html += f"""
+        <tr>
+            <td>{_esc(_record_symbol(r) or '--')}</td>
+            <td>{_esc(str(r.gain_type))}</td>
+            <td>{r.purchase_date.isoformat() if r.purchase_date else '--'}</td>
+            <td>{r.sale_date.isoformat() if r.sale_date else '--'}</td>
+            <td style="text-align:right">{r.holding_period_days if r.holding_period_days is not None else '--'}</td>
+            <td style="text-align:right">{f'{qty:,.4f}' if qty is not None else '--'}</td>
+            <td style="text-align:right">{_fmt(r.purchase_price)}</td>
+            <td style="text-align:right">{_fmt(r.sale_price)}</td>
+            <td style="text-align:right;color:{gain_color}">{f'{gain:+,.2f}' if gain is not None else '--'}</td>
+            <td style="text-align:right">{_fmt(r.tax_amount)}</td>
+            <td style="text-align:center">{_esc(str(r.currency))}</td>
+        </tr>"""
+        table_html = f"""<table>
+<thead><tr>
+    <th>Symbol</th><th>Gain Type</th><th>Purchase Date</th><th>Sale Date</th>
+    <th style="text-align:right">Days Held</th><th style="text-align:right">Qty</th>
+    <th style="text-align:right">Cost Basis</th><th style="text-align:right">Proceeds</th>
+    <th style="text-align:right">Gain</th><th style="text-align:right">Tax</th>
+    <th style="text-align:center">Currency</th>
+</tr></thead>
+<tbody>{rows_html}</tbody>
+</table>"""
+    else:
+        table_html = (
+            '<p class="empty">No capital-gains tax records found for '
+            f"{_esc(financial_year)} ({_esc(jurisdiction)}).</p>"
+        )
+
+    stcg_color = "#16a34a" if summary["total_stcg"] >= 0 else "#dc2626"
+    ltcg_color = "#16a34a" if summary["total_ltcg"] >= 0 else "#dc2626"
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>Capital Gains Statement — {_esc(financial_year)} ({_esc(jurisdiction)})</title>
+<style>
+    body {{ font-family: -apple-system, 'Segoe UI', sans-serif; margin: 40px; color: #1a1a1a; }}
+    h1 {{ color: #1e3a5f; margin-bottom: 4px; }}
+    .subtitle {{ color: #666; margin-bottom: 24px; }}
+    .summary {{ display: flex; gap: 24px; margin-bottom: 32px; flex-wrap: wrap; }}
+    .summary-card {{ background: #f8f9fa; border-radius: 8px; padding: 16px 24px; flex: 1; min-width: 160px; }}
+    .summary-card .label {{ font-size: 12px; color: #666; text-transform: uppercase; }}
+    .summary-card .value {{ font-size: 24px; font-weight: 700; margin-top: 4px; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+    th {{ background: #1e3a5f; color: white; padding: 10px 8px; text-align: left; }}
+    td {{ padding: 8px; border-bottom: 1px solid #e5e7eb; }}
+    tr:hover {{ background: #f8f9fa; }}
+    .empty {{ color: #666; font-style: italic; padding: 24px 0; }}
+    .footer {{ margin-top: 32px; font-size: 11px; color: #999; text-align: center; }}
+</style></head><body>
+<h1>Capital Gains Statement</h1>
+<p class="subtitle">Financial Year {_esc(financial_year)} · Jurisdiction {_esc(jurisdiction)} · Generated on {now} for {_esc(user_name)}</p>
+<div class="summary">
+    <div class="summary-card">
+        <div class="label">Total STCG</div>
+        <div class="value" style="color:{stcg_color}">{summary['total_stcg']:,.2f}</div>
+    </div>
+    <div class="summary-card">
+        <div class="label">Total LTCG</div>
+        <div class="value" style="color:{ltcg_color}">{summary['total_ltcg']:,.2f}</div>
+    </div>
+    <div class="summary-card">
+        <div class="label">Total Tax</div>
+        <div class="value">{summary['total_tax']:,.2f}</div>
+    </div>
+    <div class="summary-card">
+        <div class="label">Exemption Used</div>
+        <div class="value">{summary['exemption_used']:,.2f}</div>
+    </div>
+    <div class="summary-card">
+        <div class="label">Records</div>
+        <div class="value">{summary['records_count']}</div>
+    </div>
+</div>
+{table_html}
+<div class="footer">FinanceTracker — Capital Gains Statement | Generated automatically. Verify figures against broker statements before filing.</div>
 </body></html>"""
 
     return html

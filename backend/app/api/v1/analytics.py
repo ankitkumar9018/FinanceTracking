@@ -20,6 +20,7 @@ from app.database import get_db
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.user import User
+from app.services.concentration_service import analyze_concentration
 from app.services.drift_service import check_drift, set_target_allocation
 from app.services.freshness_service import get_data_freshness
 from app.services.market_data_service import _EXCHANGE_SUFFIX, fetch_historical_data
@@ -132,6 +133,45 @@ async def set_drift_target(
         "stock_symbol": holding.stock_symbol,
         "target_allocation_pct": holding.custom_fields.get("target_allocation_pct"),
     }
+
+
+# ---------------------------------------------------------------------------
+# 1b. Portfolio Concentration & Diversification
+# ---------------------------------------------------------------------------
+
+@router.get("/concentration/{portfolio_id}")
+async def get_concentration(
+    portfolio_id: int,
+    single_name_threshold: float = Query(
+        default=15.0,
+        ge=0,
+        le=100,
+        description="Flag any single holding above this weight (%). Default 15.",
+    ),
+    sector_threshold: float = Query(
+        default=40.0,
+        ge=0,
+        le=100,
+        description="Flag any sector above this weight (%). Default 40.",
+    ),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Analyze portfolio concentration and diversification.
+
+    Returns per-holding weights (flagged over ``single_name_threshold``),
+    sector / market-cap / exchange breakdowns, an overall 0-100 diversification
+    score with an A-F grade (anchored on the Herfindahl-Hirschman Index), and
+    human-readable warnings for each flagged concentration.
+    """
+    await _verify_portfolio_ownership(portfolio_id, user, db)
+    analysis = await analyze_concentration(
+        portfolio_id,
+        db,
+        single_name_threshold=single_name_threshold,
+        sector_threshold=sector_threshold,
+    )
+    return {"portfolio_id": portfolio_id, **analysis}
 
 
 # ---------------------------------------------------------------------------

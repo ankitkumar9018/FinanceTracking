@@ -61,6 +61,72 @@ def _calculate_monthly_sip(
     return round(sip, 4)
 
 
+def sip_projection(
+    current_amount: float,
+    monthly_sip: float,
+    annual_return_pct: float,
+    years: int,
+    step_up_pct: float = 0.0,
+) -> dict:
+    """Project a SIP's growth with vs. without an annual step-up.
+
+    Uses the same monthly-compounding (``annual_return_pct / 12``) logic as the
+    FIRE projection: every month the corpus compounds and the monthly SIP is
+    added; at the end of each year the stepped-up path increases its monthly SIP
+    by ``step_up_pct``.
+
+    Args:
+        current_amount: Starting principal (already invested).
+        monthly_sip: Monthly investment in year 1.
+        annual_return_pct: Expected annual return, e.g. ``12`` for 12%.
+        years: Number of years to project.
+        step_up_pct: Percentage increase applied to the monthly SIP each year.
+
+    Returns:
+        dict with ``corpus_with_stepup``, ``corpus_without_stepup``,
+        ``total_invested`` (cumulative contributions on the stepped-up path,
+        including ``current_amount``) and a ``projection`` list of
+        ``{year, invested, value}`` snapshots for the stepped-up path.
+    """
+    current_amount = float(current_amount)
+    monthly_sip = float(monthly_sip)
+    years = max(int(years), 0)
+
+    monthly_rate = annual_return_pct / 100.0 / 12.0
+    step_up = step_up_pct / 100.0
+
+    corpus_step = current_amount
+    corpus_flat = current_amount
+    invested = current_amount
+
+    monthly_step = monthly_sip
+    monthly_flat = monthly_sip
+
+    projection: list[dict] = [
+        {"year": 0, "invested": round(invested, 2), "value": round(corpus_step, 2)}
+    ]
+
+    for year in range(1, years + 1):
+        for _ in range(12):
+            corpus_step = corpus_step * (1 + monthly_rate) + monthly_step
+            corpus_flat = corpus_flat * (1 + monthly_rate) + monthly_flat
+            invested += monthly_step
+
+        projection.append(
+            {"year": year, "invested": round(invested, 2), "value": round(corpus_step, 2)}
+        )
+
+        # Step up next year's monthly SIP.
+        monthly_step *= 1 + step_up
+
+    return {
+        "corpus_with_stepup": round(corpus_step, 2),
+        "corpus_without_stepup": round(corpus_flat, 2),
+        "total_invested": round(invested, 2),
+        "projection": projection,
+    }
+
+
 def _months_until(target_date: date | None) -> int:
     """Return months from today until target_date. 0 if None or past."""
     if target_date is None:

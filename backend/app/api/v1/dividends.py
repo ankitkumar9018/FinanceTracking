@@ -8,10 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.models.user import User
-from app.schemas.dividend import DividendCreate, DividendResponse, DividendSummary
+from app.schemas.dividend import DividendCreate, DividendResponse
 from app.services.dividend_service import (
     create_dividend,
     delete_dividend,
+    get_dividend_forecast,
     get_dividend_summary,
     list_dividends,
 )
@@ -54,13 +55,31 @@ async def create_dividend_endpoint(
         )
 
 
-@router.get("/summary", response_model=DividendSummary)
+@router.get("/summary")
 async def dividend_summary_endpoint(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Get a dividend summary for the current user including yield and calendar."""
+    """Get a dividend summary for the current user.
+
+    Includes total received, dividend yield, portfolio-wide yield-on-cost,
+    reinvested total and a month-by-month calendar.
+    """
     return await get_dividend_summary(user_id=user.id, db=db)
+
+
+@router.get("/forecast")
+async def dividend_forecast_endpoint(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Forecast the next 12 months of dividend income for the current user.
+
+    Best-effort estimate driven by yfinance dividend history and rate data.
+    Returns a month-by-month projection, the forward yield, the total forward
+    12-month income and a per-holding breakdown with yield and yield-on-cost.
+    """
+    return await get_dividend_forecast(user_id=user.id, db=db)
 
 
 @router.delete("/{dividend_id}", status_code=status.HTTP_204_NO_CONTENT)

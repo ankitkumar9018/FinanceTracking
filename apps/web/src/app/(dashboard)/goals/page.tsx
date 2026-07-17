@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, type FormEvent } from "react";
 import {
   Target,
   Plus,
@@ -11,6 +11,9 @@ import {
   CheckCircle2,
   Clock,
   CalendarDays,
+  Flame,
+  TrendingUp,
+  Calculator,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio-store";
@@ -322,6 +325,486 @@ function GoalFormModal({
 }
 
 /* ------------------------------------------------------------------ */
+/*  Number field (shared by the calculators)                           */
+/* ------------------------------------------------------------------ */
+
+function NumberField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  suffix,
+  min = "0",
+  step = "any",
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  suffix?: string;
+  min?: string;
+  step?: string;
+}) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+        {label}
+      </label>
+      <div className="relative">
+        <input
+          type="number"
+          inputMode="decimal"
+          min={min}
+          step={step}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          aria-label={label}
+          className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
+        />
+        {suffix && (
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[hsl(var(--muted-foreground))]">
+            {suffix}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  FIRE / Retirement projection                                       */
+/* ------------------------------------------------------------------ */
+
+interface FireProjectionPoint {
+  year: number;
+  corpus: number;
+  invested: number;
+}
+
+interface FireResult {
+  fire_number: number | null;
+  years_to_fire: number | null;
+  achieved: boolean;
+  final_corpus: number;
+  projection: FireProjectionPoint[];
+  current_net_worth?: number;
+}
+
+function FireSection() {
+  const [currentNetWorth, setCurrentNetWorth] = useState("");
+  const [monthlyContribution, setMonthlyContribution] = useState("");
+  const [annualReturn, setAnnualReturn] = useState("12");
+  const [annualExpenses, setAnnualExpenses] = useState("");
+  const [withdrawalRate, setWithdrawalRate] = useState("4");
+  const [stepUp, setStepUp] = useState("0");
+  const [result, setResult] = useState<FireResult | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  // Prefill the starting corpus from the user's aggregated net worth.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const nw = await api.get<{ total_net_worth: number }>("/net-worth");
+        if (active && nw?.total_net_worth != null) {
+          setCurrentNetWorth(String(Math.round(nw.total_net_worth)));
+        }
+      } catch {
+        // Leave blank/editable — net worth is optional.
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function handleCalculate(e: FormEvent) {
+    e.preventDefault();
+    if (!monthlyContribution || !annualExpenses) {
+      toast.error("Enter a monthly contribution and your annual expenses.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        monthly_contribution: monthlyContribution,
+        annual_return_pct: annualReturn || "0",
+        annual_expenses: annualExpenses,
+        withdrawal_rate_pct: withdrawalRate || "4",
+        step_up_pct: stepUp || "0",
+      });
+      if (currentNetWorth !== "") params.set("current_net_worth", currentNetWorth);
+      const data = await api.get<FireResult>(`/goals/fire?${params.toString()}`);
+      setResult(data);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to compute FIRE projection",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const maxYears =
+    result && result.projection.length > 0
+      ? result.projection[result.projection.length - 1].year
+      : 60;
+
+  return (
+    <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5">
+      <div className="mb-4 flex items-center gap-2">
+        <span className="flex h-9 w-9 items-center justify-center rounded-md bg-orange-500/15">
+          <Flame className="h-4 w-4 text-orange-500" />
+        </span>
+        <div>
+          <h2 className="text-lg font-semibold">FIRE / Retirement</h2>
+          <p className="text-xs text-[hsl(var(--muted-foreground))]">
+            Project when your corpus can cover your expenses (financial independence)
+          </p>
+        </div>
+      </div>
+
+      <form
+        onSubmit={handleCalculate}
+        className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+      >
+        <NumberField
+          label="Current net worth"
+          value={currentNetWorth}
+          onChange={setCurrentNetWorth}
+          placeholder="Auto-filled from net worth"
+        />
+        <NumberField
+          label="Monthly contribution"
+          value={monthlyContribution}
+          onChange={setMonthlyContribution}
+          placeholder="50000"
+        />
+        <NumberField
+          label="Expected annual return"
+          value={annualReturn}
+          onChange={setAnnualReturn}
+          placeholder="12"
+          suffix="%"
+        />
+        <NumberField
+          label="Annual expenses (retirement)"
+          value={annualExpenses}
+          onChange={setAnnualExpenses}
+          placeholder="1200000"
+        />
+        <NumberField
+          label="Withdrawal rate"
+          value={withdrawalRate}
+          onChange={setWithdrawalRate}
+          placeholder="4"
+          suffix="%"
+        />
+        <NumberField
+          label="Annual step-up"
+          value={stepUp}
+          onChange={setStepUp}
+          placeholder="0"
+          suffix="%"
+        />
+        <div className="sm:col-span-2 lg:col-span-3">
+          <button
+            type="submit"
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:opacity-90 transition-opacity disabled:opacity-50"
+          >
+            {loading ? (
+              <RefreshCw className="h-4 w-4 animate-spin" />
+            ) : (
+              <Flame className="h-4 w-4" />
+            )}
+            Project FIRE
+          </button>
+        </div>
+      </form>
+
+      {result && (
+        <div className="mt-5 space-y-4">
+          {/* Summary cards */}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-3">
+              <p className="text-xs text-[hsl(var(--muted-foreground))]">FIRE number</p>
+              <p className="mt-1 text-lg font-bold">
+                {formatCurrency(result.fire_number, "INR")}
+              </p>
+            </div>
+            <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-3">
+              <p className="text-xs text-[hsl(var(--muted-foreground))]">Years to FIRE</p>
+              <p
+                className={`mt-1 text-lg font-bold ${
+                  result.achieved ? "text-green-600" : "text-[hsl(var(--foreground))]"
+                }`}
+              >
+                {result.achieved && result.years_to_fire !== null
+                  ? result.years_to_fire === 0
+                    ? "Already there!"
+                    : `${result.years_to_fire} ${result.years_to_fire === 1 ? "year" : "years"}`
+                  : `Not reached in ${maxYears} years`}
+              </p>
+            </div>
+            <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-3">
+              <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                Projected corpus
+              </p>
+              <p className="mt-1 text-lg font-bold">
+                {formatCurrency(result.final_corpus, "INR")}
+              </p>
+            </div>
+          </div>
+
+          {/* Projection table */}
+          <div>
+            <p className="mb-2 text-sm font-medium text-[hsl(var(--muted-foreground))]">
+              Corpus projection
+            </p>
+            <div className="max-h-72 overflow-y-auto rounded-md border border-[hsl(var(--border))]">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-[hsl(var(--card))]">
+                  <tr className="border-b border-[hsl(var(--border))] text-left text-xs text-[hsl(var(--muted-foreground))]">
+                    <th className="px-3 py-2 font-medium">Year</th>
+                    <th className="px-3 py-2 text-right font-medium">Invested</th>
+                    <th className="px-3 py-2 text-right font-medium">Corpus</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.projection.map((p) => {
+                    const reached =
+                      result.fire_number !== null && p.corpus >= result.fire_number;
+                    return (
+                      <tr
+                        key={p.year}
+                        className={`border-b border-[hsl(var(--border))]/50 last:border-0 ${
+                          reached ? "bg-green-500/5" : ""
+                        }`}
+                      >
+                        <td className="px-3 py-1.5">{p.year}</td>
+                        <td className="px-3 py-1.5 text-right text-[hsl(var(--muted-foreground))]">
+                          {formatCurrency(p.invested, "INR")}
+                        </td>
+                        <td
+                          className={`px-3 py-1.5 text-right font-medium ${
+                            reached ? "text-green-600" : ""
+                          }`}
+                        >
+                          {formatCurrency(p.corpus, "INR")}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  SIP calculator (with vs. without step-up)                          */
+/* ------------------------------------------------------------------ */
+
+interface SipProjectionPoint {
+  year: number;
+  invested: number;
+  value: number;
+}
+
+interface SipResult {
+  corpus_with_stepup: number;
+  corpus_without_stepup: number;
+  total_invested: number;
+  projection: SipProjectionPoint[];
+}
+
+function SipCalculatorSection() {
+  const [currentAmount, setCurrentAmount] = useState("0");
+  const [monthlySip, setMonthlySip] = useState("");
+  const [annualReturn, setAnnualReturn] = useState("12");
+  const [years, setYears] = useState("10");
+  const [stepUp, setStepUp] = useState("10");
+  const [result, setResult] = useState<SipResult | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function handleCalculate(e: FormEvent) {
+    e.preventDefault();
+    if (!monthlySip || !years) {
+      toast.error("Enter a monthly SIP amount and number of years.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        current_amount: currentAmount || "0",
+        monthly_sip: monthlySip,
+        annual_return_pct: annualReturn || "0",
+        years,
+        step_up_pct: stepUp || "0",
+      });
+      const data = await api.get<SipResult>(`/goals/sip-projection?${params.toString()}`);
+      setResult(data);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to compute SIP projection",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const stepUpGain =
+    result && result.corpus_with_stepup > result.corpus_without_stepup
+      ? result.corpus_with_stepup - result.corpus_without_stepup
+      : 0;
+
+  return (
+    <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5">
+      <div className="mb-4 flex items-center gap-2">
+        <span className="flex h-9 w-9 items-center justify-center rounded-md bg-blue-500/15">
+          <Calculator className="h-4 w-4 text-blue-500" />
+        </span>
+        <div>
+          <h2 className="text-lg font-semibold">SIP Calculator</h2>
+          <p className="text-xs text-[hsl(var(--muted-foreground))]">
+            Compare your corpus with vs. without an annual step-up
+          </p>
+        </div>
+      </div>
+
+      <form
+        onSubmit={handleCalculate}
+        className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+      >
+        <NumberField
+          label="Current amount"
+          value={currentAmount}
+          onChange={setCurrentAmount}
+          placeholder="0"
+        />
+        <NumberField
+          label="Monthly SIP"
+          value={monthlySip}
+          onChange={setMonthlySip}
+          placeholder="25000"
+        />
+        <NumberField
+          label="Expected annual return"
+          value={annualReturn}
+          onChange={setAnnualReturn}
+          placeholder="12"
+          suffix="%"
+        />
+        <NumberField
+          label="Years"
+          value={years}
+          onChange={setYears}
+          placeholder="10"
+          min="1"
+          step="1"
+        />
+        <NumberField
+          label="Annual step-up"
+          value={stepUp}
+          onChange={setStepUp}
+          placeholder="10"
+          suffix="%"
+        />
+        <div className="flex items-end">
+          <button
+            type="submit"
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:opacity-90 transition-opacity disabled:opacity-50"
+          >
+            {loading ? (
+              <RefreshCw className="h-4 w-4 animate-spin" />
+            ) : (
+              <Calculator className="h-4 w-4" />
+            )}
+            Calculate
+          </button>
+        </div>
+      </form>
+
+      {result && (
+        <div className="mt-5 space-y-4">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-3">
+              <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                Without step-up
+              </p>
+              <p className="mt-1 text-lg font-bold">
+                {formatCurrency(result.corpus_without_stepup, "INR")}
+              </p>
+            </div>
+            <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-3">
+              <p className="text-xs text-[hsl(var(--muted-foreground))]">With step-up</p>
+              <p className="mt-1 text-lg font-bold text-green-600">
+                {formatCurrency(result.corpus_with_stepup, "INR")}
+              </p>
+            </div>
+            <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-3">
+              <p className="flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))]">
+                <TrendingUp className="h-3 w-3" /> Extra from step-up
+              </p>
+              <p className="mt-1 text-lg font-bold text-green-600">
+                {formatCurrency(stepUpGain, "INR")}
+              </p>
+            </div>
+          </div>
+
+          <p className="text-xs text-[hsl(var(--muted-foreground))]">
+            Total invested (with step-up):{" "}
+            <span className="font-medium text-[hsl(var(--foreground))]">
+              {formatCurrency(result.total_invested, "INR")}
+            </span>
+          </p>
+
+          <div>
+            <p className="mb-2 text-sm font-medium text-[hsl(var(--muted-foreground))]">
+              Year-by-year (with step-up)
+            </p>
+            <div className="max-h-72 overflow-y-auto rounded-md border border-[hsl(var(--border))]">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-[hsl(var(--card))]">
+                  <tr className="border-b border-[hsl(var(--border))] text-left text-xs text-[hsl(var(--muted-foreground))]">
+                    <th className="px-3 py-2 font-medium">Year</th>
+                    <th className="px-3 py-2 text-right font-medium">Invested</th>
+                    <th className="px-3 py-2 text-right font-medium">Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.projection.map((p) => (
+                    <tr
+                      key={p.year}
+                      className="border-b border-[hsl(var(--border))]/50 last:border-0"
+                    >
+                      <td className="px-3 py-1.5">{p.year}</td>
+                      <td className="px-3 py-1.5 text-right text-[hsl(var(--muted-foreground))]">
+                        {formatCurrency(p.invested, "INR")}
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-medium">
+                        {formatCurrency(p.value, "INR")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -591,6 +1074,12 @@ export default function GoalsPage() {
           </button>
         </div>
       )}
+
+      {/* ---- Planning calculators ---- */}
+      <div className="space-y-6 pt-2">
+        <FireSection />
+        <SipCalculatorSection />
+      </div>
 
       {/* ---- Modal ---- */}
       <GoalFormModal
