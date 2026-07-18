@@ -23,6 +23,23 @@ os.chdir(str(root))
 app_hiddenimports = collect_submodules("app")
 uvicorn_hiddenimports = collect_submodules("uvicorn")
 
+# CAS (mutual-fund statement) import — optional 'cas' extra bundled into the
+# desktop build. casparser and its pdfminer-six backend load parsers/codecs
+# dynamically, and casparser-isin ships an isin.db lookup file, so collect them
+# explicitly (PyInstaller's static analysis misses the function-local import in
+# cas_import_service). matplotlib is pulled only by casparser.analysis, which we
+# never call, and stays in `excludes` below. Degrades to nothing if 'cas' isn't
+# installed (e.g. a minimal `uv sync`), matching the runtime 501 fallback.
+try:
+    cas_hiddenimports = (
+        collect_submodules("casparser")
+        + collect_submodules("pdfminer")
+        + ["casparser_isin"]
+    )
+    cas_datas = collect_data_files("casparser_isin") + collect_data_files("pdfminer")
+except Exception:
+    cas_hiddenimports, cas_datas = [], []
+
 # Include the venv site-packages so PyInstaller can find all dependencies
 # Windows uses .venv/Lib/site-packages, Unix uses .venv/lib/pythonX.Y/site-packages
 if platform.system() == "Windows":
@@ -43,7 +60,7 @@ a = Analysis(
         [(str(root / "static"), "static")]
         if (root / "static").is_dir()
         else []
-    ),
+    ) + cas_datas,
     hiddenimports=[
         # --- Explicitly list ALL app subpackages (belt-and-suspenders) ---
         "app",
@@ -140,6 +157,8 @@ a = Analysis(
         "app.services.sheets_export_service",
         "app.services.xirr_service",
         "app.services.ipo_service",
+        "app.services.ofx_qif_import_service",
+        "app.services.cas_import_service",
         "app.brokers",
         "app.brokers.base",
         "app.brokers.zerodha",
@@ -236,7 +255,12 @@ a = Analysis(
         "cryptography",
         "sendgrid",
         "xhtml2pdf",
-    ] + app_hiddenimports + uvicorn_hiddenimports,
+        # CAS import (optional 'cas' extra) — see cas_hiddenimports above
+        "casparser",
+        "casparser_isin",
+        "pdfminer",
+        "pdfminer.high_level",
+    ] + app_hiddenimports + uvicorn_hiddenimports + cas_hiddenimports,
     excludes=[
         # Exclude heavy ML dependencies (they degrade gracefully)
         "torch",

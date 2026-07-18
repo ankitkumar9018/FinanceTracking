@@ -746,7 +746,7 @@ A **More Import Formats** section handles statements from brokers, banks, and fu
 
 - **OFX / QFX** — a broker or bank statement; investment buys/sells are parsed, with bank transactions as a fallback.
 - **QIF** — Quicken Interchange Format, for investment and bank account types.
-- **CAS PDF** — a CAMS/KFintech **Consolidated Account Statement**; imports your mutual-fund holdings. Enter the statement password in the optional field if it's protected. This needs the optional `casparser` package (the `mf` extra: `uv sync --extra mf`).
+- **CAS PDF** — a CAMS/KFintech **Consolidated Account Statement**; imports your mutual-fund holdings. Enter the statement password in the optional field if it's protected. This needs the optional `casparser` package (the `cas` extra: `uv sync --extra cas`).
 
 Uploads are capped at **10 MB**.
 

@@ -989,6 +989,9 @@ all = [
     { name = "transformers" },
     { name = "twilio" },
 ]
+cas = [
+    { name = "casparser" },
+]
 dev = [
     { name = "mypy" },
     { name = "pyinstaller" },
@@ -1044,6 +1047,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.14.0" },
     { name = "apscheduler", specifier = ">=3.10.4" },
     { name = "bcrypt", specifier = ">=4.0.0" },
+    { name = "casparser", marker = "extra == 'cas'", specifier = ">=0.8.0" },
     { name = "casparser", marker = "extra == 'mf'", specifier = ">=0.8.0" },
     { name = "celery", extras = ["redis"], marker = "extra == 'queue'", specifier = ">=5.4.0" },
     { name = "cryptography", specifier = ">=44.0.0" },
@@ -1087,7 +1091,7 @@ requires-dist = [
     { name = "xhtml2pdf", specifier = ">=0.2.16" },
     { name = "yfinance", specifier = ">=0.2.48" },
 ]
-provides-extras = ["queue", "ml", "llm-ollama", "llm-openai", "llm-anthropic", "llm-google", "mf", "notifications", "dev", "all"]
+provides-extras = ["queue", "ml", "llm-ollama", "llm-openai", "llm-anthropic", "llm-google", "cas", "mf", "notifications", "dev", "all"]
 
 [package.metadata.requires-dev]
 dev = [

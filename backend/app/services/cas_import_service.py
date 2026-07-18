@@ -87,7 +87,7 @@ def parse_cas(file_bytes: bytes, password: str | None) -> list[dict]:
     except ImportError as exc:  # pragma: no cover - depends on optional extra
         raise RuntimeError(
             "CAS import requires the 'casparser' package. "
-            "Install the 'mf' extra: uv sync --extra mf"
+            "Install the 'cas' extra: uv sync --extra cas"
         ) from exc
 
     tmp_path: str | None = None

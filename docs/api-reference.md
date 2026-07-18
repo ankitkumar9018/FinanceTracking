@@ -1465,7 +1465,7 @@ POST /import-export/import/qif?portfolio_id={id}
 POST /import-export/import/cas?portfolio_id={id}&password={optional}
 ```
 
-**Request**: Multipart form data with a CAMS/KFintech Consolidated Account Statement `.pdf`. Imports mutual-fund holdings from the statement. `password` is optional (supply it for password-protected statements). Requires the optional `casparser` package (the `mf` extra: `uv sync --extra mf`); returns `501` with an install hint if it is not installed.
+**Request**: Multipart form data with a CAMS/KFintech Consolidated Account Statement `.pdf`. Imports mutual-fund holdings from the statement. `password` is optional (supply it for password-protected statements). Requires the optional `casparser` package (the `cas` extra: `uv sync --extra cas`); returns `501` with an install hint if it is not installed.
 
 ### Export to Excel
 
@@ -2493,7 +2493,7 @@ Endpoints not covered in detail above, one line each:
 - `POST /import-export/csv/tax-records` — import tax records from CSV (user-level)
 - `POST /import-export/import/ofx?portfolio_id=` — import an `.ofx`/`.qfx` broker or bank statement (investment BUY/SELL, bank fallback)
 - `POST /import-export/import/qif?portfolio_id=` — import a `.qif` (Quicken) investment or bank file
-- `POST /import-export/import/cas?portfolio_id=&password=` — import mutual-fund holdings from a CAMS/KFintech CAS PDF (needs the `mf` extra; `501` if `casparser` missing)
+- `POST /import-export/import/cas?portfolio_id=&password=` — import mutual-fund holdings from a CAMS/KFintech CAS PDF (needs the `cas` extra; `501` if `casparser` missing)
 - `GET /import-export/export/template` — blank Excel import template
 - `GET /import-export/export/template/csv` — blank CSV import template
 - `GET /import-export/export/template/dividends` — dividend CSV template

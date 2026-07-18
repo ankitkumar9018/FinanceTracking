@@ -139,7 +139,7 @@ Upload a `.qif` file. Both **investment** and **bank** account types are support
 Upload the password-protected **Consolidated Account Statement** you receive from CAMS or KFintech to import your **mutual-fund holdings** in one step.
 
 - If your statement is password-protected, enter the password in the optional **password** field before uploading.
-- CAS parsing needs the optional `casparser` package, which ships in the **`mf` extra**. Install it with `uv sync --extra mf`. If it isn't installed, the app returns a friendly error with an install hint instead of failing silently.
+- CAS parsing needs the optional `casparser` package. **The desktop app ships with it built in — no setup needed.** If you run the backend yourself from a minimal install, add it once with `uv sync --extra cas` (it's lightweight). If it isn't installed, the app returns a friendly error with an install hint instead of failing silently.
 
 ## Re-Importing (Updating Your Data)
 
@@ -164,7 +164,7 @@ A: No. The import adds new transactions to existing holdings. Your manually ente
 A: Yes. Besides Excel, the app imports **CSV** files (holdings, dividends, mutual funds, and tax records — each with a downloadable template), **JSON** backups, **OFX/QFX** and **QIF** broker/bank statements, and **CAS PDF** mutual-fund statements. See [Supported Import Formats](#supported-import-formats) above.
 
 **Q: Can I import my mutual funds from a CAMS or KFintech statement?**
-A: Yes. Use the **CAS PDF** importer in the More Import Formats section and upload your Consolidated Account Statement. Enter its password if it is protected. CAS import requires the optional `casparser` package (`uv sync --extra mf`).
+A: Yes. Use the **CAS PDF** importer in the More Import Formats section and upload your Consolidated Account Statement. Enter its password if it is protected. CAS import requires the optional `casparser` package (`uv sync --extra cas`).
 
 ---
 

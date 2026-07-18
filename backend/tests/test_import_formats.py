@@ -265,3 +265,86 @@ _CASPARSER_INSTALLED = importlib.util.find_spec("casparser") is not None
 def test_parse_cas_raises_without_casparser():
     with pytest.raises(RuntimeError, match="casparser"):
         parse_cas(b"%PDF-1.4 fake", password=None)
+
+
+@pytest.mark.skipif(
+    not _CASPARSER_INSTALLED,
+    reason="requires the optional 'cas' extra (casparser) to validate the mapping",
+)
+def test_cas_mapping_matches_casparser_schema():
+    """Prove ``_map_cas_to_mf`` against the EXACT dict casparser emits.
+
+    We can't decrypt a real CAS PDF in CI, but we can build the dict casparser's
+    ``read_cas_pdf(..., output="dict")`` produces — straight from casparser's own
+    pydantic models — and confirm the never-network mapping logic is correct
+    (amfi→code with isin fallback, close→units, valuation nav/cost, and the
+    cost→value invested fallback), including Decimal→float coercion.
+    """
+    from decimal import Decimal
+
+    from casparser.enums import CASFileType, FileType
+    from casparser.types import (
+        CASData,
+        Folio,
+        InvestorInfo,
+        Scheme,
+        SchemeValuation,
+        StatementPeriod,
+    )
+
+    from app.services.cas_import_service import _map_cas_to_mf
+
+    cas = CASData(
+        statement_period=StatementPeriod(**{"from": "2024-01-01", "to": "2024-03-31"}),
+        investor_info=InvestorInfo(name="A", email="a@b.c", address="x", mobile="9"),
+        cas_type=CASFileType.SUMMARY,
+        file_type=FileType.CAMS,
+        folios=[
+            Folio(
+                folio="12345/67",
+                amc="HDFC AMC",
+                PAN="ABCDE1234F",
+                schemes=[
+                    Scheme(
+                        scheme="HDFC Flexi Cap Fund - Growth",
+                        rta_code="H123", rta="CAMS", type="EQUITY",
+                        isin="INF179K01608", amfi="118989",
+                        open=Decimal("0"), close=Decimal("1234.567"),
+                        close_calculated=Decimal("1234.567"),
+                        valuation=SchemeValuation(
+                            date="2024-03-31", nav=Decimal("1450.25"),
+                            cost=Decimal("1500000"), value=Decimal("1790123.45"),
+                        ),
+                        transactions=[],
+                    ),
+                    Scheme(  # amfi missing -> isin fallback; cost missing -> value
+                        scheme="SBI Small Cap - Growth",
+                        rta_code="S9", rta="KFINTECH", type="EQUITY",
+                        isin="INF200K01594", amfi=None,
+                        open=Decimal("0"), close=Decimal("500"),
+                        close_calculated=Decimal("500"),
+                        valuation=SchemeValuation(
+                            date="2024-03-31", nav=Decimal("180.5"),
+                            cost=None, value=Decimal("90250"),
+                        ),
+                        transactions=[],
+                    ),
+                ],
+            )
+        ],
+    )
+    # Exactly what read_cas_pdf(..., output="dict") returns:
+    rows = _map_cas_to_mf(cas.model_dump(by_alias=True))
+
+    assert len(rows) == 2
+    r0, r1 = rows
+    assert r0["scheme_code"] == "118989"
+    assert r0["scheme_name"].startswith("HDFC Flexi Cap")
+    assert r0["folio_number"] == "12345/67"
+    assert r0["units"] == 1234.567
+    assert r0["nav"] == 1450.25
+    assert r0["invested_amount"] == 1500000.0
+    # amfi absent -> isin as code; cost absent -> valuation.value as invested
+    assert r1["scheme_code"] == "INF200K01594"
+    assert r1["units"] == 500.0
+    assert r1["invested_amount"] == 90250.0

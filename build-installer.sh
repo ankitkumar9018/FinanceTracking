@@ -269,8 +269,12 @@ log_success "All prerequisites ready!"
 log_step "Step 2/7: Installing dependencies..."
 
 cd "$BACKEND_DIR"
-uv sync --quiet 2>/dev/null || uv sync
-log_success "Backend dependencies installed"
+# Include the lightweight 'cas' extra so the shipped app can import CAMS/KFintech
+# Consolidated Account Statement (CAS) PDFs out of the box. casparser is small
+# (pdfminer-six + isin.db); it does NOT pull matplotlib (that comes from mftool,
+# which we don't bundle).
+uv sync --extra cas --quiet 2>/dev/null || uv sync --extra cas
+log_success "Backend dependencies installed (incl. CAS import support)"
 
 cd "$PROJECT_ROOT"
 pnpm install --silent 2>/dev/null || pnpm install
