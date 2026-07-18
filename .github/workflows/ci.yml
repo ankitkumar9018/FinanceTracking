@@ -24,7 +24,9 @@ jobs:
 
       - name: Install dependencies
         working-directory: backend
-        run: uv sync --extra dev
+        # --extra cas so the CAS-import mapping tests exercise the real casparser
+        # path in CI instead of skipping.
+        run: uv sync --extra dev --extra cas
 
       - name: Lint with ruff
         working-directory: backend

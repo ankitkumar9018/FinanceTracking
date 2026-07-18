@@ -66,7 +66,9 @@ jobs:
       # --- Backend sidecar build ---
       - name: Install backend dependencies
         working-directory: backend
-        run: uv sync
+        # --extra cas bundles casparser so the released desktop app can import
+        # CAMS/KFintech CAS PDFs out of the box (parity with build-installer.sh/.bat).
+        run: uv sync --extra cas
 
       - name: Install PyInstaller
         working-directory: backend

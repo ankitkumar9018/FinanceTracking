@@ -66,14 +66,11 @@ llm-anthropic = ["langchain-anthropic>=0.3.0"]
 llm-google = ["langchain-google-genai>=2.0.0"]
 # CAS (CAMS/KFintech Consolidated Account Statement) PDF import — lightweight,
 # this is all the CAS import feature needs. Bundled into the desktop build.
+# (The old `mf` extra also carried `mftool`, which pulled matplotlib/pandas/
+# yfinance but was never imported — NAV fetching uses mfapi.in — so it was
+# dropped. Use `--extra cas` for CAS import.)
 cas = [
     "casparser>=0.8.0",
-]
-# Mutual fund tools (mftool pulls in matplotlib/pandas/yfinance — heavier; the
-# app's NAV fetching uses mfapi.in, so this extra is not required for CAS import)
-mf = [
-    "casparser>=0.8.0",
-    "mftool>=2.7",
 ]
 # Notifications
 notifications = [

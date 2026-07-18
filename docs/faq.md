@@ -178,7 +178,7 @@ Yes. You can add mutual fund holdings manually (with scheme code, units, and inv
 | Current prices | Broker API (if connected) | yfinance (free) |
 | Historical OHLCV | yfinance (20+ years) | Broker API |
 | RSI and indicators | Calculated locally with pandas_ta | - |
-| Mutual fund NAV | AMFI via mftool | MFapi.in |
+| Mutual fund NAV | MFapi.in (AMFI data) | - |
 | Forex rates | ECB (free) | yfinance (EURINR=X) |
 | News/sentiment | RSS feeds (free) | - |
 

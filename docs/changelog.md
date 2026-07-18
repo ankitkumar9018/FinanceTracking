@@ -16,7 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **CAS PDF import** — `POST /import-export/import/cas?portfolio_id=&password=` imports mutual-fund holdings from a password-protected CAMS/KFintech Consolidated Account Statement. The **desktop app now bundles this** out of the box; self-hosted minimal installs can enable it with `uv sync --extra cas`. Returns `501` with an install hint if the package is missing.
 
 ### Changed — Packaging
-- Split the lightweight **`cas` extra** (just `casparser`) out of the heavier `mf` extra (which also pulls `mftool` → matplotlib/pandas/yfinance) so CAS import can be enabled — and bundled into the desktop build — without the extra weight.
+- Added the lightweight **`cas` extra** (just `casparser`) so CAS import can be enabled — and bundled into the desktop build — without extra weight.
+- **Removed the unused `mftool` dependency** (and the old `mf` extra). It pulled in matplotlib/pandas/yfinance but was never imported — mutual-fund NAV fetching uses mfapi.in. Use `--extra cas` for CAS import.
+- **Bundled CAS support in every desktop build path**: `build-installer.sh`, `build-installer.bat`, and the `release-desktop` CI workflow now all `uv sync --extra cas`, so released installers (macOS/Windows/Linux) ship casparser out of the box.
+- **Windows installer now uses `offlineInstaller` for WebView2** — the runtime is embedded so the app installs and runs on machines with no internet or locked-down policies (at the cost of a larger installer). Previously `downloadBootstrapper`, which required internet during install.
 
 ---
 

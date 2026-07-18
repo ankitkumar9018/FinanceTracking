@@ -290,9 +290,13 @@ REM -------------------------------------------------------------------------
 echo [Step 2/7] Installing project dependencies...
 
 cd /d "%BACKEND_DIR%"
-uv sync --quiet 2>nul || uv sync
+REM Include the lightweight 'cas' extra so the shipped app can import CAMS/
+REM KFintech Consolidated Account Statement (CAS) PDFs out of the box. casparser
+REM is small (pdfminer-six + isin.db) and does NOT pull matplotlib. Keep this in
+REM sync with build-installer.sh.
+uv sync --extra cas --quiet 2>nul || uv sync --extra cas
 if errorlevel 1 (echo ERROR: Backend dependency install failed && exit /b 1)
-echo [OK] Backend dependencies
+echo [OK] Backend dependencies (incl. CAS import support)
 
 cd /d "%PROJECT_ROOT%"
 call pnpm install --silent 2>nul || call pnpm install
