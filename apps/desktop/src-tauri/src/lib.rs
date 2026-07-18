@@ -12,8 +12,12 @@ struct AppState {
 }
 
 /// Try to bind to preferred ports in order.
+///
+/// FinanceTracker uses a dedicated 84xx range (NOT 8000, which commonly
+/// collides with other local dev servers) so it starts on 8420 every time
+/// and only drifts if that exact port is already taken.
 fn find_port() -> u16 {
-    for port in [8000, 8001, 8002, 8003, 8004, 8005] {
+    for port in [8420, 8421, 8422, 8423, 8424, 8425] {
         if TcpListener::bind(format!("127.0.0.1:{}", port)).is_ok() {
             return port;
         }
@@ -54,10 +58,32 @@ fn get_api_port(state: tauri::State<'_, AppState>) -> u16 {
 fn kill_sidecar(state: &AppState) {
     if let Ok(mut guard) = state.sidecar_child.lock() {
         if let Some(child) = guard.take() {
-            let _ = child.kill();
+            let pid = child.pid();
+            // Graceful first: ask the backend to shut down so its lifespan
+            // handler runs — stops the scheduler, disposes DB connections, and
+            // checkpoints the SQLite WAL. Then hard-kill only if it lingers.
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = std::process::Command::new("kill")
+                    .args(["-TERM", &pid.to_string()])
+                    .output();
+                std::thread::sleep(Duration::from_millis(1500));
+            }
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T"])
+                    .creation_flags(0x08000000)
+                    .output();
+                std::thread::sleep(Duration::from_millis(1500));
+            }
+            let _ = child.kill(); // SIGKILL / force fallback if still alive
         }
     }
 
+    // Belt-and-suspenders: sweep any orphaned sidecar the CommandChild lost
+    // track of (e.g. after a prior crash), so no backend is left holding a port.
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -153,6 +179,17 @@ pub fn run() {
             // The #ftport= hash tells the frontend which port the API is on
             // (after navigation the Tauri IPC bridge is no longer available).
             let window = app.get_webview_window("main").expect("no main window");
+
+            // Closing the window must fully quit the app so the backend sidecar
+            // is shut down and its port released. On macOS the default is to keep
+            // the app alive when the window closes, which would leave the local
+            // server running — so exit explicitly on close.
+            let exit_handle = app.handle().clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { .. } = event {
+                    exit_handle.exit(0);
+                }
+            });
 
             // The window starts at about:blank — inject a loading screen
             // IMMEDIATELY. The onefile sidecar can take 40-120s to boot

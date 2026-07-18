@@ -50,9 +50,9 @@ do_stop() {
     fi
 
     # Kill by port as fallback
-    if lsof -ti:8000 &> /dev/null; then
-        kill -9 $(lsof -ti:8000) 2>/dev/null || true
-        log_success "Killed process on port 8000"
+    if lsof -ti:8420 &> /dev/null; then
+        kill -9 $(lsof -ti:8420) 2>/dev/null || true
+        log_success "Killed process on port 8420"
     fi
 
     if lsof -ti:3000 &> /dev/null; then
@@ -73,9 +73,9 @@ do_status() {
     echo ""
 
     # Backend
-    if lsof -ti:8000 &> /dev/null; then
-        PID=$(lsof -ti:8000 | head -1)
-        echo -e "  Backend:  ${GREEN}Running${NC} (PID: $PID) - http://localhost:8000"
+    if lsof -ti:8420 &> /dev/null; then
+        PID=$(lsof -ti:8420 | head -1)
+        echo -e "  Backend:  ${GREEN}Running${NC} (PID: $PID) - http://localhost:8420"
     else
         echo -e "  Backend:  ${RED}Stopped${NC}"
     fi
@@ -197,9 +197,9 @@ do_start() {
     # -------------------------------------------------------------------------
     log_step "Step 2/6: Stopping existing processes..."
 
-    if lsof -ti:8000 &> /dev/null; then
-        kill -9 $(lsof -ti:8000) 2>/dev/null || true
-        log_warn "Killed process on port 8000"
+    if lsof -ti:8420 &> /dev/null; then
+        kill -9 $(lsof -ti:8420) 2>/dev/null || true
+        log_warn "Killed process on port 8420"
         sleep 1
     fi
 
@@ -210,7 +210,7 @@ do_start() {
     fi
 
     pkill -f "uvicorn app.main:app" 2>/dev/null || true
-    log_success "Ports 8000 and 3000 are free"
+    log_success "Ports 8420 and 3000 are free"
 
     # -------------------------------------------------------------------------
     # Step 3: Install dependencies
@@ -273,12 +273,12 @@ EOF
     # Backend
     cd "$BACKEND_DIR"
     log_info "Starting backend..."
-    uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 > "$LOGS_DIR/backend.log" 2>&1 &
+    uv run uvicorn app.main:app --host 127.0.0.1 --port 8420 > "$LOGS_DIR/backend.log" 2>&1 &
     BACKEND_PID=$!
     echo $BACKEND_PID > "$LOGS_DIR/backend.pid"
 
     for i in {1..20}; do
-        if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+        if curl -s http://localhost:8420/health > /dev/null 2>&1; then
             log_success "Backend running (PID: $BACKEND_PID)"
             break
         fi
@@ -322,8 +322,8 @@ EOF
     echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${CYAN}🌐 App:${NC}      http://localhost:3000"
-    echo -e "  ${CYAN}🔌 API:${NC}      http://localhost:8000"
-    echo -e "  ${CYAN}📚 Docs:${NC}     http://localhost:8000/docs"
+    echo -e "  ${CYAN}🔌 API:${NC}      http://localhost:8420"
+    echo -e "  ${CYAN}📚 Docs:${NC}     http://localhost:8420/docs"
     echo ""
     echo -e "  ${YELLOW}Commands:${NC}"
     echo -e "     ./run.sh stop     Stop all services"

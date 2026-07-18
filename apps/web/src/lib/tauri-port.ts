@@ -2,9 +2,9 @@
  * Resolves the backend API port for Tauri desktop builds.
  *
  * In desktop builds the Tauri shell spawns the backend sidecar on the first
- * free port (8000-8005 or ephemeral) and navigates the window to
+ * free port (8420-8425 or ephemeral) and navigates the window to
  * `http://localhost:{port}#ftport={port}` — the backend serves the static
- * frontend, so the page origin IS the API origin. Hardcoding 8000 breaks
+ * frontend, so the page origin IS the API origin. Hardcoding a port breaks
  * whenever that port was taken by something else.
  *
  * Strategy (in order):
@@ -18,7 +18,7 @@
  * 6. Same-origin probe: if the page itself is served from
  *    http://localhost:{port} and {port}/health responds, use that origin
  *    (async resolver only)
- * 7. Fallback to NEXT_PUBLIC_API_URL or port 8000
+ * 7. Fallback to NEXT_PUBLIC_API_URL or port 8420
  */
 
 let _cachedPort: number | null = null;
@@ -129,7 +129,7 @@ export async function resolveApiPort(): Promise<number | null> {
 export async function getApiBaseAsync(): Promise<string> {
   const port = await resolveApiPort();
   if (port) return `http://localhost:${port}/api/v1`;
-  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8420/api/v1";
 }
 
 export function getApiBaseSync(): string {
@@ -141,11 +141,11 @@ export function getApiBaseSync(): string {
     const urlPort = portFromUrlOrStorage();
     if (urlPort) return `http://localhost:${urlPort}/api/v1`;
   }
-  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8420/api/v1";
 }
 
 export async function getWsBaseAsync(): Promise<string> {
   const port = await resolveApiPort();
   if (port) return `ws://localhost:${port}`;
-  return process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
+  return process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8420";
 }

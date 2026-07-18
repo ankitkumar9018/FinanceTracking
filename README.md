@@ -133,7 +133,7 @@ pnpm install
 cd backend && uv run alembic upgrade head && cd ..
 
 # Start backend
-cd backend && uv run uvicorn app.main:app --reload --port 8000 &
+cd backend && uv run uvicorn app.main:app --reload --port 8420 &
 
 # Start web app
 cd apps/web && pnpm dev &
@@ -157,9 +157,9 @@ cd backend && uv run python scripts/seed.py
 | Service | URL |
 |---|---|
 | Web App | http://localhost:3000 |
-| API | http://localhost:8000 |
-| API Docs (Swagger) | http://localhost:8000/docs |
-| API Docs (ReDoc) | http://localhost:8000/redoc |
+| API | http://localhost:8420 |
+| API Docs (Swagger) | http://localhost:8420/docs |
+| API Docs (ReDoc) | http://localhost:8420/redoc |
 
 ---
 

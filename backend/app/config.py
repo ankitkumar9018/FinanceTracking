@@ -27,7 +27,9 @@ class Settings(BaseSettings):
     app_name: str = "FinanceTracker"
     app_version: str = "0.1.0"
     debug: bool = False
-    api_port: int = 8000
+    # Dedicated port (NOT 8000, which commonly clashes with other local dev
+    # servers). Override with API_PORT in .env if 8420 is taken on your machine.
+    api_port: int = 8420
 
     # ── Security ─────────────────────────────────────────────────────────
     secret_key: str = "dev-secret-CHANGE-IN-PRODUCTION"

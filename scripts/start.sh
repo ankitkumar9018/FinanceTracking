@@ -203,8 +203,8 @@ kill_if_running "uvicorn"
 kill_if_running "celery"
 # Kill any existing Next.js dev server on port 3000
 lsof -ti:3000 2>/dev/null | xargs kill -9 2>/dev/null || true
-# Kill any existing uvicorn on port 8000
-lsof -ti:8000 2>/dev/null | xargs kill -9 2>/dev/null || true
+# Kill any existing uvicorn on port 8420
+lsof -ti:8420 2>/dev/null | xargs kill -9 2>/dev/null || true
 
 echo -e "  ${GREEN}✓${NC} Existing services stopped"
 
@@ -237,9 +237,9 @@ fi
 
 # Start backend
 cd "$BACKEND_DIR"
-uv run uvicorn app.main:app --reload --port 8000 --host 0.0.0.0 &>/dev/null &
+uv run uvicorn app.main:app --reload --port 8420 --host 0.0.0.0 &>/dev/null &
 echo "$!" > "$PID_DIR/uvicorn.pid"
-echo -e "  ${GREEN}✓${NC} Backend: http://localhost:8000"
+echo -e "  ${GREEN}✓${NC} Backend: http://localhost:8420"
 
 # Start Celery (if Redis available)
 if [ "$HAS_REDIS" = true ] && redis-cli ping &>/dev/null; then
@@ -269,10 +269,10 @@ echo -e "${BLUE}  Service Status${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
 
 # Backend
-if curl -s http://localhost:8000/health &>/dev/null; then
-    echo -e "  Backend:   ${GREEN}Running ✓${NC}  http://localhost:8000"
+if curl -s http://localhost:8420/health &>/dev/null; then
+    echo -e "  Backend:   ${GREEN}Running ✓${NC}  http://localhost:8420"
 else
-    echo -e "  Backend:   ${YELLOW}Starting...${NC}  http://localhost:8000"
+    echo -e "  Backend:   ${YELLOW}Starting...${NC}  http://localhost:8420"
 fi
 
 # Web App
@@ -281,7 +281,7 @@ if [ -d "$WEB_DIR" ] && [ -f "$WEB_DIR/package.json" ]; then
 fi
 
 # API Docs
-echo -e "  API Docs:  ${GREEN}Available${NC}  http://localhost:8000/docs"
+echo -e "  API Docs:  ${GREEN}Available${NC}  http://localhost:8420/docs"
 
 # Redis
 if [ "$HAS_REDIS" = true ] && redis-cli ping &>/dev/null; then

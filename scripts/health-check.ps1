@@ -10,9 +10,9 @@ Write-Host ""
 
 # Backend API
 try {
-    $resp = Invoke-WebRequest -Uri "http://localhost:8000/health" -TimeoutSec 2 -ErrorAction Stop
+    $resp = Invoke-WebRequest -Uri "http://localhost:8420/health" -TimeoutSec 2 -ErrorAction Stop
     if ($resp.Content -match "healthy") {
-        Write-Host "  Backend API:     " -NoNewline; Write-Host "Healthy" -ForegroundColor Green -NoNewline; Write-Host "  http://localhost:8000"
+        Write-Host "  Backend API:     " -NoNewline; Write-Host "Healthy" -ForegroundColor Green -NoNewline; Write-Host "  http://localhost:8420"
     } else {
         Write-Host "  Backend API:     " -NoNewline; Write-Host "Unhealthy" -ForegroundColor Red
     }

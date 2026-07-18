@@ -16,8 +16,8 @@ echo -e "${BLUE}═════════════════════�
 echo ""
 
 # Backend API
-if curl -s http://localhost:8000/health | grep -q "healthy" 2>/dev/null; then
-    echo -e "  Backend API:     ${GREEN}Healthy ✓${NC}  http://localhost:8000"
+if curl -s http://localhost:8420/health | grep -q "healthy" 2>/dev/null; then
+    echo -e "  Backend API:     ${GREEN}Healthy ✓${NC}  http://localhost:8420"
 else
     echo -e "  Backend API:     ${RED}Down ✗${NC}"
 fi

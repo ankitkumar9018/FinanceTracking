@@ -59,7 +59,7 @@ function Do-Stop {
     }
 
     # Kill by port as fallback
-    if (Stop-PortProcess 8000) { Write-Ok "Killed process on port 8000" }
+    if (Stop-PortProcess 8420) { Write-Ok "Killed process on port 8420" }
     if (Stop-PortProcess 3000) { Write-Ok "Killed process on port 3000" }
 
     # Kill uvicorn by name as last resort
@@ -74,10 +74,10 @@ function Do-Status {
     Write-Host "FinanceTracker Status" -ForegroundColor Cyan
     Write-Host ""
 
-    $port8000 = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
-    if ($port8000) {
-        $pid = ($port8000 | Select-Object -First 1).OwningProcess
-        Write-Host "  Backend:  " -NoNewline; Write-Host "Running" -ForegroundColor Green -NoNewline; Write-Host " (PID: $pid) - http://localhost:8000"
+    $port8420 = Get-NetTCPConnection -LocalPort 8420 -State Listen -ErrorAction SilentlyContinue
+    if ($port8420) {
+        $pid = ($port8420 | Select-Object -First 1).OwningProcess
+        Write-Host "  Backend:  " -NoNewline; Write-Host "Running" -ForegroundColor Green -NoNewline; Write-Host " (PID: $pid) - http://localhost:8420"
     } else {
         Write-Host "  Backend:  " -NoNewline; Write-Host "Stopped" -ForegroundColor Red
     }
@@ -168,10 +168,10 @@ function Do-Start {
     # -- Step 2: Stop existing processes --------------------------------------
     Write-Step "Step 2/6: Stopping existing processes..."
 
-    Stop-PortProcess 8000 | Out-Null
+    Stop-PortProcess 8420 | Out-Null
     Stop-PortProcess 3000 | Out-Null
     Get-Process -Name "uvicorn" -ErrorAction SilentlyContinue | Stop-Process -Force
-    Write-Ok "Ports 8000 and 3000 are free"
+    Write-Ok "Ports 8420 and 3000 are free"
 
     # -- Step 3: Install dependencies -----------------------------------------
     Write-Step "Step 3/6: Installing dependencies..."
@@ -235,7 +235,7 @@ ENVIRONMENT=development
     Write-Info "Starting backend..."
     $backendLog = Join-Path $LogsDir "backend.log"
     $backendProc = Start-Process -NoNewWindow -PassThru -FilePath "uv" `
-        -ArgumentList "run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000" `
+        -ArgumentList "run uvicorn app.main:app --reload --host 0.0.0.0 --port 8420" `
         -RedirectStandardOutput $backendLog -RedirectStandardError (Join-Path $LogsDir "backend-err.log")
     $backendProc.Id | Set-Content (Join-Path $LogsDir "backend.pid")
     Pop-Location
@@ -243,7 +243,7 @@ ENVIRONMENT=development
     # Wait for backend
     for ($i = 1; $i -le 20; $i++) {
         try {
-            $resp = Invoke-WebRequest -Uri "http://localhost:8000/health" -TimeoutSec 1 -ErrorAction Stop
+            $resp = Invoke-WebRequest -Uri "http://localhost:8420/health" -TimeoutSec 1 -ErrorAction Stop
             Write-Ok "Backend running (PID: $($backendProc.Id))"
             break
         } catch {
@@ -288,8 +288,8 @@ ENVIRONMENT=development
     Write-Host "+========================================+" -ForegroundColor Green
     Write-Host ""
     Write-Host "  App:      http://localhost:3000" -ForegroundColor White
-    Write-Host "  API:      http://localhost:8000" -ForegroundColor White
-    Write-Host "  Docs:     http://localhost:8000/docs" -ForegroundColor White
+    Write-Host "  API:      http://localhost:8420" -ForegroundColor White
+    Write-Host "  Docs:     http://localhost:8420/docs" -ForegroundColor White
     Write-Host ""
     Write-Host "  Commands:" -ForegroundColor Yellow
     Write-Host "     .\run.ps1 stop     Stop all services"

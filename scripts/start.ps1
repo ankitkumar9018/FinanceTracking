@@ -120,7 +120,7 @@ Write-Host ""
 Write-Host "[4/6] Stopping existing services..." -ForegroundColor Yellow
 
 # Port-based kill
-foreach ($port in @(8000, 3000)) {
+foreach ($port in @(8420, 3000)) {
     $conns = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
     if ($conns) {
         $pids = $conns | Select-Object -ExpandProperty OwningProcess -Unique
@@ -143,7 +143,7 @@ if (-not (Test-Path $LogsDir)) { New-Item -ItemType Directory -Path $LogsDir -Fo
 # Backend
 Push-Location $BackendDir
 $backendProc = Start-Process -NoNewWindow -PassThru -FilePath "uv" `
-    -ArgumentList "run uvicorn app.main:app --reload --port 8000" `
+    -ArgumentList "run uvicorn app.main:app --reload --port 8420" `
     -RedirectStandardOutput (Join-Path $LogsDir "backend.log") `
     -RedirectStandardError (Join-Path $LogsDir "backend-err.log")
 $backendProc.Id | Set-Content (Join-Path $LogsDir "backend.pid")
@@ -183,8 +183,8 @@ Write-Host "[6/6] Waiting for services..." -ForegroundColor Yellow
 $backendReady = $false
 for ($i = 1; $i -le 20; $i++) {
     try {
-        Invoke-WebRequest -Uri "http://localhost:8000/health" -TimeoutSec 1 -ErrorAction Stop | Out-Null
-        Write-Host "  [OK] Backend: http://localhost:8000" -ForegroundColor Green
+        Invoke-WebRequest -Uri "http://localhost:8420/health" -TimeoutSec 1 -ErrorAction Stop | Out-Null
+        Write-Host "  [OK] Backend: http://localhost:8420" -ForegroundColor Green
         $backendReady = $true
         break
     } catch {
@@ -211,8 +211,8 @@ Write-Host ""
 Write-Host "======================================================" -ForegroundColor Blue
 Write-Host "  FinanceTracker is running!" -ForegroundColor Green
 Write-Host "  Web:     http://localhost:3000" -ForegroundColor White
-Write-Host "  API:     http://localhost:8000" -ForegroundColor White
-Write-Host "  Docs:    http://localhost:8000/docs" -ForegroundColor White
+Write-Host "  API:     http://localhost:8420" -ForegroundColor White
+Write-Host "  Docs:    http://localhost:8420/docs" -ForegroundColor White
 Write-Host "======================================================" -ForegroundColor Blue
 Write-Host ""
 Write-Host "  To stop:  .\scripts\stop.ps1" -ForegroundColor White

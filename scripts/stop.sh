@@ -39,7 +39,7 @@ stop_service "nextjs"
 stop_service "ollama"
 
 # Kill by port as backup
-lsof -ti:8000 2>/dev/null | xargs kill -9 2>/dev/null || true
+lsof -ti:8420 2>/dev/null | xargs kill -9 2>/dev/null || true
 lsof -ti:3000 2>/dev/null | xargs kill -9 2>/dev/null || true
 
 # Kill by process name as backup

@@ -102,7 +102,7 @@ async def health_check() -> dict:
 
 
 # ── Static Frontend (for desktop app — serves Next.js static export) ────
-# The desktop app navigates to http://localhost:8000 so the frontend and
+# The desktop app navigates to http://localhost:8420 so the frontend and
 # API are same-origin, avoiding mixed-content blocking in WebView2.
 # Only mounts if a 'static' directory exists next to the backend.
 

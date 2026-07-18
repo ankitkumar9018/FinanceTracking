@@ -1,8 +1,8 @@
 """CLI entry point for the FinanceTracker backend.
 
 Used by PyInstaller sidecar and for direct invocation:
-    python -m app --port 8000 --db-path /path/to/finance.db
-    python -m app --port 8000 --db-path /path/to/finance.db --seed
+    python -m app --port 8420 --db-path /path/to/finance.db
+    python -m app --port 8420 --db-path /path/to/finance.db --seed
 """
 
 import argparse
@@ -177,7 +177,7 @@ def _run_seed() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="FinanceTracker Backend")
-    parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
+    parser.add_argument("--port", type=int, default=8420, help="Port to listen on")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind to")
     parser.add_argument("--db-path", type=str, default="", help="Path to SQLite database file")
     parser.add_argument("--seed", action="store_true", help="Seed demo user on first run")

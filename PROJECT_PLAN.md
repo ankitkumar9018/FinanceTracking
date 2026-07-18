@@ -595,7 +595,7 @@ Every configuration value can be set in **two ways**: via `.env` file (for devel
 |---|---|---|---|
 | **Database URL** | `DATABASE_URL` | Advanced → Database | `sqlite+aiosqlite:///./finance.db` |
 | **Secret Key** | `SECRET_KEY` | (auto-generated, not in UI) | Random on first run |
-| **API Port** | `API_PORT` | Advanced → Server | `8000` |
+| **API Port** | `API_PORT` | Advanced → Server | `8420` |
 | **Market Data Refresh (min)** | `PRICE_REFRESH_INTERVAL` | Market Data → Refresh Rate | `5` |
 | **Default Chart Days** | `DEFAULT_CHART_DAYS` | Display → Charts | `30` |
 | **SendGrid API Key** | `SENDGRID_API_KEY` | Notifications → Email | (empty) |
@@ -895,8 +895,8 @@ else
 fi
 
 # Start backend
-cd backend && uv run uvicorn app.main:app --reload --port 8000 &
-echo "  Backend: ✅ http://localhost:8000"
+cd backend && uv run uvicorn app.main:app --reload --port 8420 &
+echo "  Backend: ✅ http://localhost:8420"
 
 # Start Celery worker (if Redis available)
 if redis_running; then
@@ -912,7 +912,7 @@ echo "  Web App: ✅ http://localhost:3000"
 sleep 5
 echo ""
 echo "=== Service Status ==="
-check_health "Backend"  "http://localhost:8000/health"
+check_health "Backend"  "http://localhost:8420/health"
 check_health "Web App"  "http://localhost:3000"
 check_health "Redis"    "redis://localhost:6379"
 check_health "Ollama"   "http://localhost:11434"
@@ -920,8 +920,8 @@ check_health "Ollama"   "http://localhost:11434"
 echo ""
 echo "🎉 FinanceTracker is running!"
 echo "   Web:     http://localhost:3000"
-echo "   API:     http://localhost:8000"
-echo "   Docs:    http://localhost:8000/docs"
+echo "   API:     http://localhost:8420"
+echo "   Docs:    http://localhost:8420/docs"
 ```
 
 ### Script location:
@@ -1034,7 +1034,7 @@ echo "   Docs:    http://localhost:8000/docs"
 
 **Testing**: pytest for all services, API endpoint tests with httpx AsyncClient
 
-**Deliverable**: Running backend at `localhost:8000` with Swagger docs, can import Excel OR add stocks manually, see portfolio summary as JSON, launch via `scripts/start.sh`.
+**Deliverable**: Running backend at `localhost:8420` with Swagger docs, can import Excel OR add stocks manually, see portfolio summary as JSON, launch via `scripts/start.sh`.
 
 ---
 

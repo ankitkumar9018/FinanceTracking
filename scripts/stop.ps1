@@ -19,7 +19,7 @@ foreach ($service in @("backend", "frontend")) {
 }
 
 # Kill by port as fallback
-foreach ($port in @(8000, 3000)) {
+foreach ($port in @(8420, 3000)) {
     $conns = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
     if ($conns) {
         $pids = $conns | Select-Object -ExpandProperty OwningProcess -Unique
