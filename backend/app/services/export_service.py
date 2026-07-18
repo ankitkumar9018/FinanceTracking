@@ -5,9 +5,13 @@ from __future__ import annotations
 import csv
 import html as html_mod
 import io
+import json
 import logging
+import zipfile
 from datetime import date, datetime
 
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -16,6 +20,7 @@ from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.transaction import Transaction
 from app.models.tax_record import TaxRecord
+from app.services.backup_service import export_portfolio_json
 from app.services.tax_service import generate_tax_summary
 
 logger = logging.getLogger(__name__)
@@ -186,7 +191,7 @@ async def generate_portfolio_report_html(
             <td style="text-align:right">{h['value']:,.2f}</td>
             <td style="text-align:right;color:{pnl_color}">{h['pnl']:+,.2f} ({h['pnl_pct']:+.1f}%)</td>
             <td style="text-align:center">{_esc(str(h['action']))}</td>
-            <td style="text-align:right">{h['rsi']:.1f if h['rsi'] else '--'}</td>
+            <td style="text-align:right">{f"{h['rsi']:.1f}" if h['rsi'] else '--'}</td>
         </tr>"""
 
     total_pnl_color = "#16a34a" if total_pnl >= 0 else "#dc2626"
@@ -512,3 +517,207 @@ async def generate_portfolio_pdf(
     output = io.BytesIO()
     pisa.CreatePDF(html_content, dest=output)
     return output.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Multi-sheet XLSX workbook (Holdings + Transactions + Dividends + Summary)
+# ---------------------------------------------------------------------------
+
+
+def _xlsx_header(ws, headers: list[str]) -> None:
+    """Write a bold, filled header row to a worksheet."""
+    font = Font(bold=True, color="FFFFFF")
+    fill = PatternFill(start_color="1E3A5F", end_color="1E3A5F", fill_type="solid")
+    align = Alignment(horizontal="center")
+    for idx, header in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=idx, value=header)
+        cell.font = font
+        cell.fill = fill
+        cell.alignment = align
+
+
+def _xlsx_finalize(ws) -> None:
+    """Freeze the header row and auto-size columns for a worksheet."""
+    ws.freeze_panes = "A2"
+    for col in ws.columns:
+        letter = col[0].column_letter
+        max_len = max(
+            (len(str(cell.value)) for cell in col if cell.value is not None),
+            default=0,
+        )
+        ws.column_dimensions[letter].width = min(max_len + 2, 40)
+
+
+async def export_workbook_xlsx(portfolio_id: int, db: AsyncSession) -> bytes:
+    """Build a multi-sheet XLSX workbook for a portfolio.
+
+    Sheets: Holdings, Transactions, Dividends, Summary. Raises ``ValueError``
+    if the portfolio does not exist or has no holdings (the API layer maps this
+    to a 404, mirroring ``excel_service.export_portfolio``).
+    """
+    result = await db.execute(
+        select(Portfolio)
+        .options(
+            selectinload(Portfolio.holdings).selectinload(Holding.transactions),
+            selectinload(Portfolio.holdings).selectinload(Holding.dividends),
+        )
+        .where(Portfolio.id == portfolio_id)
+    )
+    portfolio = result.scalar_one_or_none()
+    if portfolio is None:
+        raise ValueError(f"Portfolio {portfolio_id} not found")
+    if not portfolio.holdings:
+        raise ValueError(f"Portfolio {portfolio_id} has no holdings to export")
+
+    wb = Workbook()
+
+    # ── Holdings ────────────────────────────────────────────────────────
+    ws_h = wb.active
+    ws_h.title = "Holdings"
+    _xlsx_header(ws_h, [
+        "Symbol", "Exchange", "Quantity", "Avg Price", "Current Price",
+        "Invested", "Current Value", "P&L", "P&L %",
+    ])
+
+    total_invested = 0.0
+    total_current = 0.0
+    for h in portfolio.holdings:
+        qty = float(h.cumulative_quantity)
+        avg = float(h.average_price)
+        cur = float(h.current_price) if h.current_price else 0.0
+        invested = qty * avg
+        current_value = qty * cur
+        pnl = current_value - invested
+        pnl_pct = (pnl / invested * 100) if invested > 0 else 0.0
+        total_invested += invested
+        total_current += current_value
+        ws_h.append([
+            h.stock_symbol, h.exchange, qty, avg, cur or None,
+            round(invested, 2), round(current_value, 2),
+            round(pnl, 2), round(pnl_pct, 2),
+        ])
+
+    # ── Transactions ────────────────────────────────────────────────────
+    ws_t = wb.create_sheet("Transactions")
+    _xlsx_header(ws_t, [
+        "Date", "Symbol", "Type", "Quantity", "Price", "Total", "Fees", "Notes",
+    ])
+    for h in portfolio.holdings:
+        for tx in h.transactions:
+            qty = float(tx.quantity)
+            price = float(tx.price)
+            ws_t.append([
+                tx.date.isoformat(), h.stock_symbol, tx.transaction_type,
+                qty, price, round(qty * price, 2), float(tx.brokerage), tx.notes,
+            ])
+
+    # ── Dividends ───────────────────────────────────────────────────────
+    ws_d = wb.create_sheet("Dividends")
+    _xlsx_header(ws_d, ["Ex-Date", "Symbol", "Amount", "Currency", "DRIP?"])
+    for h in portfolio.holdings:
+        for d in h.dividends:
+            ws_d.append([
+                d.ex_date.isoformat(), h.stock_symbol, float(d.total_amount),
+                h.currency, "Yes" if d.is_reinvested else "No",
+            ])
+
+    # ── Summary ─────────────────────────────────────────────────────────
+    ws_s = wb.create_sheet("Summary")
+    _xlsx_header(ws_s, ["Metric", "Value"])
+    total_pnl = total_current - total_invested
+    total_pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0.0
+    for label, value in [
+        ("Portfolio", portfolio.name),
+        ("Currency", portfolio.currency),
+        ("Total Invested", round(total_invested, 2)),
+        ("Current Value", round(total_current, 2)),
+        ("Total P&L", round(total_pnl, 2)),
+        ("Total P&L %", round(total_pnl_pct, 2)),
+        ("Holdings Count", len(portfolio.holdings)),
+        ("Generated At", datetime.now().isoformat(timespec="seconds")),
+    ]:
+        ws_s.append([label, value])
+
+    for ws in (ws_h, ws_t, ws_d, ws_s):
+        _xlsx_finalize(ws)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()
+
+
+# ---------------------------------------------------------------------------
+# "Export everything" ZIP bundle
+# ---------------------------------------------------------------------------
+
+
+async def export_everything_zip(
+    portfolio_id: int, user_name: str, db: AsyncSession
+) -> bytes:
+    """Build an in-memory ZIP with CSVs, JSON backup, HTML report, the XLSX
+    workbook, and (best-effort) the PDF report.
+
+    Raises ``ValueError`` if the portfolio does not exist / has no holdings.
+    A missing ``xhtml2pdf`` (or any PDF-generation failure) simply omits the
+    PDF instead of failing the whole bundle.
+    """
+    result = await db.execute(
+        select(Portfolio).where(Portfolio.id == portfolio_id)
+    )
+    portfolio = result.scalar_one_or_none()
+    if portfolio is None:
+        raise ValueError(f"Portfolio {portfolio_id} not found")
+
+    holdings_csv = await export_holdings_csv(portfolio_id, db)
+    transactions_csv = await export_transactions_csv(portfolio_id, db)
+    backup = await export_portfolio_json(portfolio_id, portfolio.user_id, db)
+    report_html = await generate_portfolio_report_html(portfolio_id, user_name, db)
+    workbook = await export_workbook_xlsx(portfolio_id, db)
+
+    pdf_bytes: bytes | None = None
+    try:
+        pdf_bytes = await generate_portfolio_pdf(portfolio_id, user_name, db)
+    except ImportError:
+        logger.info("xhtml2pdf not installed; omitting PDF from export bundle")
+    except Exception:  # pragma: no cover - defensive; never fail the bundle
+        logger.warning("PDF generation failed for export bundle", exc_info=True)
+
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    contents = [
+        "holdings.csv",
+        "transactions.csv",
+        "portfolio_backup.json",
+        "report.html",
+        "portfolio_workbook.xlsx",
+    ]
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("holdings.csv", holdings_csv)
+        zf.writestr("transactions.csv", transactions_csv)
+        zf.writestr(
+            "portfolio_backup.json",
+            json.dumps(backup, indent=2, ensure_ascii=False),
+        )
+        zf.writestr("report.html", report_html)
+        zf.writestr("portfolio_workbook.xlsx", workbook)
+        if pdf_bytes:
+            zf.writestr("portfolio_report.pdf", pdf_bytes)
+            contents.append("portfolio_report.pdf")
+
+        readme = (
+            "FinanceTracker export bundle\n"
+            f"Portfolio: {portfolio.name}\n"
+            f"Generated: {ts}\n\n"
+            "Contents:\n" + "\n".join(f"  - {c}" for c in contents) + "\n"
+        )
+        if not pdf_bytes:
+            readme += (
+                "\nNote: PDF report omitted "
+                "(xhtml2pdf not installed or generation failed).\n"
+            )
+        zf.writestr("README.txt", readme)
+
+    buf.seek(0)
+    return buf.read()

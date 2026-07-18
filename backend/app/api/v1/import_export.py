@@ -47,9 +47,16 @@ from app.services.excel_service import (
     parse_excel,
 )
 from app.services.export_service import (
+    export_everything_zip,
     export_holdings_csv,
     export_transactions_csv,
+    export_workbook_xlsx,
     generate_portfolio_report_html,
+)
+from app.services.ofx_qif_import_service import (
+    import_statement,
+    parse_ofx,
+    parse_qif,
 )
 
 logger = logging.getLogger(__name__)
@@ -164,6 +171,47 @@ async def download_template(user: User = Depends(get_current_user)) -> Response:
         content=generate_template(),
         media_type=_EXCEL_CONTENT_TYPE,
         headers={"Content-Disposition": "attachment; filename=finance_tracker_template.xlsx"},
+    )
+
+
+@router.get("/export/xlsx/{portfolio_id}")
+async def export_xlsx_workbook(
+    portfolio_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Export a multi-sheet workbook (Holdings, Transactions, Dividends, Summary)."""
+    await _verify_portfolio_ownership(portfolio_id, user, db)
+    try:
+        workbook_bytes = await export_workbook_xlsx(portfolio_id, db)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+    return Response(
+        content=workbook_bytes,
+        media_type=_EXCEL_CONTENT_TYPE,
+        headers={"Content-Disposition": f"attachment; filename=portfolio_{portfolio_id}_workbook.xlsx"},
+    )
+
+
+@router.get("/export/bundle/{portfolio_id}")
+async def export_bundle(
+    portfolio_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Export everything (CSVs, JSON backup, HTML report, XLSX, best-effort PDF) as a ZIP."""
+    await _verify_portfolio_ownership(portfolio_id, user, db)
+    user_name = user.display_name or user.email
+    try:
+        zip_bytes = await export_everything_zip(portfolio_id, user_name, db)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=portfolio_{portfolio_id}_export.zip"},
     )
 
 
@@ -344,6 +392,109 @@ async def download_tax_record_template(user: User = Depends(get_current_user)) -
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=tax_record_template.csv"},
     )
+
+
+# ===========================================================================
+# OFX / QIF / CAS STATEMENT IMPORT
+# ===========================================================================
+
+@router.post("/import/ofx")
+async def import_ofx_statement(
+    file: UploadFile, portfolio_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Import an OFX/QFX broker or bank statement into a portfolio."""
+    await _verify_portfolio_ownership(portfolio_id, user, db)
+    file_bytes = await _read_upload(file, (".ofx", ".qfx"))
+
+    try:
+        parsed = parse_ofx(file_bytes)
+    except Exception as exc:
+        logger.warning("OFX parse failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to parse OFX file. Please check the format.",
+        )
+
+    if not parsed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No valid rows found in the OFX file",
+        )
+
+    summary = await import_statement(parsed, portfolio_id, db)
+    return {"status": "success", "rows_parsed": len(parsed), **summary}
+
+
+@router.post("/import/qif")
+async def import_qif_statement(
+    file: UploadFile, portfolio_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Import a QIF statement into a portfolio."""
+    await _verify_portfolio_ownership(portfolio_id, user, db)
+    file_bytes = await _read_upload(file, (".qif",))
+
+    try:
+        parsed = parse_qif(file_bytes)
+    except Exception as exc:
+        logger.warning("QIF parse failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to parse QIF file. Please check the format.",
+        )
+
+    if not parsed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No valid rows found in the QIF file",
+        )
+
+    summary = await import_statement(parsed, portfolio_id, db)
+    return {"status": "success", "rows_parsed": len(parsed), **summary}
+
+
+@router.post("/import/cas")
+async def import_cas_statement(
+    file: UploadFile, portfolio_id: int, password: str | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Import a CAMS/KFintech CAS PDF (mutual funds) into a portfolio.
+
+    Requires the optional ``casparser`` package (``mf`` extra). Missing package
+    → 501; parse/decrypt failures → 400.
+    """
+    await _verify_portfolio_ownership(portfolio_id, user, db)
+    file_bytes = await _read_upload(file, (".pdf",))
+
+    # casparser is optional — keep the import function-local so the app boots
+    # without it (mirrors the PDF-export ImportError handling).
+    try:
+        from app.services.cas_import_service import parse_cas
+
+        parsed = parse_cas(file_bytes, password)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
+        )
+    except Exception as exc:
+        logger.warning("CAS parse failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to parse CAS PDF. Please check the file and password.",
+        )
+
+    if not parsed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No mutual fund holdings found in the CAS statement",
+        )
+
+    summary = await import_mutual_funds(parsed, portfolio_id, db)
+    return {"status": "success", "rows_parsed": len(parsed), **summary}
 
 
 # ===========================================================================

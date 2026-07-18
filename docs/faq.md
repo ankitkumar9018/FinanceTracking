@@ -98,9 +98,11 @@ No. Ollama is optional. Without it, the AI chat assistant and AI-powered insight
 
 ---
 
-### 12. Can I import data from my existing Excel spreadsheet?
+### 12. What data formats can I import and export?
 
-Yes. The import feature accepts .xlsx files and automatically maps columns. Your spreadsheet should have columns for stock name, purchase date, quantity, and price. Range levels (base, mid ranges, top) and sale data are optional. The file is parsed and imported in one step, and a summary shows how many rows were parsed and how many holdings and transactions were created. You can re-import updated spreadsheets; the app merges new data with existing holdings.
+**Import** (from the **Import** page): Excel (.xlsx), CSV (holdings, dividends, mutual funds, and tax records — each with a downloadable template), a JSON portfolio backup, OFX/QFX broker or bank statements, QIF (Quicken) files, and CAMS/KFintech CAS PDFs for mutual funds. Excel imports automatically map columns; your spreadsheet should have columns for stock name, purchase date, quantity, and price (range levels and sale data are optional). The file is parsed and imported in one step, and you can re-import updated files — the app merges new data with existing holdings and skips duplicate transactions. The maximum upload size is 10 MB.
+
+**Export** (from the **Reports** page): holdings and transactions CSV, a single-sheet Excel export and a multi-sheet Excel workbook (.xlsx), a JSON backup, HTML and PDF reports, a Google Sheets CSV, a SQLite database backup (desktop), a Capital Gains Tax Report (CSV/HTML), and an "Export Everything" ZIP bundle that packages the CSVs, JSON, HTML report, Excel workbook, and PDF together.
 
 ---
 

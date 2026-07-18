@@ -742,17 +742,27 @@ If you already track investments in Excel, import them in one go.
 
 From the **Import** page you can also bring in **CSV** files for **holdings, dividends, mutual funds,** and **tax records** (each has a downloadable template), and restore a **JSON portfolio backup**.
 
+A **More Import Formats** section handles statements from brokers, banks, and fund registrars:
+
+- **OFX / QFX** — a broker or bank statement; investment buys/sells are parsed, with bank transactions as a fallback.
+- **QIF** — Quicken Interchange Format, for investment and bank account types.
+- **CAS PDF** — a CAMS/KFintech **Consolidated Account Statement**; imports your mutual-fund holdings. Enter the statement password in the optional field if it's protected. This needs the optional `casparser` package (the `mf` extra: `uv sync --extra mf`).
+
+Uploads are capped at **10 MB**.
+
 ### 16.3 Reports & exports
 
 Open **Reports** in the sidebar:
 
 - **HTML report** — a shareable, formatted portfolio summary.
 - **Holdings CSV** and **Transactions CSV**.
+- **Excel workbook (.xlsx)** — a multi-sheet workbook with **Holdings, Transactions, Dividends,** and **Summary** sheets. (A single-sheet Excel export is also available.)
 - **JSON backup** — a full portfolio snapshot you can re-import later.
 - **PDF export** of your portfolio.
 - **Google Sheets export** — a CSV structured for Google Sheets, in three sections.
 - **Capital Gains Tax Report** (CSV/HTML) — see [8.4](#84-the-itr-ready-capital-gains-tax-report).
 - **SQLite backup** — a copy of the whole database (desktop).
+- **Export Everything** — a single **.zip** bundle containing holdings CSV, transactions CSV, the JSON backup, the HTML report, the Excel workbook, the PDF report, and a README.
 
 ### 16.4 Shareable snapshot
 

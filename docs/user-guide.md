@@ -720,8 +720,8 @@ The **Security** section in Settings covers your account protection:
 
 ### Data Backup
 
-- **Export**: Go to the **Reports** page for holdings/transactions CSV, a JSON portfolio backup, an HTML report, and Google Sheets export
-- **Import**: Go to the **Import** page to restore a JSON backup or import Excel/CSV files
+- **Export**: Go to the **Reports** page for holdings/transactions CSV, a multi-sheet Excel workbook (.xlsx), a JSON portfolio backup, an HTML report, a PDF report, Google Sheets export, a SQLite database backup, and an **Export Everything** ZIP bundle that packages them all together
+- **Import**: Go to the **Import** page to restore a JSON backup, import Excel/CSV files, or bring in broker/bank statements — **OFX/QFX**, **QIF**, and CAMS/KFintech **CAS PDF** (for mutual funds)
 
 ---
 

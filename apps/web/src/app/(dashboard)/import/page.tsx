@@ -1,11 +1,38 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ChevronDown, FileText, Database, FileJson } from "lucide-react";
+import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ChevronDown, FileText, Database, FileJson, Landmark, Banknote, Receipt } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { getApiBaseAsync } from "@/lib/tauri-port";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { motion, AnimatePresence } from "framer-motion";
+import toast from "react-hot-toast";
+
+type NewFormatKey = "ofx" | "qif" | "cas";
+
+const NEW_FORMATS: { key: NewFormatKey; label: string; icon: typeof FileSpreadsheet; accepts: string; helper: string }[] = [
+  {
+    key: "ofx",
+    label: "OFX / QFX (broker or bank statement)",
+    icon: Landmark,
+    accepts: ".ofx,.qfx",
+    helper: "Open Financial Exchange statement exported from your broker or bank. Transactions are matched to holdings in the selected portfolio.",
+  },
+  {
+    key: "qif",
+    label: "QIF (broker or bank statement)",
+    icon: Banknote,
+    accepts: ".qif",
+    helper: "Quicken Interchange Format file exported from your broker or bank. Transactions are imported into the selected portfolio.",
+  },
+  {
+    key: "cas",
+    label: "CAS PDF (mutual fund statement)",
+    icon: Receipt,
+    accepts: ".pdf",
+    helper: "CAMS/KFintech Consolidated Account Statement (password-protected PDF) — imports your Indian mutual-fund holdings.",
+  },
+];
 
 type ImportStatus = "idle" | "uploading" | "success" | "error";
 type DataType = "holdings" | "dividends" | "mutual_funds" | "tax_records" | "json_backup";
@@ -69,6 +96,8 @@ export default function ImportPage() {
   const [dragOver, setDragOver] = useState(false);
   const [dataType, setDataType] = useState<DataType>("holdings");
   const [typeOpen, setTypeOpen] = useState(false);
+  const [busyFormat, setBusyFormat] = useState<NewFormatKey | null>(null);
+  const [casPassword, setCasPassword] = useState("");
 
   const currentType = DATA_TYPES.find((t) => t.key === dataType)!;
   const typeSelectorRef = useRef<HTMLDivElement>(null);
@@ -137,6 +166,36 @@ export default function ImportPage() {
     const file = e.dataTransfer.files[0];
     if (file) handleFile(file);
   }
+
+  const handleNewFormatUpload = useCallback(async (fmt: NewFormatKey, file: File) => {
+    if (!activePortfolioId) {
+      toast.error("No portfolio selected. Please create a portfolio first.");
+      return;
+    }
+    let endpoint = `/import-export/import/${fmt}?portfolio_id=${activePortfolioId}`;
+    if (fmt === "cas") {
+      const pw = casPassword.trim();
+      if (pw) endpoint += `&password=${encodeURIComponent(pw)}`;
+    }
+
+    setBusyFormat(fmt);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await api.upload<Record<string, number | string>>(endpoint, formData);
+      const parts = Object.entries(res)
+        .filter(([, v]) => typeof v === "number")
+        .map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`);
+      toast.success(
+        parts.length > 0 ? `Import complete — ${parts.join(", ")}` : "Import complete"
+      );
+      fetchPortfolios();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Import failed");
+    } finally {
+      setBusyFormat(null);
+    }
+  }, [activePortfolioId, casPassword, fetchPortfolios]);
 
   async function downloadTemplate() {
     const endpoint = getTemplateEndpoint(dataType);
@@ -313,6 +372,92 @@ export default function ImportPage() {
               </table>
             </div>
           </>
+        )}
+      </div>
+
+      {/* Additional statement formats (OFX / QIF / CAS) */}
+      <div className="space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">More Import Formats</h2>
+          <p className="text-sm text-[hsl(var(--muted-foreground))]">
+            Import broker/bank statements and mutual-fund statements directly into the selected portfolio.
+          </p>
+        </div>
+
+        {NEW_FORMATS.map((fmt) => {
+          const Icon = fmt.icon;
+          const disabled = busyFormat !== null || !activePortfolioId;
+          const isBusy = busyFormat === fmt.key;
+          return (
+            <div
+              key={fmt.key}
+              className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5"
+            >
+              <div className="flex items-start gap-4">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[hsl(var(--primary))]/10">
+                  <Icon className="h-5 w-5 text-[hsl(var(--primary))]" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-medium">{fmt.label}</h3>
+                  <p className="mt-0.5 text-sm text-[hsl(var(--muted-foreground))]">
+                    {fmt.helper}
+                  </p>
+
+                  {fmt.key === "cas" && (
+                    <div className="mt-3 flex flex-col gap-1">
+                      <label
+                        htmlFor="cas-password"
+                        className="text-xs text-[hsl(var(--muted-foreground))]"
+                      >
+                        Password (optional)
+                      </label>
+                      <input
+                        id="cas-password"
+                        type="password"
+                        value={casPassword}
+                        onChange={(e) => setCasPassword(e.target.value)}
+                        placeholder="PDF password, if any"
+                        autoComplete="off"
+                        aria-label="CAS PDF password"
+                        className="w-full max-w-xs rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-sm"
+                      />
+                    </div>
+                  )}
+
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <label
+                      className={`inline-flex cursor-pointer items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 transition-colors ${
+                        disabled ? "pointer-events-none opacity-50" : ""
+                      }`}
+                    >
+                      <Icon className="h-4 w-4" />
+                      {isBusy ? "Importing..." : "Choose File"}
+                      <input
+                        type="file"
+                        accept={fmt.accepts}
+                        disabled={disabled}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          e.currentTarget.value = "";
+                          if (f) handleNewFormatUpload(fmt.key, f);
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                    <span className="text-xs text-[hsl(var(--muted-foreground))]">
+                      Accepted: {fmt.accepts}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {!activePortfolioId && (
+          <p className="text-sm text-[hsl(var(--muted-foreground))]">
+            Select a portfolio from the top bar to import statements.
+          </p>
         )}
       </div>
     </div>

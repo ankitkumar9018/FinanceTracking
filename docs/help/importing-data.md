@@ -1,14 +1,34 @@
-# Importing Data from Excel
+# Importing Data
 
-This guide explains how to bring your existing portfolio into FinanceTracker using an Excel spreadsheet.
+This guide explains how to bring your existing portfolio into FinanceTracker. Excel is the most detailed path and is covered step by step below, but the app also imports CSV files, JSON backups, broker/bank statements (OFX/QFX and QIF), and CAMS/KFintech mutual-fund CAS PDFs.
 
 ---
 
-## What You Need
+## Supported Import Formats
+
+You can import any of these from the **Import** page in the sidebar:
+
+| Format | File type | What it's for |
+|---|---|---|
+| **Excel** | `.xlsx` | Your existing spreadsheet of holdings and transactions (columns auto-mapped) |
+| **CSV — holdings** | `.csv` | A plain-text table of holdings/transactions |
+| **CSV — dividends** | `.csv` | Dividend payouts (blank template available) |
+| **CSV — mutual funds** | `.csv` | Mutual-fund holdings by scheme code and units |
+| **CSV — tax records** | `.csv` | Realised capital-gains records for tax tracking |
+| **JSON backup** | `.json` | Restore a full portfolio snapshot previously exported from the app |
+| **OFX / QFX** | `.ofx`, `.qfx` | A broker or bank statement — parses investment buys/sells, and falls back to bank statement transactions |
+| **QIF** | `.qif` | Quicken Interchange Format — investment and bank types |
+| **CAS PDF** | `.pdf` | A CAMS/KFintech Consolidated Account Statement — imports your mutual-fund holdings |
+
+**Where these appear on the Import page:** the main area handles **Excel, CSV, and JSON**, and a **More Import Formats** section handles **OFX/QFX, QIF, and CAS PDF**. Every CSV import type has a downloadable blank template, and the maximum upload size is **10 MB**.
+
+---
+
+## Importing from Excel
 
 An Excel file (.xlsx format) with your stock data. Your spreadsheet should contain at least the stock name, purchase date, quantity, and purchase price. Additional columns like price ranges and sale data are optional.
 
-## Expected Excel Format
+### Expected Excel Format
 
 Here is an example of how your spreadsheet should look:
 
@@ -45,13 +65,13 @@ Here is an example of how your spreadsheet should look:
 - If you have multiple purchases of the same stock on different dates, use one row per purchase
 - German decimals: the app understands both 2450.00 (dot) and 2450,00 (comma)
 
-## How to Import
+### How to Import
 
-### Step 1: Open the Import Page
+#### Step 1: Open the Import Page
 
 Click **Import** in the sidebar menu.
 
-### Step 2: Upload Your File
+#### Step 2: Upload Your File
 
 You can either:
 - **Drag and drop** your Excel file onto the upload area, or
@@ -59,13 +79,13 @@ You can either:
 
 The app accepts .xlsx files up to 10 MB.
 
-### Step 3: Column Mapping
+#### Step 3: Column Mapping
 
 The app will automatically try to map your column names to the expected fields. You will see a preview showing:
 - Which columns from your file are matched to which fields
 - You can change the mapping if the app guessed wrong using dropdown menus
 
-### Step 4: Review the Preview
+#### Step 4: Review the Preview
 
 A table shows all the data that will be imported:
 - **Green rows**: Everything looks correct
@@ -74,11 +94,11 @@ A table shows all the data that will be imported:
 
 You can fix issues in the preview or go back and fix your Excel file.
 
-### Step 5: Choose a Portfolio
+#### Step 5: Choose a Portfolio
 
 Select which portfolio to import into, or create a new one.
 
-### Step 6: Confirm
+#### Step 6: Confirm
 
 Click **Confirm Import**. The app will:
 1. Create holdings for each stock
@@ -86,6 +106,40 @@ Click **Confirm Import**. The app will:
 3. Calculate cumulative quantities and average prices
 4. Fetch current market prices for all imported stocks
 5. Show you the completed import summary
+
+## Importing from CSV
+
+If your data is in a plain CSV file instead of Excel, use the CSV importers on the Import page. There are four kinds:
+
+- **Holdings** — the same fields as the Excel import above, as comma-separated values.
+- **Dividends** — dividend payouts you have received.
+- **Mutual funds** — fund holdings identified by scheme code, units, and invested amount.
+- **Tax records** — realised capital-gains records used by the tax tracker.
+
+Each CSV importer has a **downloadable blank template** so your column headers match what the app expects. Download it, fill it in, and upload it the same way you would an Excel file.
+
+## Restoring a JSON Backup
+
+The app can export a full portfolio snapshot as a **JSON backup**. To restore one, open the Import page and upload the JSON file. This re-creates the portfolio, holdings, transactions, and range levels exactly as they were when the backup was taken. This is the recommended way to move data between machines or recover after a reinstall.
+
+## More Import Formats
+
+The **More Import Formats** section of the Import page handles statements from brokers, banks, and mutual-fund registrars.
+
+### OFX / QFX (broker or bank statement)
+
+Upload a `.ofx` or `.qfx` file exported from your broker or bank. The app parses investment **BUY** and **SELL** transactions, and, as a fallback, imports bank statement transactions when no investment activity is present. Choose the portfolio to import into before uploading.
+
+### QIF (Quicken Interchange Format)
+
+Upload a `.qif` file. Both **investment** and **bank** account types are supported.
+
+### CAS PDF (CAMS / KFintech Consolidated Account Statement)
+
+Upload the password-protected **Consolidated Account Statement** you receive from CAMS or KFintech to import your **mutual-fund holdings** in one step.
+
+- If your statement is password-protected, enter the password in the optional **password** field before uploading.
+- CAS parsing needs the optional `casparser` package, which ships in the **`mf` extra**. Install it with `uv sync --extra mf`. If it isn't installed, the app returns a friendly error with an install hint instead of failing silently.
 
 ## Re-Importing (Updating Your Data)
 
@@ -107,7 +161,10 @@ A: The first sheet is used by default. If you want to import from a different sh
 A: No. The import adds new transactions to existing holdings. Your manually entered data and range levels are preserved.
 
 **Q: Can I import a CSV file instead of Excel?**
-A: Currently, only .xlsx files are supported. You can easily convert a CSV to .xlsx using Excel, Google Sheets, or LibreOffice Calc.
+A: Yes. Besides Excel, the app imports **CSV** files (holdings, dividends, mutual funds, and tax records — each with a downloadable template), **JSON** backups, **OFX/QFX** and **QIF** broker/bank statements, and **CAS PDF** mutual-fund statements. See [Supported Import Formats](#supported-import-formats) above.
+
+**Q: Can I import my mutual funds from a CAMS or KFintech statement?**
+A: Yes. Use the **CAS PDF** importer in the More Import Formats section and upload your Consolidated Account Statement. Enter its password if it is protected. CAS import requires the optional `casparser` package (`uv sync --extra mf`).
 
 ---
 

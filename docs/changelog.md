@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [Unreleased]
+
+### Added — Import / Export
+- **Multi-sheet Excel workbook export** — `GET /import-export/export/xlsx/{portfolio_id}` produces an `.xlsx` with Holdings, Transactions, Dividends, and Summary sheets
+- **"Export Everything" ZIP bundle** — `GET /import-export/export/bundle/{portfolio_id}` packages holdings/transactions CSV, the JSON backup, the HTML report, the Excel workbook, the PDF report, and a README into one `.zip`
+- **OFX / QFX import** — `POST /import-export/import/ofx?portfolio_id=` parses broker/bank statements (investment BUY/SELL, with bank transactions as a fallback)
+- **QIF import** — `POST /import-export/import/qif?portfolio_id=` supports Quicken investment and bank files
+- **CAS PDF import** — `POST /import-export/import/cas?portfolio_id=&password=` imports mutual-fund holdings from a password-protected CAMS/KFintech Consolidated Account Statement (needs the optional `casparser` package in the `mf` extra: `uv sync --extra mf`; returns `501` with an install hint if missing)
+
+---
+
 ## [0.11.0] - 2026-07 (Timers, Cash Flow, Hedging & 2FA Recovery)
 
 ### Added — Tax

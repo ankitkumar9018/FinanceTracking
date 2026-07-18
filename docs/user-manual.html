@@ -1254,17 +1254,26 @@
 
         <h3>16.2 Other imports</h3>
         <p>From the <strong>Import</strong> page you can also bring in <strong>CSV</strong> files for <strong>holdings, dividends, mutual funds,</strong> and <strong>tax records</strong> (each has a downloadable template), and restore a <strong>JSON portfolio backup</strong>.</p>
+        <p>A <strong>More Import Formats</strong> section handles statements from brokers, banks, and fund registrars:</p>
+        <ul>
+          <li><strong>OFX / QFX</strong> — a broker or bank statement; investment buys/sells are parsed, with bank transactions as a fallback.</li>
+          <li><strong>QIF</strong> — Quicken Interchange Format, for investment and bank account types.</li>
+          <li><strong>CAS PDF</strong> — a CAMS/KFintech <strong>Consolidated Account Statement</strong>; imports your mutual-fund holdings. Enter the statement password in the optional field if it's protected. This needs the optional <code>casparser</code> package (the <code>mf</code> extra: <code>uv sync --extra mf</code>).</li>
+        </ul>
+        <p>Uploads are capped at <strong>10 MB</strong>.</p>
 
         <h3>16.3 Reports &amp; exports</h3>
         <p>Open <strong>Reports</strong> in the sidebar:</p>
         <ul>
           <li><strong>HTML report</strong> — a shareable, formatted portfolio summary.</li>
           <li><strong>Holdings CSV</strong> and <strong>Transactions CSV</strong>.</li>
+          <li><strong>Excel workbook (.xlsx)</strong> — a multi-sheet workbook with <strong>Holdings, Transactions, Dividends,</strong> and <strong>Summary</strong> sheets. (A single-sheet Excel export is also available.)</li>
           <li><strong>JSON backup</strong> — a full portfolio snapshot you can re-import later.</li>
           <li><strong>PDF export</strong> of your portfolio.</li>
           <li><strong>Google Sheets export</strong> — a CSV structured for Google Sheets, in three sections.</li>
           <li><strong>Capital Gains Tax Report</strong> (CSV/HTML) — see <a href="#taxes">8.4</a>.</li>
           <li><strong>SQLite backup</strong> — a copy of the whole database (desktop).</li>
+          <li><strong>Export Everything</strong> — a single <strong>.zip</strong> bundle containing holdings CSV, transactions CSV, the JSON backup, the HTML report, the Excel workbook, the PDF report, and a README.</li>
         </ul>
 
         <h3>16.4 Shareable snapshot</h3>

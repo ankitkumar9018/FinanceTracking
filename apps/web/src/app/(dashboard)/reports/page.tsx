@@ -4,7 +4,7 @@ import { useState } from "react";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { getToken, tryRefresh } from "@/lib/api-client";
 import { getApiBaseAsync } from "@/lib/tauri-port";
-import { FileText, Download, FileSpreadsheet, FileJson, Database, FileOutput, Receipt } from "lucide-react";
+import { FileText, Download, FileSpreadsheet, FileJson, Database, FileOutput, Receipt, FileArchive } from "lucide-react";
 import toast from "react-hot-toast";
 
 function currentIndianFY(): string {
@@ -115,6 +115,30 @@ export default function ReportsPage() {
       action: () => run("excel", async () => {
         await downloadBlob(`/import-export/export/excel/${pid}`, `portfolio_${pid}.xlsx`);
         toast.success("Excel file downloaded!");
+      }),
+    },
+    {
+      key: "xlsx-workbook",
+      title: "Excel Workbook (.xlsx)",
+      description: "Formatted multi-sheet workbook (holdings, transactions, dividends, and summary) generated server-side. Ready to open in Excel or Google Sheets.",
+      icon: FileSpreadsheet,
+      actionLabel: "Download Workbook",
+      needsPortfolio: true,
+      action: () => run("xlsx-workbook", async () => {
+        await downloadBlob(`/import-export/export/xlsx/${pid}`, `portfolio_${pid}_workbook.xlsx`);
+        toast.success("Excel workbook downloaded!");
+      }),
+    },
+    {
+      key: "bundle",
+      title: "Export Everything (.zip)",
+      description: "Complete archive bundling every export (Excel, CSV, JSON, and report) for this portfolio into a single downloadable .zip file.",
+      icon: FileArchive,
+      actionLabel: "Download ZIP",
+      needsPortfolio: true,
+      action: () => run("bundle", async () => {
+        await downloadBlob(`/import-export/export/bundle/${pid}`, `portfolio_${pid}_export.zip`);
+        toast.success("Full export archive downloaded!");
       }),
     },
     {

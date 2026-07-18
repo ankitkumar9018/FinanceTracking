@@ -1138,13 +1138,15 @@ POST /mutual-funds
 
 ### Import Mutual Funds from CSV
 
-There is no CAS (PDF) import. Bulk import is done via CSV upload:
+Bulk import via CSV upload:
 
 ```
 POST /import-export/csv/mutual-funds?portfolio_id={id}
 ```
 
 **Request Body**: Multipart form with `.csv` file (template available at `GET /import-export/export/template/mutual-funds`).
+
+Mutual-fund holdings can also be imported from a CAMS/KFintech CAS PDF — see [Import CAS PDF](#import-cas-pdf) in the Import / Export section.
 
 ### Portfolio Overlap X-Ray
 
@@ -1441,13 +1443,53 @@ POST /import-export/excel?portfolio_id={id}
 }
 ```
 
+### Import from OFX / QFX
+
+```
+POST /import-export/import/ofx?portfolio_id={id}
+```
+
+**Request**: Multipart form data with an `.ofx` or `.qfx` broker/bank statement. Investment `BUY` / `SELL` transactions are parsed; if none are present, bank statement transactions are imported as a fallback.
+
+### Import from QIF
+
+```
+POST /import-export/import/qif?portfolio_id={id}
+```
+
+**Request**: Multipart form data with a `.qif` (Quicken Interchange Format) file. Both investment and bank account types are supported.
+
+### Import CAS PDF
+
+```
+POST /import-export/import/cas?portfolio_id={id}&password={optional}
+```
+
+**Request**: Multipart form data with a CAMS/KFintech Consolidated Account Statement `.pdf`. Imports mutual-fund holdings from the statement. `password` is optional (supply it for password-protected statements). Requires the optional `casparser` package (the `mf` extra: `uv sync --extra mf`); returns `501` with an install hint if it is not installed.
+
 ### Export to Excel
 
 ```
 GET /import-export/export/excel/{portfolio_id}
 ```
 
-Returns downloadable `.xlsx` file.
+Returns a downloadable single-sheet `.xlsx` file.
+
+### Export to Excel Workbook (multi-sheet)
+
+```
+GET /import-export/export/xlsx/{portfolio_id}
+```
+
+Returns a downloadable multi-sheet `.xlsx` workbook with **Holdings**, **Transactions**, **Dividends**, and **Summary** sheets.
+
+### Export Everything (ZIP bundle)
+
+```
+GET /import-export/export/bundle/{portfolio_id}
+```
+
+Returns a single `.zip` containing `holdings.csv`, `transactions.csv`, `portfolio_backup.json`, `report.html`, `portfolio_workbook.xlsx`, `portfolio_report.pdf`, and a `README.txt`.
 
 ---
 
@@ -2442,21 +2484,28 @@ Endpoints not covered in detail above, one line each:
 - `GET /ai/insights` — AI-generated portfolio insights
 
 ### Import / Export
+- `POST /import-export/excel?portfolio_id=` — import holdings/transactions from an `.xlsx` file
 - `POST /import-export/csv?portfolio_id=` — import holdings/transactions from CSV
 - `GET /import-export/export/csv/{portfolio_id}` — export holdings as CSV
 - `GET /import-export/export/csv/{portfolio_id}/transactions` — export transactions as CSV
 - `POST /import-export/csv/dividends?portfolio_id=` — import dividends from CSV
 - `POST /import-export/csv/mutual-funds?portfolio_id=` — import mutual funds from CSV
 - `POST /import-export/csv/tax-records` — import tax records from CSV (user-level)
+- `POST /import-export/import/ofx?portfolio_id=` — import an `.ofx`/`.qfx` broker or bank statement (investment BUY/SELL, bank fallback)
+- `POST /import-export/import/qif?portfolio_id=` — import a `.qif` (Quicken) investment or bank file
+- `POST /import-export/import/cas?portfolio_id=&password=` — import mutual-fund holdings from a CAMS/KFintech CAS PDF (needs the `mf` extra; `501` if `casparser` missing)
 - `GET /import-export/export/template` — blank Excel import template
 - `GET /import-export/export/template/csv` — blank CSV import template
 - `GET /import-export/export/template/dividends` — dividend CSV template
 - `GET /import-export/export/template/mutual-funds` — mutual fund CSV template
 - `GET /import-export/export/template/tax-records` — tax record CSV template
+- `GET /import-export/export/excel/{portfolio_id}` — export holdings as a single-sheet `.xlsx`
+- `GET /import-export/export/xlsx/{portfolio_id}` — export a multi-sheet `.xlsx` workbook (Holdings, Transactions, Dividends, Summary)
 - `GET /import-export/export/json/{portfolio_id}` — full portfolio backup as JSON
 - `POST /import-export/json` — restore a portfolio from a JSON backup
 - `GET /import-export/export/pdf/{portfolio_id}` — PDF report (requires xhtml2pdf, else `501`)
 - `GET /import-export/export/report/{portfolio_id}` — styled HTML report
+- `GET /import-export/export/bundle/{portfolio_id}` — "Export Everything" `.zip` (CSVs, JSON, HTML report, XLSX workbook, PDF report, README)
 - `GET /import-export/export/backup/sqlite` — download the raw SQLite database (instance owner only; `501` on PostgreSQL)
 - `GET /import-export/aa/providers` — list Account Aggregator providers (stubs)
 - `POST /import-export/aa/consent` — initiate AA consent (`501` — coming soon)
