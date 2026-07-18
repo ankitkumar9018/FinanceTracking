@@ -243,28 +243,47 @@ async def compute_portfolio_risk(
     cutoff = date.today() - timedelta(days=int(days * 1.45) + 10)
     holdings_data = []
 
+    # Batch-fetch every holding's price history in a SINGLE query instead of one
+    # SELECT per holding (this used to be an N+1, now called on every AI-context
+    # build). Over-fetching across exchanges is harmless: rows are grouped by the
+    # exact (symbol, exchange) key and only actual-holding keys are read back.
+    symbols = {h.stock_symbol for h in holdings}
+    exchanges = {h.exchange for h in holdings}
+    price_rows = (
+        await db.execute(
+            select(
+                PriceHistory.stock_symbol,
+                PriceHistory.exchange,
+                PriceHistory.date,
+                PriceHistory.close,
+            )
+            .where(
+                PriceHistory.stock_symbol.in_(symbols),
+                PriceHistory.exchange.in_(exchanges),
+                PriceHistory.date >= cutoff,
+            )
+            .order_by(PriceHistory.date.asc())
+        )
+    ).all()
+
+    prices_by_key: dict[tuple[str, str], list] = {}
+    for r in price_rows:
+        prices_by_key.setdefault((r.stock_symbol, r.exchange), []).append(
+            (r.date, r.close)
+        )
+
     for h in holdings:
         value = float(h.cumulative_quantity) * float(
             h.current_price or h.average_price
         )
         weight = value / total_value if total_value > 0 else 0
 
-        # Fetch daily prices
-        price_result = await db.execute(
-            select(PriceHistory.date, PriceHistory.close)
-            .where(
-                PriceHistory.stock_symbol == h.stock_symbol,
-                PriceHistory.exchange == h.exchange,
-                PriceHistory.date >= cutoff,
-            )
-            .order_by(PriceHistory.date.asc())
-        )
-        prices = price_result.all()
-
+        # Already ordered by date asc from the batched query.
+        prices = prices_by_key.get((h.stock_symbol, h.exchange), [])
         if len(prices) >= 2:
             price_series = pd.Series(
-                [float(p.close) for p in prices],
-                index=[p.date for p in prices],
+                [float(close) for _, close in prices],
+                index=[d for d, _ in prices],
             )
             daily_returns = price_series.pct_change().dropna()
             holdings_data.append(

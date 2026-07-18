@@ -341,15 +341,42 @@ PROVIDER_REGISTRY: dict[str, type[LLMProvider]] = {
 # Fallback order
 FALLBACK_ORDER = ["ollama", "openai", "anthropic", "google"]
 
-SYSTEM_PROMPT = """You are a helpful financial assistant for the FinanceTracker app.
-You help users understand their investment portfolio, Indian and German stock markets,
-technical indicators (RSI, MACD, Bollinger Bands), tax implications (Indian STCG/LTCG,
-German Abgeltungssteuer), and general investment concepts.
+SYSTEM_PROMPT = """You are the AI assistant inside FinanceTracker, a personal \
+investment portfolio tracker for Indian (NSE/BSE) and German (XETRA) markets.
 
-Keep responses concise, accurate, and easy to understand for non-technical users.
-When discussing specific stocks, always remind users that this is not financial advice.
-Format numbers with appropriate currency symbols (INR for INR, EUR for EUR).
+You help users understand their own portfolio, technical indicators (RSI, MACD, \
+Bollinger Bands), tax implications (Indian STCG/LTCG, German Abgeltungssteuer), and \
+general investing concepts.
+
+GROUNDING (important):
+- When a "PORTFOLIO CONTEXT" block is provided below, base every portfolio-specific \
+answer ONLY on those numbers, and quote the actual figures (holdings, P&L, sector \
+allocation, diversification grade, drift, risk metrics). Never invent holdings, \
+prices, or values that are not in the context.
+- If the user asks something the context does not cover, say what is missing instead \
+of guessing.
+
+HARD RULES:
+- You CANNOT predict future prices or returns, and neither can any model. If asked \
+what a stock "will" do, explain that prices cannot be reliably forecast, then discuss \
+only what the current data shows (trend, valuation zone, risk) in educational terms.
+- Everything you say is educational information, NOT financial advice and NOT a \
+recommendation to buy or sell. Say so whenever you discuss a specific holding or action.
+- Be concise and specific: prefer the user's real numbers over generic statements. \
+Format money with the correct currency symbol (INR or EUR).
 """
+
+
+def _compose_system_prompt(base: str, context: str) -> str:
+    """Attach the grounded portfolio context to the base system prompt."""
+    if not context:
+        return base
+    return (
+        f"{base}\n\n"
+        "=== PORTFOLIO CONTEXT (the user's real, current data) ===\n"
+        f"{context}\n"
+        "=== END PORTFOLIO CONTEXT ==="
+    )
 
 
 async def get_active_provider() -> LLMProvider | None:
@@ -387,7 +414,14 @@ async def chat(
     user_id: int,
     db=None,  # AsyncSession, optional for context enrichment
 ) -> ChatResponse:
-    """Send a chat message with provider fallback and graceful degradation."""
+    """Send a chat message with provider fallback and graceful degradation.
+
+    When a DB session is provided, the user's real portfolio (holdings, P&L,
+    diversification, allocation drift, and risk metrics) is compiled into the
+    system prompt so answers are grounded in their actual data instead of
+    generic. Context building is best-effort — any failure falls back to the
+    plain system prompt rather than breaking the chat.
+    """
     provider = await get_active_provider()
 
     if provider is None:
@@ -401,8 +435,18 @@ async def chat(
             tokens_used=0,
         )
 
+    system_prompt = SYSTEM_PROMPT
+    if db is not None:
+        try:
+            from app.services.ai_context_service import build_portfolio_context
+
+            context = await build_portfolio_context(user_id, db)
+            system_prompt = _compose_system_prompt(SYSTEM_PROMPT, context)
+        except Exception as e:  # pragma: no cover - never break chat on context
+            logger.debug("portfolio context enrichment skipped: %s", e)
+
     try:
-        return await provider.chat(messages, system_prompt=SYSTEM_PROMPT)
+        return await provider.chat(messages, system_prompt=system_prompt)
     except Exception as e:
         logger.error(f"LLM chat failed with {provider.NAME}: {e}")
         return ChatResponse(

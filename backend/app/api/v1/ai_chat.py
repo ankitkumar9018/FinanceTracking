@@ -230,49 +230,38 @@ async def get_portfolio_insights(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Get AI-generated portfolio insights."""
+    """Get AI-generated portfolio insights, grounded in the user's real data.
+
+    The rich portfolio context (holdings, P&L, diversification, allocation
+    drift, and risk metrics) is compiled and injected into the system prompt by
+    ``chat`` itself via ``build_portfolio_context`` — here we only pose the
+    analysis question, so the context is built exactly once.
+    """
     from app.ml.llm_assistant import ChatMessage, chat
     from app.models.holding import Holding
     from app.models.portfolio import Portfolio
 
-    result = await db.execute(
-        select(Portfolio).where(Portfolio.user_id == user.id)
+    # Cheap existence check so an empty account gets a helpful message instead
+    # of paying an LLM round-trip.
+    exists = await db.execute(
+        select(Holding.id)
+        .join(Portfolio, Holding.portfolio_id == Portfolio.id)
+        .where(Portfolio.user_id == user.id)
+        .limit(1)
     )
-    portfolios = result.scalars().all()
-
-    holdings_summary = []
-    for p in portfolios:
-        h_result = await db.execute(
-            select(Holding).where(Holding.portfolio_id == p.id)
-        )
-        holdings = h_result.scalars().all()
-        for h in holdings:
-            pnl = 0.0
-            if h.current_price and h.average_price:
-                pnl = (
-                    (float(h.current_price) - float(h.average_price))
-                    / float(h.average_price)
-                    * 100
-                )
-            holdings_summary.append(
-                f"{h.stock_symbol}: qty={h.cumulative_quantity}, "
-                f"avg=INR{h.average_price}, current=INR{h.current_price or 'N/A'}, "
-                f"P&L={pnl:.1f}%, action={h.action_needed}"
-            )
-
-    if not holdings_summary:
+    if exists.first() is None:
         return {
             "insights": "No holdings found. Start by adding stocks to your portfolio."
         }
-
-    context = "User's portfolio:\n" + "\n".join(holdings_summary)
 
     messages = [
         ChatMessage(
             role="user",
             content=(
-                "Based on this portfolio data, provide 3-5 brief actionable "
-                f"insights:\n\n{context}"
+                "Analyze my portfolio and give 3-5 specific, actionable insights. "
+                "Call out concentration or allocation risks, notable gains or losses, "
+                "and anything that needs attention. Ground every point in my actual "
+                "numbers. Keep it educational — not financial advice."
             ),
         )
     ]
@@ -282,5 +271,4 @@ async def get_portfolio_insights(
     return {
         "insights": response.message,
         "provider": response.provider,
-        "holdings_analyzed": len(holdings_summary),
     }
