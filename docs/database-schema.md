@@ -62,6 +62,207 @@ The database currently has **21 tables**. All tables use integer autoincrement p
    to user)     |
 ```
 
+### Mermaid ER Diagram
+
+The same schema as an entity-relationship diagram, showing key columns and foreign keys (not every column). `PK` = primary key, `FK` = foreign key, `UK` = unique. Cascade behaviour: relationships from `users` and the `portfolio -> holding -> transaction` spine are `ON DELETE CASCADE`; the nullable links (`alerts.holding_id`, `alerts.watchlist_item_id`, `goals.linked_portfolio_id`, `tax_records.transaction_id`, `notification_logs.related_alert_id`) are `ON DELETE SET NULL`.
+
+```mermaid
+erDiagram
+    users ||--o{ portfolios : owns
+    users ||--|| user_preferences : has
+    users ||--o{ app_settings : has
+    users ||--o{ watchlist_items : watches
+    users ||--o{ goals : sets
+    users ||--o{ alerts : configures
+    users ||--o{ broker_connections : links
+    users ||--o{ chat_sessions : has
+    users ||--o{ assets : owns
+    users ||--o{ tax_records : has
+    users ||--o{ notification_logs : receives
+    users ||--o{ password_resets : requests
+
+    portfolios ||--o{ holdings : contains
+    portfolios ||--o{ mutual_funds : contains
+    portfolios ||--o{ fno_positions : contains
+    portfolios |o--o{ goals : "linked (optional)"
+
+    holdings ||--o{ transactions : records
+    holdings ||--o{ dividends : pays
+    holdings |o--o{ alerts : triggers
+    holdings ||--o{ corporate_actions : "affected by"
+
+    watchlist_items |o--o{ alerts : triggers
+    transactions |o--o| tax_records : generates
+    alerts |o--o{ notification_logs : sources
+
+    users {
+        int id PK
+        string email UK
+        string password_hash
+        string totp_secret "nullable (2FA)"
+        string phone "nullable"
+        string telegram_chat_id "nullable"
+        string preferred_currency
+        bool is_active
+    }
+    portfolios {
+        int id PK
+        int user_id FK
+        string name
+        string currency
+        bool is_default
+    }
+    holdings {
+        int id PK
+        int portfolio_id FK
+        string stock_symbol
+        string exchange
+        string currency
+        string fund_type "nullable (DE Teilfreistellung)"
+        decimal cumulative_quantity
+        decimal average_price
+        decimal current_price
+        string action_needed "N / Y_* zone"
+    }
+    transactions {
+        int id PK
+        int holding_id FK
+        string transaction_type "BUY / SELL"
+        date date
+        decimal quantity
+        decimal price
+    }
+    dividends {
+        int id PK
+        int holding_id FK
+        date ex_date
+        decimal total_amount
+        bool is_reinvested "DRIP"
+    }
+    corporate_actions {
+        int id PK
+        int holding_id FK
+        string action_type "SPLIT / BONUS / ..."
+        date ex_date
+        float ratio
+        string status "DETECTED / APPLIED / DISMISSED"
+    }
+    alerts {
+        int id PK
+        int user_id FK
+        int holding_id FK "nullable"
+        int watchlist_item_id FK "nullable"
+        string alert_type "PRICE_RANGE / RSI / CUSTOM"
+        json condition
+        json channels
+    }
+    watchlist_items {
+        int id PK
+        int user_id FK
+        string stock_symbol
+        string exchange
+        string action_needed
+    }
+    mutual_funds {
+        int id PK
+        int portfolio_id FK
+        string scheme_code
+        string fund_type "nullable"
+        decimal units
+        decimal nav
+    }
+    fno_positions {
+        int id PK
+        int portfolio_id FK
+        string symbol
+        string instrument_type "FUT / CE / PE"
+        date expiry_date
+        string side
+        string status "OPEN / CLOSED / EXPIRED"
+    }
+    goals {
+        int id PK
+        int user_id FK
+        int linked_portfolio_id FK "nullable"
+        string name
+        decimal target_amount
+        string category
+    }
+    assets {
+        int id PK
+        int user_id FK
+        string asset_type "CRYPTO / GOLD / FD / BOND / REAL_ESTATE"
+        string symbol "nullable"
+        decimal current_value
+    }
+    tax_records {
+        int id PK
+        int user_id FK
+        int transaction_id FK "nullable"
+        string financial_year
+        string tax_jurisdiction "IN / DE"
+        string gain_type "STCG / LTCG / ABGELTUNGSSTEUER / VORAB"
+    }
+    broker_connections {
+        int id PK
+        int user_id FK
+        string broker_name
+        string encrypted_api_key "Fernet"
+        bool is_active
+    }
+    chat_sessions {
+        int id PK
+        int user_id FK
+        json messages
+        json context
+    }
+    notification_logs {
+        int id PK
+        int user_id FK
+        int related_alert_id FK "nullable"
+        string channel
+        string status "QUEUED / SENT / FAILED"
+    }
+    password_resets {
+        int id PK
+        int user_id FK
+        string token_hash "SHA-256, indexed"
+        timestamp expires_at
+        timestamp used_at "nullable (single-use)"
+    }
+    user_preferences {
+        int id PK
+        int user_id FK "unique (1:1)"
+        json column_order
+        json custom_columns
+        json tax_settings
+    }
+    app_settings {
+        int id PK
+        int user_id FK
+        string key
+        string value "encrypted if sensitive"
+        string category
+    }
+    price_history {
+        int id PK
+        string stock_symbol "standalone (by symbol)"
+        string exchange
+        date date
+        decimal close
+        float rsi_14 "nullable"
+    }
+    forex_rates {
+        int id PK
+        string from_currency "standalone"
+        string to_currency
+        decimal rate
+        date date
+    }
+```
+
+> `price_history` and `forex_rates` carry no foreign keys — they are keyed by symbol/currency-pair and date and are shared across all users.
+
 ---
 
 ## Core Tables

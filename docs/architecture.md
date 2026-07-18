@@ -171,6 +171,61 @@ FinanceTracker is a full-stack, cross-platform investment tracking application b
   +-------------+  +-------------+  +-----------+
 ```
 
+### Component Overview (Mermaid)
+
+The same architecture as a layered component graph. Clients are same-origin with the API in the desktop build (the FastAPI process serves the Next.js static export); the browser talks to the API over HTTPS/WSS.
+
+```mermaid
+flowchart TB
+    subgraph Clients
+        WEB["Next.js 15 Web App<br/>React 19 + TS / PWA"]
+        DESK["Tauri v2 Desktop<br/>Rust shell + WebView"]
+    end
+
+    subgraph API["FastAPI 0.115+ (Python 3.12+)"]
+        REST["REST API /api/v1<br/>~171 endpoint handlers"]
+        WS["WebSocket Server<br/>/ws/prices, /ws/alerts"]
+        MW["Middleware<br/>CORS, slowapi rate limit,<br/>static file serving"]
+        AUTH["JWT auth dependency<br/>get_current_user"]
+    end
+
+    subgraph Logic["Business Logic"]
+        SVC["Services (~40)<br/>portfolio, tax, dividend,<br/>forex, alert, notification, ..."]
+        ML["ML / AI Layer<br/>LSTM predictor, Isolation Forest,<br/>FinBERT sentiment, LLM assistant"]
+    end
+
+    subgraph Data["Data Layer"]
+        ORM["SQLAlchemy 2.0 Async ORM<br/>+ Alembic migrations"]
+        DB[("SQLite (dev)<br/>PostgreSQL (prod)")]
+        SCHED["Celery + Redis beat<br/>-> APScheduler fallback"]
+    end
+
+    subgraph External["External Services (all optional / degrade gracefully)"]
+        YF["yfinance<br/>prices + FX"]
+        MFAPI["mfapi.in<br/>MF NAV"]
+        LLMP["Ollama / OpenAI /<br/>Anthropic / Google"]
+        NOTIF["SendGrid / Telegram /<br/>Twilio (WA/SMS)"]
+        BROKER["Broker APIs<br/>(Kite, ICICI, ...)"]
+    end
+
+    WEB -->|HTTPS / WSS| REST
+    WEB -->|WSS| WS
+    DESK -->|same-origin| REST
+    DESK --> WS
+    REST --> MW --> AUTH --> SVC
+    WS --> AUTH
+    SVC --> ML
+    SVC --> ORM
+    ML --> ORM
+    ORM --> DB
+    SCHED --> SVC
+    SVC --> YF
+    SVC --> MFAPI
+    SVC --> BROKER
+    ML --> LLMP
+    SVC --> NOTIF
+```
+
 ---
 
 ## Monorepo Structure
@@ -283,6 +338,33 @@ Request Flow:
   |  Async queries      |      |  yfinance         |
   |  Transactions       |      |  Broker APIs      |
   +---------------------+      +-------------------+
+```
+
+The same request lifecycle as a sequence — an authenticated read such as `GET /api/v1/portfolios/{id}/summary`. The JWT auth dependency (`get_current_user`) runs before the route handler; a missing or invalid token short-circuits with `401` and never reaches the service layer.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser / Desktop
+    participant M as Middleware<br/>(CORS, rate limit)
+    participant A as Auth dependency<br/>get_current_user
+    participant R as Route handler<br/>/api/v1/...
+    participant S as Service layer
+    participant DB as SQLAlchemy / DB
+
+    B->>M: HTTPS request + Bearer JWT
+    M->>A: forward (after CORS / rate-limit)
+    A->>A: decode + verify access token
+    alt token invalid or expired
+        A-->>B: 401 Unauthorized
+    else token valid
+        A->>R: inject current_user
+        R->>R: validate body/query (Pydantic)
+        R->>S: call business logic
+        S->>DB: async query / transaction
+        DB-->>S: rows / ORM objects
+        S-->>R: computed result
+        R-->>B: 200 + JSON (Pydantic schema)
+    end
 ```
 
 ### Database Strategy
@@ -457,6 +539,33 @@ The desktop WebView navigates to the backend (`http://localhost:8000`), which se
 ```
 
 There is no real-time broker price feed — all prices come from yfinance; broker connections are used for holdings sync only.
+
+The push side of that loop — from the scheduler tick to the browser — as a sequence:
+
+```mermaid
+sequenceDiagram
+    participant SCHED as Scheduler<br/>(Celery beat / APScheduler)
+    participant FETCH as fetch_prices task
+    participant YF as yfinance
+    participant DB as price_history / holdings
+    participant CM as ConnectionManager
+    participant WS as /ws/prices
+    participant FE as Frontend<br/>(use-price-stream hook)
+
+    Note over SCHED,FETCH: every 5 min while market open
+    SCHED->>FETCH: trigger fetch_prices
+    FETCH->>YF: poll quotes (15-min delayed for NSE)
+    alt yfinance ok
+        YF-->>FETCH: latest OHLCV
+    else yfinance fails / rate-limited
+        FETCH->>DB: read cached price (mark "stale")
+    end
+    FETCH->>DB: upsert price + recompute action_needed
+    FETCH->>CM: broadcast price update
+    CM->>WS: push to subscribed clients
+    WS-->>FE: {symbol, price, rsi, action_needed}
+    Note over FE: animate number transition,<br/>auto-reconnect with backoff on drop
+```
 
 ### Excel Import Flow
 
