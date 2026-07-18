@@ -107,11 +107,14 @@ The app keeps you signed in and quietly refreshes your session in the background
 2. Click **Set up Two-Factor Authentication**.
 3. Open an authenticator app (Google Authenticator, Authy, 1Password, etc.) and either **scan the QR code** shown or type in the **secret key** by hand.
 4. Your authenticator now shows a rotating 6-digit code. Type the current code into the app to **confirm** and finish setup.
-5. From now on, that code is required every time you log in.
+5. **Save your backup codes.** The app now shows **10 one-time backup codes**. Download or copy them and keep them somewhere safe — they're shown **only once**. Each code can be used **once** to log in if you ever lose your phone.
+6. From now on, that code is required every time you log in.
 
 **To turn 2FA off later:** return to Settings → Security, choose **Disable**, and enter a current code to confirm.
 
-> **Tip:** Store the secret key somewhere safe (a password manager). If you lose your phone and only have the QR, you'll want a backup.
+**If you lose your phone:** on the login screen, choose to enter a **backup code** instead of the 6-digit authenticator code. Each backup code works **once**. In **Settings → Security** you can check **how many codes remain** and **regenerate** a fresh set of 10 at any time (regenerating replaces any unused codes).
+
+> **Tip:** Store the secret key somewhere safe (a password manager), and keep your **backup codes** with it — either one will get you back in if you lose your phone.
 
 ### 2.4 Forgot your password?
 
@@ -413,6 +416,17 @@ You can download a consolidated report suitable for filing:
 
 You can also **bulk import/export tax records** as CSV from the Import and Reports pages (see [Section 16](#16-import-export--reports)).
 
+### 8.5 Holding Period Timer (India)
+
+Selling an Indian holding *just before* it crosses the one-year mark can cost you real money — the gain is taxed as **STCG at 20%** instead of **LTCG at 12.5%**. The **Holding Period Timer** card on the Tax page helps you avoid that trap.
+
+- Each of your **lots** (shares bought on a given date) is listed with the **number of days** until it has been held **over 12 months** and becomes **LTCG-eligible**.
+- Lots are sorted **soonest-first**, so the ones about to cross the line sit at the top.
+- Each row shows an **estimated tax saving** — how much less tax you'd pay by waiting for that lot to qualify (the 20% vs 12.5% difference on its current gain).
+- Lots that are **already eligible** are **badged** as such, so you can see at a glance which sales would already be long-term.
+
+> **Tip:** This is a planning aid, not a nudge to hold or sell. A stock can fall by more than the tax you'd save while you wait — weigh the timer against the actual price.
+
 ---
 
 ## 9. Mutual Funds & Dividends
@@ -465,6 +479,17 @@ Your stocks are only part of the picture. The **Net Worth** page pulls *everythi
 
 The page shows a **donut chart** breaking down your wealth by asset type and a single **total net worth** figure. Use the top-bar **display-currency** dropdown to see that total in INR, EUR, or USD.
 
+### 10.3 Emergency fund indicator
+
+A healthy emergency fund is usually measured in **months of expenses** you could cover without disturbing your long-term investments. The Net Worth page can work this out for you.
+
+1. Enter your **monthly expenses** in the emergency-fund box.
+2. The app adds up your **liquid assets** — **fixed deposits, crypto, and gold** all count as reachable at short notice — and divides by your monthly expenses to show **how many months** you're covered.
+3. Your **stocks** are shown **separately** (they're sellable, but you may not want to touch them in a crisis), while **bonds and real estate are excluded** as too slow to access.
+4. A status tells you where you stand: **Critical** (under 3 months), **Adequate** (3–6 months), or **Strong** (over 6 months).
+
+> **Tip:** Most planners suggest keeping **3–6 months** of expenses easily reachable. If the indicator shows **Critical**, consider topping up an FD or liquid fund before adding more to stocks.
+
 ---
 
 ## 11. Analytics & Risk
@@ -505,6 +530,28 @@ Open **Analytics** in the sidebar for deeper visual breakdowns, including:
 ### 11.5 Market Heatmap
 
 Open **Market Map** in the sidebar for a treemap of your holdings grouped by sector — each rectangle sized by weight and coloured by performance. A fast way to see what's driving your day.
+
+### 11.6 Cash Flow Timeline
+
+Open **Cash Flow** in the sidebar (under the **Analysis** group) for a month-by-month picture of the money moving through your portfolio.
+
+- **Money in** — cash you *received*: the proceeds of your **sells** plus your **dividends**.
+- **Money out** — cash you *invested*: the cost of your **buys**.
+- **Cumulative net** — a running line of in-minus-out over time, so you can see whether you've been a net buyer or a net seller across the period.
+- **Totals** — the summed money in, money out, and net figure for the whole range.
+
+It's a quick way to answer "how much did I actually put in this year?" and to spot the months you were most active.
+
+### 11.7 Portfolio hedge calculator
+
+On the Risk dashboard you'll also find a **hedge calculator** that gives you a rough idea of what it might cost to protect your portfolio against a market fall using **index put options**.
+
+1. Choose how much of your portfolio you want to protect — the **protection %** (for example, guarding against a drop past 90% of today's value).
+2. Set the **horizon** — how long you want the protection to last.
+3. Enter an **implied volatility** figure for the index.
+4. The calculator estimates the **premium** such protection would cost, shown as an amount and as a percentage of your portfolio.
+
+> **This is a rough estimate, not advice.** It uses a simplified model to give you a feel for the order of magnitude — it is **not** a real option-pricing engine and does not account for the many factors a live trade involves. Never place a hedge on this number alone; check live option prices and speak to a professional.
 
 ---
 
@@ -575,7 +622,17 @@ Open **Compare** in the sidebar to put **2–3 stocks side by side**.
 
 You get a **metrics table** (current price, day change, 52-week high/low, P/E, market cap, volume, dividend yield, beta) plus a **normalised price chart** where every stock is rebased to 100 at the start — a true apples-to-apples view.
 
-### 13.3 Corporate actions
+### 13.3 Peer comparison
+
+Where [Compare](#132-compare-stocks) lets you line up stocks *you* pick, **Peer Comparison** picks the peers *for* you — a fast way to see how one company stacks up against others in its industry.
+
+1. Enter a **symbol**.
+2. The app **auto-detects the stock's sector** and pulls a **curated set of sector peers** to compare it against.
+3. You get a **metrics table** putting the stock side by side with its peers, so you can judge whether it looks cheap or expensive relative to the pack.
+
+> **Tip:** Peer Comparison uses a curated peer list, so treat it as a starting point for research rather than an exhaustive scan of every competitor.
+
+### 13.4 Corporate actions
 
 Open **Corporate Actions** in the sidebar. The app detects **stock splits** and **bonus issues** on your holdings and adjusts them for you.
 
@@ -584,13 +641,13 @@ Open **Corporate Actions** in the sidebar. The app detects **stock splits** and 
 3. Click **Apply** to adjust the holding (quantity multiplied, average price divided by the ratio) or **Dismiss** to ignore it.
 4. Applied and dismissed actions move to **History**, so you always have a record.
 
-### 13.4 Economic & earnings calendars
+### 13.5 Economic & earnings calendars
 
 - **Economic Calendar** — upcoming catalysts for your portfolio in one chronological agenda, tagged **Earnings**, **Ex-Dividend**, or **Macro** (each with a region flag and, for macro, a low/medium/high importance mark). Filter pills at the top let you show one type at a time.
 - **Earnings** — a monthly calendar grid of earnings dates for all your holdings, with urgency badges; click a date to see who reports that day.
 - **SIP Calendar** — a monthly grid combining your recurring investments (SIPs), dividends, and earnings, with color-coded dots. SIP dates are auto-detected from recurring transaction patterns.
 
-### 13.5 IPO tracker
+### 13.6 IPO tracker
 
 Open **IPO Tracker** in the sidebar to browse upcoming, open, and recently listed IPOs across the **Upcoming / Open / Listed** tabs.
 
@@ -739,6 +796,7 @@ Choose your AI provider and (if using a cloud one) paste your **API key** for Op
 
 - **Change Password** — enter your current password and a new one.
 - **Two-Factor Authentication** — set up or disable 2FA (see [2.3](#23-turn-on-two-factor-authentication-2fa)).
+- **Backup codes** — when you enable 2FA you receive **10 one-time backup codes**; use one to log in if you lose your phone (each works once). This is where you see **how many remain** and can **regenerate** a fresh set (see [2.3](#23-turn-on-two-factor-authentication-2fa)).
 
 ### 17.5 Data backup
 
@@ -859,6 +917,7 @@ graph TD
     AN --- A5[Market Map]
     AN --- A6[Earnings]
     AN --- A7[Economic Calendar]
+    AN --- A8[Cash Flow]
 
     PL --- L1[Goals]
     PL --- L2[Tax]

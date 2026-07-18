@@ -33,7 +33,8 @@ This guide walks you through everything you need to know to use FinanceTracker e
 23. [Market Heatmap](#market-heatmap)
 24. [Futures & Options (F&O)](#futures--options-fo)
 25. [SIP Calendar](#sip-calendar)
-26. [Settings and Configuration](#settings-and-configuration)
+26. [Cash Flow Timeline](#cash-flow-timeline)
+27. [Settings and Configuration](#settings-and-configuration)
 
 ---
 
@@ -71,7 +72,7 @@ If you cannot log in:
 
 For your security, the app always responds with "if that email exists, a reset link was sent" -- it never reveals whether an email is registered.
 
-If you have Two-Factor Authentication enabled, you will also be asked for your 6-digit authenticator code when logging in.
+If you have Two-Factor Authentication enabled, you will also be asked for your 6-digit authenticator code when logging in -- or one of your one-time backup codes if you cannot reach your authenticator (see [Settings and Configuration](#settings-and-configuration)).
 
 ---
 
@@ -293,6 +294,10 @@ The Compare page puts 2-3 stocks side by side.
 
 You get a metrics table (current price, day change, 52-week high/low, P/E ratio, market cap, volume, dividend yield, and beta) plus a normalized price chart where each stock's price is rebased to 100 at the start of the period, for an apples-to-apples comparison.
 
+### Peer Comparison
+
+The Compare page can also stack a stock up against its **sector peers**. Pick a stock and the app pulls a curated set of same-sector names -- for NSE these cover Banking, IT, Energy, FMCG, Auto, Pharma, and Metals (a few XETRA sectors are covered too) -- and lays them out in a side-by-side metrics table, so you can see how your stock ranks within its industry.
+
 ---
 
 ## Stock Screener
@@ -438,6 +443,10 @@ A diversification card grades how well spread out your portfolio is, based on ho
 
 A table breaks down each holding's beta, correlation, volatility, weight, and contribution to your overall portfolio risk.
 
+### Portfolio Hedge Calculator
+
+This panel gives an **informational estimate** of what it would cost to protect your portfolio's downside using index put options -- roughly how much buying protective puts against a market index would cost for a portfolio your size. It is a rough guide to help you think about hedging costs, **not investment advice**, and the app does not place any trades on your behalf.
+
 ---
 
 ## Tax Features
@@ -470,6 +479,10 @@ Go to **Tax** in the sidebar to see:
 - Year-wise summary of gains and losses
 - STCG vs LTCG breakdown
 - Tax harvesting suggestions ("sell these losing stocks to save on tax")
+
+### Holding-Period Timer
+
+For Indian holdings, the Tax page shows a per-lot countdown to **LTCG eligibility** -- the point 12 months after purchase when a lot's gains switch from short-term (20%) to long-term (12.5%). Each lot shows how long it has left to qualify and the **estimated tax saving** you unlock by holding it past that mark, so you can avoid selling just before a lot turns long-term.
 
 ### Capital Gains Tax Report
 
@@ -583,6 +596,10 @@ Track your total net worth across all asset types, not just stocks.
 
 The page shows a donut chart breakdown by asset type and a total net worth figure.
 
+### Emergency-Fund Indicator
+
+Enter your **monthly expenses** on the Net Worth page to see how many months your **liquid assets** (fixed deposits, crypto, and gold) would cover if your income stopped. Stocks are counted separately, since they are less readily accessible in an emergency. The indicator shows a **critical**, **adequate**, or **strong** status so you can tell at a glance whether your safety net is large enough.
+
 ---
 
 ## ESG Scoring
@@ -664,6 +681,17 @@ View all your recurring investments (SIPs), dividends, and earnings in one calen
 
 ---
 
+## Cash Flow Timeline
+
+The Cash Flow page shows how money has moved through your portfolio over time.
+
+1. Go to **Cash Flow** from the sidebar (under *Analysis*)
+2. Each month shows money **in** and **out** -- buys and sells, plus dividends received
+3. A combined bar-and-line chart plots the monthly flows as bars and your **cumulative net** as a line
+4. Totals summarise money in, money out, and net flow across the whole period
+
+---
+
 ## Settings and Configuration
 
 ### Display Settings
@@ -688,6 +716,7 @@ The **Security** section in Settings covers your account protection:
 
 - **Change Password**: Enter your current password and a new one
 - **Two-Factor Authentication (2FA)**: Set up an authenticator app (scan the QR / enter the secret, then confirm with a code). You can disable 2FA later with a current code.
+- **Backup Codes**: When you enable 2FA, the app issues **10 one-time recovery codes** -- save them somewhere safe. If you ever lose access to your authenticator, you can enter one of these codes instead of the 6-digit code at login. Each code works **only once**. The Security section shows how many codes you have left and lets you **regenerate** a fresh set at any time (which invalidates the old ones).
 
 ### Data Backup
 

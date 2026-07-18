@@ -100,6 +100,7 @@ erDiagram
         string email UK
         string password_hash
         string totp_secret "nullable (2FA)"
+        json totp_backup_codes "nullable (hashed 2FA recovery codes)"
         string phone "nullable"
         string telegram_chat_id "nullable"
         string preferred_currency
@@ -277,6 +278,7 @@ The central user account table.
 | `email` | VARCHAR(255) | UNIQUE, NOT NULL, INDEX | Login email address |
 | `password_hash` | VARCHAR(255) | NOT NULL | bcrypt-hashed password |
 | `totp_secret` | VARCHAR(255) | NULLABLE | TOTP 2FA secret (stored in plaintext) |
+| `totp_backup_codes` | JSON | NULLABLE | List of SHA-256 hashed one-time 2FA backup (recovery) codes; each is consumed on use. Null when 2FA is disabled |
 | `phone` | VARCHAR(32) | NULLABLE | E.164 phone (e.g. +919876543210) for WhatsApp/SMS notification channels |
 | `telegram_chat_id` | VARCHAR(64) | NULLABLE | Per-user Telegram chat id (alerts go to each user, not one global chat) |
 | `display_name` | VARCHAR(255) | NOT NULL, DEFAULT '' | Name shown in UI |
@@ -859,13 +861,14 @@ cd backend && uv run alembic history
 
 Migration files use Alembic's default hash-prefixed pattern: `<revision_hash>_<description>.py`
 
-The 6 current migrations in `backend/alembic/versions/` (head is `d2e3f4a5b6c7`):
+The 7 current migrations in `backend/alembic/versions/` (head is `e3f4a5b6c7d8`):
 - `b388e46e4f03_initial_schema.py`
 - `9ec39aff1e92_add_currency_to_holdings.py`
 - `8809e230b920_add_unique_constraint_holding_portfolio_.py`
 - `abf5040f074b_add_asset_and_fno_position_tables.py`
 - `c1f2a3b4d5e6_add_phone_telegram_and_password_resets.py` -- adds `users.phone`, `users.telegram_chat_id`, and the `password_resets` table
 - `d2e3f4a5b6c7_add_fund_type_tax_settings_corp_actions.py` -- adds `holdings.fund_type`, `mutual_funds.fund_type`, `user_preferences.tax_settings`, and the `corporate_actions` table
+- `e3f4a5b6c7d8_add_totp_backup_codes.py` -- adds `users.totp_backup_codes`
 
 ---
 

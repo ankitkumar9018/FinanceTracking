@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [0.11.0] - 2026-07 (Timers, Cash Flow, Hedging & 2FA Recovery)
+
+### Added — Tax
+- **Holding-period timer**: per-lot countdown to Indian LTCG eligibility (>12 months held), with the estimated tax saving once each lot crosses the long-term threshold — shown on the Tax page
+
+### Added — Analytics
+- **Cash-flow timeline** — new `/cash-flow` page (sidebar **Cash Flow**, under *Analysis*): monthly money in/out (buys, sells, dividends) with cumulative net, shown as a combined bar-and-line chart plus period totals
+
+### Added — Planning & Risk
+- **Emergency-fund indicator** (Net Worth page): enter your monthly expenses to see how many months your liquid assets (FD / crypto / gold; stocks counted separately) would cover, with a **critical / adequate / strong** status
+- **Portfolio hedge calculator** (Risk page): an informational estimate of the cost of index-put downside protection for your portfolio — clearly labelled as an estimate, not investment advice
+
+### Added — Discovery
+- **Peer comparison** (Compare page): benchmark a stock against curated sector peers — Banking / IT / Energy / FMCG / Auto / Pharma / Metals for NSE, plus a few XETRA sectors — in a side-by-side metrics table
+
+### Added — Security
+- **2FA backup codes**: enabling Two-Factor Authentication now issues **10 one-time recovery codes**; each is single-use at login if you lose your authenticator, with a remaining-count display and a regenerate action (new `e3f4a5b6c7d8` migration adds TOTP backup codes)
+
+---
+
 ## [0.10.0] - 2026-07 (Tax Correctness, Planning & Discovery)
 
 ### Added — Tax Correctness
@@ -264,8 +284,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 | REST API endpoints | 171 |
 | WebSocket channels | 2 |
 | Backend tests passing | 352 |
-| Frontend routes (`page.tsx`) | 38 (31 dashboard) |
-| Alembic migrations | 6 |
+| Frontend routes (`page.tsx`) | 39 (32 dashboard) |
+| Alembic migrations | 7 (head `e3f4a5b6c7d8`) |
 | E2E tests | 32 |
 | SQLAlchemy models | 21 |
-| Sidebar nav items | 32 |
+| Sidebar nav items | 33 |

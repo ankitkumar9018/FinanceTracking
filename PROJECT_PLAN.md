@@ -812,21 +812,21 @@ Beyond the PDF requirements, these concrete features enhance the user experience
 ### Income & Cash Flow
 6. **Dividend Calendar** ✅ — Heatmap showing expected dividend dates and amounts
 7. **SIP Tracker** ✅ — Track active SIPs, upcoming debits, SIP returns
-8. **Cash Flow Timeline** — Visualize money in/out over time
+8. **Cash Flow Timeline** ✅ — Visualize money in/out over time
 
 ### Risk & Protection
 9. **Stop-Loss Tracker** ✅ — Set stop-loss levels, get alerts when approaching
-10. **Portfolio Insurance Calculator** — Suggest hedging with index puts (informational only)
-11. **Emergency Fund Indicator** — Track if user has adequate liquid assets
+10. **Portfolio Insurance Calculator** ✅ — Suggest hedging with index puts (informational only)
+11. **Emergency Fund Indicator** ✅ — Track if user has adequate liquid assets
 
 ### Tax Optimization
 12. **Tax Harvesting Assistant** ✅ — "You can save ₹X by selling these losing stocks before March 31"
-13. **Holding Period Timer** — "Stock X becomes LTCG eligible in 45 days — hold to save ₹Y in tax"
+13. **Holding Period Timer** ✅ — "Stock X becomes LTCG eligible in 45 days — hold to save ₹Y in tax"
 14. **Annual Tax Summary** ✅ — One-click downloadable tax statement for CA/tax filing
 
 ### Comparison & Research
 15. **Stock Comparison Tool** ✅ — Compare 2-3 stocks side by side (price, RSI, PE, fundamentals)
-16. **Peer Comparison** — Compare stock performance within its sector
+16. **Peer Comparison** ✅ — Compare stock performance within its sector
 17. **IPO Tracker** ✅ — Track upcoming and recent IPOs with listing performance
 
 ### Export & Reports

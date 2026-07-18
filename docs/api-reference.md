@@ -100,7 +100,7 @@ POST /auth/login
 }
 ```
 
-The `totp_code` field is only required if the user has 2FA enabled.
+The `totp_code` field is only required if the user has 2FA enabled. A one-time backup code may be supplied in the `totp_code` field instead of an authenticator code — it is verified as a TOTP fallback and consumed on use (single-use).
 
 **Response** `200 OK`:
 ```json
@@ -248,11 +248,58 @@ POST /auth/2fa/verify
 ```json
 {
   "verified": true,
-  "message": "2FA is now active"
+  "message": "2FA is now active",
+  "backup_codes": [
+    "3f8a-1c2d", "9b0e-4a7f", "2d5c-8e1b", "6a3f-0c9d", "7e2b-5f4a",
+    "1c8d-3b6e", "0f4a-9d2c", "8b7e-1a5f", "5d3c-6e0b", "4a9f-2c8d"
+  ]
 }
 ```
 
-There are no backup codes; keep the TOTP secret safe.
+On activation, 10 one-time backup (recovery) codes are returned **exactly once** — store them now, as they are never shown again. Each code is `xxxx-xxxx` formatted, works a single time in place of a TOTP code (at login), and matching is case- and separator-insensitive. Only SHA-256 hashes are persisted server-side.
+
+### Backup Codes Status
+
+Return how many unused 2FA backup codes remain. The codes themselves are never returned.
+
+```
+GET /auth/2fa/backup-codes/status
+```
+
+**Response** `200 OK`:
+```json
+{
+  "remaining": 8
+}
+```
+
+### Regenerate Backup Codes
+
+Generate a fresh set of 10 backup codes, invalidating any previous ones. Requires a current TOTP code (`400` if 2FA is not enabled or the code is invalid). The raw codes are returned exactly once.
+
+```
+POST /auth/2fa/backup-codes/regenerate
+```
+
+**Request Body:**
+```json
+{
+  "code": "123456"
+}
+```
+
+**Response** `200 OK`:
+```json
+{
+  "backup_codes": [
+    "3f8a-1c2d", "9b0e-4a7f", "2d5c-8e1b", "6a3f-0c9d", "7e2b-5f4a",
+    "1c8d-3b6e", "0f4a-9d2c", "8b7e-1a5f", "5d3c-6e0b", "4a9f-2c8d"
+  ],
+  "message": "Save these backup codes now — each works once and they will not be shown again."
+}
+```
+
+Disabling 2FA (`POST /auth/2fa/disable`) clears any stored backup codes.
 
 ---
 
@@ -915,6 +962,39 @@ Estimated German Vorabpauschale (advance lump-sum tax) per German fund holding i
 |---|---|---|---|
 | `year` | int | *(current year)* | Tax year |
 
+### LTCG Holding-Period Timer
+
+```
+GET /tax/holding-period/{portfolio_id}
+```
+
+Per-FIFO-lot countdown to Indian LTCG eligibility. For every still-open FIFO buy lot of each Indian (NSE/BSE) holding, reports when the lot crosses the 12-calendar-month mark and becomes LTCG-eligible (taxed at 12.5% instead of the 20% STCG rate). `days_remaining` counts down to `ltcg_date` (0 or negative = already LTCG). German / other-jurisdiction holdings are skipped — the short-/long-term split is India-specific. Where a live price is available, STCG lots within 30 days of eligibility carry a best-effort `potential_tax_saving` = unrealized gain × (20% − 12.5%). Lots are sorted soonest-to-eligible first. Returns `404` if the portfolio does not belong to the user.
+
+**Response** `200 OK`:
+```json
+{
+  "portfolio_id": 1,
+  "lots": [
+    {
+      "stock_symbol": "RELIANCE",
+      "purchase_date": "2024-08-20",
+      "quantity": 50,
+      "ltcg_date": "2025-08-20",
+      "days_remaining": 24,
+      "status": "STCG",
+      "potential_tax_saving": 1725.00
+    }
+  ],
+  "summary": {
+    "stcg_lots": 1,
+    "ltcg_lots": 3,
+    "next_eligible_date": "2025-08-20"
+  }
+}
+```
+
+`potential_tax_saving` is `null` for lots outside the 30-day window, without a live price, or with no unrealized gain. `next_eligible_date` is `null` when there are no STCG lots.
+
 ### Update Tax Settings
 
 ```
@@ -1282,6 +1362,42 @@ GET /indicators/risk/{portfolio_id}
   "alpha": 2.1,
   "information_ratio": 0.45,
   "calmar_ratio": 1.1
+}
+```
+
+### Portfolio Hedge Estimate
+
+```
+GET /indicators/hedge/{portfolio_id}
+```
+
+A rough, **informational** estimate of the cost of hedging portfolio downside with index puts. This is NOT an options quote or trade advice — the premium is a crude heuristic, not a real option price. Portfolio value is summed from holdings (`quantity × current_price`, falling back to average price); beta reuses the risk calculator's portfolio beta when available (else defaults to `1.0`). Returns `404` if the portfolio does not belong to the user.
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `protection_pct` | float | 80.0 | Share of notional to protect (0–100) |
+| `months` | float | 3.0 | Hedge horizon in months (>0, ≤24) |
+| `implied_vol_pct` | float | 20.0 | Assumed implied volatility % (0–200) |
+| `index_price` | float | 0.0 | Hedging index level; `0` (or omitted) uses the service default |
+
+**Response** `200 OK`:
+```json
+{
+  "portfolio_value": 1250000.00,
+  "beta": 0.92,
+  "notional_hedged": 920000.00,
+  "index_price": 22000.00,
+  "puts_needed": 41.8182,
+  "est_premium_per_put": 440.00,
+  "est_total_cost": 18400.00,
+  "cost_pct_of_portfolio": 1.472,
+  "assumptions": {
+    "implied_vol_pct": 20.0,
+    "months": 3.0,
+    "protection_pct": 80.0
+  },
+  "disclaimer": "..."
 }
 ```
 
@@ -1654,6 +1770,37 @@ Returns total net worth with breakdown by asset type (STOCK, CRYPTO, GOLD, FIXED
 |---|---|---|---|
 | `display_currency` | string | *(stored preference)* | Optional currency override (e.g. `INR`/`EUR`/`USD`). When set, totals are converted into this currency for this response only; the stored `preferred_currency` is left unchanged. |
 
+### Emergency Fund
+
+```
+GET /net-worth/emergency-fund
+```
+
+Liquid-asset runway indicator — how many months of expenses your liquid assets cover. Liquidity classes: **liquid** (`FIXED_DEPOSIT`, `CRYPTO`, `GOLD`), **semi-liquid** (`STOCK`, reported separately via the `*_incl_stocks` fields), **illiquid** (`BOND`, `REAL_ESTATE`, excluded). `status` is derived from core liquid coverage (excluding stocks): `critical` < 3 months, `adequate` 3–6 months, `strong` > 6 months. When `monthly_expenses` ≤ 0, `status` is `"unknown"` and the `months_covered` fields are `null` (so the UI can prompt for input). Values are in the base currency (or `display_currency` when supplied).
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `monthly_expenses` | float | *(required)* | Estimated monthly living expenses in the base currency |
+| `display_currency` | string | *(stored preference)* | Optional currency override; converts figures for this response only, same semantics as `GET /net-worth` |
+
+**Response** `200 OK`:
+```json
+{
+  "liquid_value": 480000.00,
+  "liquid_incl_stocks": 1730000.00,
+  "monthly_expenses": 80000.00,
+  "months_covered": 6.0,
+  "months_covered_incl_stocks": 21.63,
+  "status": "adequate",
+  "currency": "INR",
+  "breakdown": [
+    {"asset_type": "FIXED_DEPOSIT", "value": 300000.00, "liquid": true},
+    {"asset_type": "STOCK", "value": 1250000.00, "liquid": false}
+  ]
+}
+```
+
 ### Add Asset
 
 ```
@@ -1956,6 +2103,40 @@ Computes daily drawdown from peak for the portfolio over the specified period.
 }
 ```
 
+### Cash Flow
+
+```
+GET /analytics/cash-flow/{portfolio_id}
+```
+
+Monthly money-in / money-out timeline plus a running cumulative, aggregated per calendar month (`YYYY-MM`) across a contiguous month range. Money out (negative): `invested_out` = BUY transactions, `-(quantity × price + brokerage)`. Money in (positive): `realized_in` = SELL transactions net of brokerage, and `dividends_in` = dividend cash (booked on payment date, falling back to ex-date). `net` is the sum of the three per month. All amounts are in the portfolio's currency. Returns `404` if the portfolio does not belong to the user.
+
+**Response** `200 OK`:
+```json
+{
+  "portfolio_id": 1,
+  "currency": "INR",
+  "monthly": [
+    {
+      "month": "2024-11",
+      "invested_out": -122500.00,
+      "realized_in": 0.00,
+      "dividends_in": 550.00,
+      "net": -121950.00
+    }
+  ],
+  "totals": {
+    "total_invested": -122500.00,
+    "total_realized": 0.00,
+    "total_dividends": 550.00,
+    "net_cash_flow": -121950.00
+  },
+  "cumulative": [
+    {"month": "2024-11", "cumulative_net": -121950.00}
+  ]
+}
+```
+
 ### Economic / Macro Calendar
 
 ```
@@ -2034,6 +2215,58 @@ GET /comparison/compare
 | `symbols` | string | Yes | Comma-separated (up to 3): `RELIANCE,TCS,INFY` |
 | `exchanges` | string | No | Comma-separated exchanges (default `NSE`) |
 | `days` | int | No | Comparison period (default 90, 7–365) |
+
+### Peer Comparison
+
+```
+GET /comparison/peers/{symbol}
+```
+
+Compares a single stock against a curated set of sector peers. Returns the target stock's `sector`, its own metrics (`target`), and a list of peer metrics, plus a `coverage_note` describing the peer set. Any metric that could not be fetched comes back `null`.
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `exchange` | string | `NSE` | Exchange for the symbol |
+
+**Response** `200 OK`:
+```json
+{
+  "symbol": "HDFCBANK",
+  "sector": "Banking",
+  "target": {
+    "symbol": "HDFCBANK",
+    "name": "HDFC Bank Ltd",
+    "current_price": 1580.00,
+    "day_change_pct": -0.75,
+    "pe_ratio": 18.4,
+    "market_cap": 12000000000000,
+    "dividend_yield": 1.2,
+    "week_52_high": 1750.00,
+    "week_52_low": 1360.00,
+    "week_52_position": 56.3,
+    "beta": 0.95
+  },
+  "peers": [
+    {
+      "symbol": "ICICIBANK",
+      "name": "ICICI Bank Ltd",
+      "current_price": 1080.00,
+      "day_change_pct": 0.42,
+      "pe_ratio": 17.1,
+      "market_cap": 7600000000000,
+      "dividend_yield": 0.8,
+      "week_52_high": 1150.00,
+      "week_52_low": 900.00,
+      "week_52_position": 72.0,
+      "beta": 0.88
+    }
+  ],
+  "coverage_note": "..."
+}
+```
+
+`target` is `null` when the target symbol's metrics cannot be fetched. `week_52_position` is the price's 0–100% position within its 52-week range.
 
 ### XIRR Calculation
 
@@ -2155,7 +2388,9 @@ Endpoints not covered in detail above, one line each:
 
 ### Auth
 - `GET /auth/me` — get the current authenticated user (includes `totp_enabled`, `phone`, `telegram_chat_id`)
-- `POST /auth/2fa/disable` — disable 2FA after verifying a current TOTP code (`{"code": "123456"}`)
+- `POST /auth/2fa/disable` — disable 2FA after verifying a current TOTP code (`{"code": "123456"}`); also clears any stored backup codes
+- `GET /auth/2fa/backup-codes/status` — count of unused 2FA backup codes remaining (see [Authentication](#authentication))
+- `POST /auth/2fa/backup-codes/regenerate` — regenerate 2FA backup codes; requires a current TOTP code (see [Authentication](#authentication))
 
 ### Portfolios & Holdings
 - `GET /portfolios/{portfolio_id}` — get a single portfolio
