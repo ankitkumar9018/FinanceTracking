@@ -8,11 +8,19 @@ Write-Host "  FinanceTracker - Service Health" -ForegroundColor Blue
 Write-Host "===================================================" -ForegroundColor Blue
 Write-Host ""
 
+# Resolve the actual ports chosen at launch (fall back to 8420 / 3000)
+$ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$LogsDir = Join-Path $ProjectRoot "logs"
+$bPortFile = Join-Path $LogsDir "backend.port"
+$fPortFile = Join-Path $LogsDir "frontend.port"
+$bPort = if (Test-Path $bPortFile) { Get-Content $bPortFile } else { "8420" }
+$fPort = if (Test-Path $fPortFile) { Get-Content $fPortFile } else { "3000" }
+
 # Backend API
 try {
-    $resp = Invoke-WebRequest -Uri "http://localhost:8420/health" -TimeoutSec 2 -ErrorAction Stop
+    $resp = Invoke-WebRequest -Uri "http://localhost:$bPort/health" -TimeoutSec 2 -ErrorAction Stop
     if ($resp.Content -match "healthy") {
-        Write-Host "  Backend API:     " -NoNewline; Write-Host "Healthy" -ForegroundColor Green -NoNewline; Write-Host "  http://localhost:8420"
+        Write-Host "  Backend API:     " -NoNewline; Write-Host "Healthy" -ForegroundColor Green -NoNewline; Write-Host "  http://localhost:$bPort"
     } else {
         Write-Host "  Backend API:     " -NoNewline; Write-Host "Unhealthy" -ForegroundColor Red
     }
@@ -22,8 +30,8 @@ try {
 
 # Web App
 try {
-    Invoke-WebRequest -Uri "http://localhost:3000" -TimeoutSec 2 -ErrorAction Stop | Out-Null
-    Write-Host "  Web App:         " -NoNewline; Write-Host "Running" -ForegroundColor Green -NoNewline; Write-Host "  http://localhost:3000"
+    Invoke-WebRequest -Uri "http://localhost:$fPort" -TimeoutSec 2 -ErrorAction Stop | Out-Null
+    Write-Host "  Web App:         " -NoNewline; Write-Host "Running" -ForegroundColor Green -NoNewline; Write-Host "  http://localhost:$fPort"
 } catch {
     Write-Host "  Web App:         " -NoNewline; Write-Host "Down" -ForegroundColor Red
 }

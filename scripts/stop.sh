@@ -32,19 +32,15 @@ stop_service() {
     fi
 }
 
-# Stop application services
+# Stop only OUR own services, by the exact PID we recorded when starting them.
+# We deliberately do NOT kill by port or by bare process name — that would kill
+# other apps (another uvicorn, another frontend on 3000, the app on 8000, ...).
 stop_service "uvicorn"
 stop_service "celery"
 stop_service "nextjs"
 stop_service "ollama"
 
-# Kill by port as backup
-lsof -ti:8420 2>/dev/null | xargs kill -9 2>/dev/null || true
-lsof -ti:3000 2>/dev/null | xargs kill -9 2>/dev/null || true
-
-# Kill by process name as backup
-pkill -f "uvicorn app.main:app" 2>/dev/null || true
-pkill -f "celery.*finance" 2>/dev/null || true
+rm -f "$PID_DIR/backend.port" "$PID_DIR/frontend.port"
 
 echo ""
 echo -e "${GREEN}All services stopped.${NC}"

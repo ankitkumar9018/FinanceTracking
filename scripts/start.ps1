@@ -119,19 +119,31 @@ Pop-Location
 Write-Host ""
 Write-Host "[4/6] Stopping existing services..." -ForegroundColor Yellow
 
-# Port-based kill
-foreach ($port in @(8420, 3000)) {
-    $conns = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
-    if ($conns) {
-        $pids = $conns | Select-Object -ExpandProperty OwningProcess -Unique
-        foreach ($pid in $pids) {
-            if ($pid -ne 0) { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue }
-        }
+# Stop only OUR own previous run (via PID files) — never kill by port or by
+# process name, so co-running apps (on 8000, 3000, other uvicorns, ...) are safe.
+foreach ($svc in @("uvicorn", "celery", "nextjs", "backend", "frontend")) {
+    $pf = Join-Path $LogsDir "$svc.pid"
+    if (Test-Path $pf) {
+        Stop-Process -Id (Get-Content $pf) -Force -ErrorAction SilentlyContinue
+        Remove-Item $pf -Force -ErrorAction SilentlyContinue
     }
 }
-Get-Process -Name "uvicorn" -ErrorAction SilentlyContinue | Stop-Process -Force
-Get-Process -Name "celery" -ErrorAction SilentlyContinue | Stop-Process -Force
-Write-Host "  [OK] Existing services stopped" -ForegroundColor Green
+Write-Host "  [OK] Previous FinanceTracker instance stopped (other apps untouched)" -ForegroundColor Green
+
+# Pick a free TCP port: try each preferred port, else an OS-assigned ephemeral one.
+function Find-FreePort {
+    param([int[]]$Preferred)
+    foreach ($p in $Preferred) {
+        try {
+            $l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $p)
+            $l.Start(); $l.Stop(); return $p
+        } catch { }
+    }
+    $l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $l.Start(); $port = $l.LocalEndpoint.Port; $l.Stop(); return $port
+}
+$BackendPort  = Find-FreePort @(8420,8421,8422,8423,8424,8425,8426,8427,8428,8429)
+$FrontendPort = Find-FreePort @(3000,3001,3002,3003,3004,3005)
 
 # ── Step 5: Start Services ───────────────────────────────────────────────────
 
@@ -139,15 +151,18 @@ Write-Host ""
 Write-Host "[5/6] Starting services..." -ForegroundColor Yellow
 
 if (-not (Test-Path $LogsDir)) { New-Item -ItemType Directory -Path $LogsDir -Force | Out-Null }
+"$BackendPort"  | Set-Content (Join-Path $LogsDir "backend.port")
+"$FrontendPort" | Set-Content (Join-Path $LogsDir "frontend.port")
 
-# Backend
+# Backend — on the chosen port; CORS allows the chosen frontend origin
 Push-Location $BackendDir
+$env:CORS_ORIGINS = "http://localhost:$FrontendPort,http://localhost:3000,http://localhost:1420,https://tauri.localhost"
 $backendProc = Start-Process -NoNewWindow -PassThru -FilePath "uv" `
-    -ArgumentList "run uvicorn app.main:app --reload --port 8420" `
+    -ArgumentList "run uvicorn app.main:app --reload --host 127.0.0.1 --port $BackendPort" `
     -RedirectStandardOutput (Join-Path $LogsDir "backend.log") `
     -RedirectStandardError (Join-Path $LogsDir "backend-err.log")
 $backendProc.Id | Set-Content (Join-Path $LogsDir "backend.pid")
-Write-Host "  [OK] Backend starting (PID: $($backendProc.Id))..." -ForegroundColor Green
+Write-Host "  [OK] Backend starting on port $BackendPort (PID: $($backendProc.Id))..." -ForegroundColor Green
 Pop-Location
 
 # Celery (optional, if Redis available)
@@ -162,15 +177,18 @@ if ($hasRedis) {
     Pop-Location
 }
 
-# Frontend
+# Frontend — on the chosen port; pointed at the backend we just started
 Push-Location $ProjectDir
 if (Test-Path (Join-Path $WebDir "package.json")) {
+    $env:PORT = "$FrontendPort"
+    $env:NEXT_PUBLIC_API_URL = "http://localhost:$BackendPort/api/v1"
+    $env:NEXT_PUBLIC_WS_URL  = "ws://localhost:$BackendPort"
     $frontendProc = Start-Process -NoNewWindow -PassThru -FilePath "pnpm" `
         -ArgumentList "--filter @finance-tracker/web dev" `
         -RedirectStandardOutput (Join-Path $LogsDir "frontend.log") `
         -RedirectStandardError (Join-Path $LogsDir "frontend-err.log")
     $frontendProc.Id | Set-Content (Join-Path $LogsDir "frontend.pid")
-    Write-Host "  [OK] Web App starting (PID: $($frontendProc.Id))..." -ForegroundColor Green
+    Write-Host "  [OK] Web App starting on port $FrontendPort (PID: $($frontendProc.Id))..." -ForegroundColor Green
 }
 Pop-Location
 
@@ -183,8 +201,8 @@ Write-Host "[6/6] Waiting for services..." -ForegroundColor Yellow
 $backendReady = $false
 for ($i = 1; $i -le 20; $i++) {
     try {
-        Invoke-WebRequest -Uri "http://localhost:8420/health" -TimeoutSec 1 -ErrorAction Stop | Out-Null
-        Write-Host "  [OK] Backend: http://localhost:8420" -ForegroundColor Green
+        Invoke-WebRequest -Uri "http://localhost:$BackendPort/health" -TimeoutSec 1 -ErrorAction Stop | Out-Null
+        Write-Host "  [OK] Backend: http://localhost:$BackendPort" -ForegroundColor Green
         $backendReady = $true
         break
     } catch {
@@ -197,8 +215,8 @@ if (-not $backendReady) { Write-Host "  [WARN] Backend still starting (check log
 $frontendReady = $false
 for ($i = 1; $i -le 20; $i++) {
     try {
-        Invoke-WebRequest -Uri "http://localhost:3000" -TimeoutSec 1 -ErrorAction Stop | Out-Null
-        Write-Host "  [OK] Web App: http://localhost:3000" -ForegroundColor Green
+        Invoke-WebRequest -Uri "http://localhost:$FrontendPort" -TimeoutSec 1 -ErrorAction Stop | Out-Null
+        Write-Host "  [OK] Web App: http://localhost:$FrontendPort" -ForegroundColor Green
         $frontendReady = $true
         break
     } catch {
@@ -210,9 +228,9 @@ if (-not $frontendReady) { Write-Host "  [WARN] Frontend still starting (check l
 Write-Host ""
 Write-Host "======================================================" -ForegroundColor Blue
 Write-Host "  FinanceTracker is running!" -ForegroundColor Green
-Write-Host "  Web:     http://localhost:3000" -ForegroundColor White
-Write-Host "  API:     http://localhost:8420" -ForegroundColor White
-Write-Host "  Docs:    http://localhost:8420/docs" -ForegroundColor White
+Write-Host "  Web:     http://localhost:$FrontendPort" -ForegroundColor White
+Write-Host "  API:     http://localhost:$BackendPort" -ForegroundColor White
+Write-Host "  Docs:    http://localhost:$BackendPort/docs" -ForegroundColor White
 Write-Host "======================================================" -ForegroundColor Blue
 Write-Host ""
 Write-Host "  To stop:  .\scripts\stop.ps1" -ForegroundColor White

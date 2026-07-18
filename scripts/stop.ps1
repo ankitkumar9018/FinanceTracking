@@ -18,22 +18,9 @@ foreach ($service in @("backend", "frontend")) {
     }
 }
 
-# Kill by port as fallback
-foreach ($port in @(8420, 3000)) {
-    $conns = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
-    if ($conns) {
-        $pids = $conns | Select-Object -ExpandProperty OwningProcess -Unique
-        foreach ($pid in $pids) {
-            if ($pid -ne 0) {
-                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
-                Write-Host "  Killed process on port $port (PID: $pid)" -ForegroundColor Green
-            }
-        }
-    }
-}
-
-# Kill by process name as last resort
-Get-Process -Name "uvicorn" -ErrorAction SilentlyContinue | Stop-Process -Force
-Get-Process -Name "celery" -ErrorAction SilentlyContinue | Stop-Process -Force
+# We only ever stop our OWN processes (via the PID files above) — we never kill
+# by port or by process name, so co-running apps are never touched.
+Remove-Item (Join-Path $LogsDir "backend.port")  -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $LogsDir "frontend.port") -Force -ErrorAction SilentlyContinue
 
 Write-Host "All services stopped." -ForegroundColor Green

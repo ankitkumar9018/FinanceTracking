@@ -69,8 +69,24 @@ kill_if_running() {
         fi
         rm -f "$pid_file"
     fi
-    # Also try to kill by process name
-    pkill -f "$name" 2>/dev/null || true
+    # NOTE: we deliberately do NOT `pkill -f "$name"` — a bare name like
+    # "uvicorn" or "celery" would kill those processes for OTHER apps too. We
+    # only ever stop the exact PID we started (recorded in the PID file).
+}
+
+# Pick a free TCP port: try each preferred port in order, else an OS-assigned
+# ephemeral one. Never grabs a port another app is already listening on.
+find_free_port() {
+    python3 - "$@" <<'PY'
+import socket, sys
+for p in sys.argv[1:]:
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", int(p))); s.close(); print(p); raise SystemExit(0)
+    except OSError:
+        s.close()
+s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()
+PY
 }
 
 # ── Step 1: Check Prerequisites ─────────────────────────────────────────────
@@ -199,14 +215,14 @@ fi
 echo ""
 echo -e "${YELLOW}[4/6] Stopping existing services...${NC}"
 
+# Stop only OUR own previous processes (via PID files) — never kill by port or
+# by bare process name, so co-running apps (other uvicorns, other frontends on
+# 3000, the app on 8000, ...) are never touched.
 kill_if_running "uvicorn"
 kill_if_running "celery"
-# Kill any existing Next.js dev server on port 3000
-lsof -ti:3000 2>/dev/null | xargs kill -9 2>/dev/null || true
-# Kill any existing uvicorn on port 8420
-lsof -ti:8420 2>/dev/null | xargs kill -9 2>/dev/null || true
+kill_if_running "nextjs"
 
-echo -e "  ${GREEN}✓${NC} Existing services stopped"
+echo -e "  ${GREEN}✓${NC} Previous FinanceTracker instance stopped (other apps untouched)"
 
 # ── Step 5: Start Services ──────────────────────────────────────────────────
 
@@ -235,11 +251,19 @@ if [ "$HAS_OLLAMA" = true ]; then
     fi
 fi
 
-# Start backend
+# Auto-pick free ports for both services (prefers 8420 / 3000, but skips to the
+# next free port automatically — never steals a port another app is using).
+BACKEND_PORT=$(find_free_port 8420 8421 8422 8423 8424 8425 8426 8427 8428 8429)
+FRONTEND_PORT=$(find_free_port 3000 3001 3002 3003 3004 3005)
+echo "$BACKEND_PORT" > "$PID_DIR/backend.port"
+echo "$FRONTEND_PORT" > "$PID_DIR/frontend.port"
+
+# Start backend on the chosen port (bound to localhost; CORS allows the frontend)
 cd "$BACKEND_DIR"
-uv run uvicorn app.main:app --reload --port 8420 --host 0.0.0.0 &>/dev/null &
+CORS_ORIGINS="http://localhost:$FRONTEND_PORT,http://localhost:3000,http://localhost:1420,https://tauri.localhost" \
+    uv run uvicorn app.main:app --reload --port "$BACKEND_PORT" --host 127.0.0.1 &>/dev/null &
 echo "$!" > "$PID_DIR/uvicorn.pid"
-echo -e "  ${GREEN}✓${NC} Backend: http://localhost:8420"
+echo -e "  ${GREEN}✓${NC} Backend: http://localhost:$BACKEND_PORT"
 
 # Start Celery (if Redis available)
 if [ "$HAS_REDIS" = true ] && redis-cli ping &>/dev/null; then
@@ -248,13 +272,16 @@ if [ "$HAS_REDIS" = true ] && redis-cli ping &>/dev/null; then
     echo -e "  ${GREEN}✓${NC} Celery worker started"
 fi
 
-# Start web app (if it exists)
+# Start web app (if it exists) on the chosen port, pointed at our backend
 cd "$PROJECT_DIR"
 if [ -d "$WEB_DIR" ] && [ -f "$WEB_DIR/package.json" ]; then
     cd "$WEB_DIR"
-    pnpm dev &>/dev/null &
+    PORT="$FRONTEND_PORT" \
+    NEXT_PUBLIC_API_URL="http://localhost:$BACKEND_PORT/api/v1" \
+    NEXT_PUBLIC_WS_URL="ws://localhost:$BACKEND_PORT" \
+        pnpm dev &>/dev/null &
     echo "$!" > "$PID_DIR/nextjs.pid"
-    echo -e "  ${GREEN}✓${NC} Web App: http://localhost:3000"
+    echo -e "  ${GREEN}✓${NC} Web App: http://localhost:$FRONTEND_PORT"
 fi
 
 # ── Step 6: Health Check ────────────────────────────────────────────────────
@@ -269,19 +296,19 @@ echo -e "${BLUE}  Service Status${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
 
 # Backend
-if curl -s http://localhost:8420/health &>/dev/null; then
-    echo -e "  Backend:   ${GREEN}Running ✓${NC}  http://localhost:8420"
+if curl -s "http://localhost:$BACKEND_PORT/health" &>/dev/null; then
+    echo -e "  Backend:   ${GREEN}Running ✓${NC}  http://localhost:$BACKEND_PORT"
 else
-    echo -e "  Backend:   ${YELLOW}Starting...${NC}  http://localhost:8420"
+    echo -e "  Backend:   ${YELLOW}Starting...${NC}  http://localhost:$BACKEND_PORT"
 fi
 
 # Web App
 if [ -d "$WEB_DIR" ] && [ -f "$WEB_DIR/package.json" ]; then
-    echo -e "  Web App:   ${GREEN}Running ✓${NC}  http://localhost:3000"
+    echo -e "  Web App:   ${GREEN}Running ✓${NC}  http://localhost:$FRONTEND_PORT"
 fi
 
 # API Docs
-echo -e "  API Docs:  ${GREEN}Available${NC}  http://localhost:8420/docs"
+echo -e "  API Docs:  ${GREEN}Available${NC}  http://localhost:$BACKEND_PORT/docs"
 
 # Redis
 if [ "$HAS_REDIS" = true ] && redis-cli ping &>/dev/null; then

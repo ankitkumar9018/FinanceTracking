@@ -24,6 +24,21 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "\n${CYAN}▶ $1${NC}"; }
 
+# Pick a free TCP port: try each preferred port in order, else let the OS assign
+# a free ephemeral one. Never grabs a port another app is already listening on.
+find_free_port() {
+    python3 - "$@" <<'PY'
+import socket, sys
+for p in sys.argv[1:]:
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", int(p))); s.close(); print(p); raise SystemExit(0)
+    except OSError:
+        s.close()
+s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()
+PY
+}
+
 # -----------------------------------------------------------------------------
 # STOP function
 # -----------------------------------------------------------------------------
@@ -49,18 +64,9 @@ do_stop() {
         rm -f "$LOGS_DIR/frontend.pid"
     fi
 
-    # Kill by port as fallback
-    if lsof -ti:8420 &> /dev/null; then
-        kill -9 $(lsof -ti:8420) 2>/dev/null || true
-        log_success "Killed process on port 8420"
-    fi
-
-    if lsof -ti:3000 &> /dev/null; then
-        kill -9 $(lsof -ti:3000) 2>/dev/null || true
-        log_success "Killed process on port 3000"
-    fi
-
-    pkill -f "uvicorn app.main:app" 2>/dev/null || true
+    # We only ever stop our OWN processes (via the PID files above) — we never
+    # kill by port, so a co-running app on 8000/3000/etc. is never touched.
+    rm -f "$LOGS_DIR/backend.port" "$LOGS_DIR/frontend.port"
 
     echo -e "${GREEN}FinanceTracker stopped.${NC}"
 }
@@ -72,18 +78,18 @@ do_status() {
     echo -e "${CYAN}FinanceTracker Status${NC}"
     echo ""
 
-    # Backend
-    if lsof -ti:8420 &> /dev/null; then
-        PID=$(lsof -ti:8420 | head -1)
-        echo -e "  Backend:  ${GREEN}Running${NC} (PID: $PID) - http://localhost:8420"
+    # Backend (read the actual chosen port from the runtime file)
+    BPORT=$(cat "$LOGS_DIR/backend.port" 2>/dev/null || echo "")
+    if [ -f "$LOGS_DIR/backend.pid" ] && kill -0 "$(cat "$LOGS_DIR/backend.pid" 2>/dev/null)" 2>/dev/null; then
+        echo -e "  Backend:  ${GREEN}Running${NC} (PID: $(cat "$LOGS_DIR/backend.pid"))${BPORT:+ - http://localhost:$BPORT}"
     else
         echo -e "  Backend:  ${RED}Stopped${NC}"
     fi
 
     # Frontend
-    if lsof -ti:3000 &> /dev/null; then
-        PID=$(lsof -ti:3000 | head -1)
-        echo -e "  Frontend: ${GREEN}Running${NC} (PID: $PID) - http://localhost:3000"
+    FPORT=$(cat "$LOGS_DIR/frontend.port" 2>/dev/null || echo "")
+    if [ -f "$LOGS_DIR/frontend.pid" ] && kill -0 "$(cat "$LOGS_DIR/frontend.pid" 2>/dev/null)" 2>/dev/null; then
+        echo -e "  Frontend: ${GREEN}Running${NC} (PID: $(cat "$LOGS_DIR/frontend.pid"))${FPORT:+ - http://localhost:$FPORT}"
     else
         echo -e "  Frontend: ${RED}Stopped${NC}"
     fi
@@ -195,22 +201,22 @@ do_start() {
     # -------------------------------------------------------------------------
     # Step 2: Stop existing processes
     # -------------------------------------------------------------------------
-    log_step "Step 2/6: Stopping existing processes..."
+    log_step "Step 2/6: Stopping any previous FinanceTracker instance..."
 
-    if lsof -ti:8420 &> /dev/null; then
-        kill -9 $(lsof -ti:8420) 2>/dev/null || true
-        log_warn "Killed process on port 8420"
-        sleep 1
-    fi
-
-    if lsof -ti:3000 &> /dev/null; then
-        kill -9 $(lsof -ti:3000) 2>/dev/null || true
-        log_warn "Killed process on port 3000"
-        sleep 1
-    fi
-
-    pkill -f "uvicorn app.main:app" 2>/dev/null || true
-    log_success "Ports 8420 and 3000 are free"
+    # Only stop OUR own previous run (via PID files). We never kill by port, so
+    # co-running apps (e.g. on 8000 or 3000) are never touched.
+    for svc in backend frontend; do
+        if [ -f "$LOGS_DIR/$svc.pid" ]; then
+            OLDPID=$(cat "$LOGS_DIR/$svc.pid")
+            if kill -0 "$OLDPID" 2>/dev/null; then
+                kill "$OLDPID" 2>/dev/null || true
+                log_warn "Stopped previous $svc (PID: $OLDPID)"
+                sleep 1
+            fi
+            rm -f "$LOGS_DIR/$svc.pid"
+        fi
+    done
+    log_success "Ready to start (other apps left untouched)"
 
     # -------------------------------------------------------------------------
     # Step 3: Install dependencies
@@ -270,35 +276,46 @@ EOF
 
     mkdir -p "$LOGS_DIR"
 
-    # Backend
+    # Auto-pick free ports for BOTH services (prefers 8420 / 3000, but never
+    # steals a port another app is using — falls through automatically).
+    BACKEND_PORT=$(find_free_port 8420 8421 8422 8423 8424 8425 8426 8427 8428 8429)
+    FRONTEND_PORT=$(find_free_port 3000 3001 3002 3003 3004 3005)
+    echo "$BACKEND_PORT" > "$LOGS_DIR/backend.port"
+    echo "$FRONTEND_PORT" > "$LOGS_DIR/frontend.port"
+
+    # Backend — on the chosen port; CORS allows the chosen frontend origin
     cd "$BACKEND_DIR"
-    log_info "Starting backend..."
-    uv run uvicorn app.main:app --host 127.0.0.1 --port 8420 > "$LOGS_DIR/backend.log" 2>&1 &
+    log_info "Starting backend on port $BACKEND_PORT..."
+    CORS_ORIGINS="http://localhost:$FRONTEND_PORT,http://localhost:3000,http://localhost:1420,https://tauri.localhost" \
+        uv run uvicorn app.main:app --host 127.0.0.1 --port "$BACKEND_PORT" > "$LOGS_DIR/backend.log" 2>&1 &
     BACKEND_PID=$!
     echo $BACKEND_PID > "$LOGS_DIR/backend.pid"
 
-    for i in {1..20}; do
-        if curl -s http://localhost:8420/health > /dev/null 2>&1; then
-            log_success "Backend running (PID: $BACKEND_PID)"
+    for i in {1..40}; do
+        if curl -s "http://localhost:$BACKEND_PORT/health" > /dev/null 2>&1; then
+            log_success "Backend running on port $BACKEND_PORT (PID: $BACKEND_PID)"
             break
         fi
-        [ $i -eq 20 ] && log_warn "Backend still starting..."
+        [ $i -eq 40 ] && log_warn "Backend still starting on port $BACKEND_PORT..."
         sleep 0.5
     done
 
-    # Frontend
+    # Frontend — on the chosen port; pointed at the backend we just started
     cd "$PROJECT_ROOT"
-    log_info "Starting frontend..."
-    pnpm --filter @finance-tracker/web dev > "$LOGS_DIR/frontend.log" 2>&1 &
+    log_info "Starting frontend on port $FRONTEND_PORT..."
+    PORT="$FRONTEND_PORT" \
+    NEXT_PUBLIC_API_URL="http://localhost:$BACKEND_PORT/api/v1" \
+    NEXT_PUBLIC_WS_URL="ws://localhost:$BACKEND_PORT" \
+        pnpm --filter @finance-tracker/web dev > "$LOGS_DIR/frontend.log" 2>&1 &
     FRONTEND_PID=$!
     echo $FRONTEND_PID > "$LOGS_DIR/frontend.pid"
 
-    for i in {1..20}; do
-        if curl -s http://localhost:3000 > /dev/null 2>&1; then
-            log_success "Frontend running (PID: $FRONTEND_PID)"
+    for i in {1..40}; do
+        if curl -s "http://localhost:$FRONTEND_PORT" > /dev/null 2>&1; then
+            log_success "Frontend running on port $FRONTEND_PORT (PID: $FRONTEND_PID)"
             break
         fi
-        [ $i -eq 20 ] && log_warn "Frontend still starting..."
+        [ $i -eq 40 ] && log_warn "Frontend still starting on port $FRONTEND_PORT..."
         sleep 0.5
     done
 
@@ -311,9 +328,9 @@ EOF
 
     # Open browser
     if [[ "$OS" == "Darwin" ]]; then
-        open http://localhost:3000 2>/dev/null &
+        open "http://localhost:$FRONTEND_PORT" 2>/dev/null &
     elif command -v xdg-open &> /dev/null; then
-        xdg-open http://localhost:3000 2>/dev/null &
+        xdg-open "http://localhost:$FRONTEND_PORT" 2>/dev/null &
     fi
 
     echo ""
@@ -321,9 +338,9 @@ EOF
     echo -e "${GREEN}║     FinanceTracker is now running!     ║${NC}"
     echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "  ${CYAN}🌐 App:${NC}      http://localhost:3000"
-    echo -e "  ${CYAN}🔌 API:${NC}      http://localhost:8420"
-    echo -e "  ${CYAN}📚 Docs:${NC}     http://localhost:8420/docs"
+    echo -e "  ${CYAN}🌐 App:${NC}      http://localhost:$FRONTEND_PORT"
+    echo -e "  ${CYAN}🔌 API:${NC}      http://localhost:$BACKEND_PORT"
+    echo -e "  ${CYAN}📚 Docs:${NC}     http://localhost:$BACKEND_PORT/docs"
     echo ""
     echo -e "  ${YELLOW}Commands:${NC}"
     echo -e "     ./run.sh stop     Stop all services"

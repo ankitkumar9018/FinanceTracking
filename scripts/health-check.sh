@@ -15,9 +15,15 @@ echo -e "${BLUE}  FinanceTracker — Service Health${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
 echo ""
 
+# Resolve the actual backend port chosen at launch (falls back to 8420)
+PID_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.pids"
+LOGS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/logs"
+BPORT=$(cat "$PID_DIR/backend.port" "$LOGS_DIR/backend.port" 2>/dev/null | head -1)
+BPORT=${BPORT:-8420}
+
 # Backend API
-if curl -s http://localhost:8420/health | grep -q "healthy" 2>/dev/null; then
-    echo -e "  Backend API:     ${GREEN}Healthy ✓${NC}  http://localhost:8420"
+if curl -s "http://localhost:$BPORT/health" | grep -q "healthy" 2>/dev/null; then
+    echo -e "  Backend API:     ${GREEN}Healthy ✓${NC}  http://localhost:$BPORT"
 else
     echo -e "  Backend API:     ${RED}Down ✗${NC}"
 fi

@@ -21,6 +21,20 @@ function Write-Warn  { param($msg) Write-Host "[WARN] $msg" -ForegroundColor Yel
 function Write-Err   { param($msg) Write-Host "[ERROR] $msg" -ForegroundColor Red }
 function Write-Step  { param($msg) Write-Host "`n> $msg" -ForegroundColor Cyan }
 
+# Pick a free TCP port: try each preferred port in order, else an OS-assigned
+# ephemeral one. Never grabs a port another app is already listening on.
+function Find-FreePort {
+    param([int[]]$Preferred)
+    foreach ($p in $Preferred) {
+        try {
+            $l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $p)
+            $l.Start(); $l.Stop(); return $p
+        } catch { }
+    }
+    $l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $l.Start(); $port = $l.LocalEndpoint.Port; $l.Stop(); return $port
+}
+
 function Stop-PortProcess {
     param([int]$Port)
     $conns = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
@@ -58,12 +72,10 @@ function Do-Stop {
         Remove-Item $frontendPid -Force
     }
 
-    # Kill by port as fallback
-    if (Stop-PortProcess 8420) { Write-Ok "Killed process on port 8420" }
-    if (Stop-PortProcess 3000) { Write-Ok "Killed process on port 3000" }
-
-    # Kill uvicorn by name as last resort
-    Get-Process -Name "uvicorn" -ErrorAction SilentlyContinue | Stop-Process -Force
+    # We only ever stop our OWN processes (via the PID files above) — we never
+    # kill by port or by process name, so co-running apps are never touched.
+    Remove-Item (Join-Path $LogsDir "backend.port")  -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $LogsDir "frontend.port") -Force -ErrorAction SilentlyContinue
 
     Write-Host "FinanceTracker stopped." -ForegroundColor Green
 }
@@ -74,18 +86,20 @@ function Do-Status {
     Write-Host "FinanceTracker Status" -ForegroundColor Cyan
     Write-Host ""
 
-    $port8420 = Get-NetTCPConnection -LocalPort 8420 -State Listen -ErrorAction SilentlyContinue
-    if ($port8420) {
-        $pid = ($port8420 | Select-Object -First 1).OwningProcess
-        Write-Host "  Backend:  " -NoNewline; Write-Host "Running" -ForegroundColor Green -NoNewline; Write-Host " (PID: $pid) - http://localhost:8420"
+    $bPidFile = Join-Path $LogsDir "backend.pid"
+    $bPortFile = Join-Path $LogsDir "backend.port"
+    $bPort = if (Test-Path $bPortFile) { Get-Content $bPortFile } else { "8420" }
+    if ((Test-Path $bPidFile) -and (Get-Process -Id (Get-Content $bPidFile) -ErrorAction SilentlyContinue)) {
+        Write-Host "  Backend:  " -NoNewline; Write-Host "Running" -ForegroundColor Green -NoNewline; Write-Host " - http://localhost:$bPort"
     } else {
         Write-Host "  Backend:  " -NoNewline; Write-Host "Stopped" -ForegroundColor Red
     }
 
-    $port3000 = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue
-    if ($port3000) {
-        $pid = ($port3000 | Select-Object -First 1).OwningProcess
-        Write-Host "  Frontend: " -NoNewline; Write-Host "Running" -ForegroundColor Green -NoNewline; Write-Host " (PID: $pid) - http://localhost:3000"
+    $fPidFile = Join-Path $LogsDir "frontend.pid"
+    $fPortFile = Join-Path $LogsDir "frontend.port"
+    $fPort = if (Test-Path $fPortFile) { Get-Content $fPortFile } else { "3000" }
+    if ((Test-Path $fPidFile) -and (Get-Process -Id (Get-Content $fPidFile) -ErrorAction SilentlyContinue)) {
+        Write-Host "  Frontend: " -NoNewline; Write-Host "Running" -ForegroundColor Green -NoNewline; Write-Host " - http://localhost:$fPort"
     } else {
         Write-Host "  Frontend: " -NoNewline; Write-Host "Stopped" -ForegroundColor Red
     }
@@ -165,13 +179,19 @@ function Do-Start {
         powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
     }
 
-    # -- Step 2: Stop existing processes --------------------------------------
-    Write-Step "Step 2/6: Stopping existing processes..."
+    # -- Step 2: Stop any previous FinanceTracker instance --------------------
+    Write-Step "Step 2/6: Stopping any previous FinanceTracker instance..."
 
-    Stop-PortProcess 8420 | Out-Null
-    Stop-PortProcess 3000 | Out-Null
-    Get-Process -Name "uvicorn" -ErrorAction SilentlyContinue | Stop-Process -Force
-    Write-Ok "Ports 8420 and 3000 are free"
+    # Only stop OUR own previous run (via PID files). We never kill by port or
+    # process name, so co-running apps (on 8000, 3000, ...) are never touched.
+    foreach ($svc in @("backend", "frontend")) {
+        $pf = Join-Path $LogsDir "$svc.pid"
+        if (Test-Path $pf) {
+            Stop-Process -Id (Get-Content $pf) -Force -ErrorAction SilentlyContinue
+            Remove-Item $pf -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Write-Ok "Ready to start (other apps left untouched)"
 
     # -- Step 3: Install dependencies -----------------------------------------
     Write-Step "Step 3/6: Installing dependencies..."
@@ -230,31 +250,42 @@ ENVIRONMENT=development
 
     if (-not (Test-Path $LogsDir)) { New-Item -ItemType Directory -Path $LogsDir -Force | Out-Null }
 
-    # Backend
+    # Auto-pick free ports for BOTH services (prefers 8420 / 3000; skips to the
+    # next free port automatically — never steals a port another app is using).
+    $BackendPort  = Find-FreePort @(8420,8421,8422,8423,8424,8425,8426,8427,8428,8429)
+    $FrontendPort = Find-FreePort @(3000,3001,3002,3003,3004,3005)
+    "$BackendPort"  | Set-Content (Join-Path $LogsDir "backend.port")
+    "$FrontendPort" | Set-Content (Join-Path $LogsDir "frontend.port")
+
+    # Backend — on the chosen port; CORS allows the chosen frontend origin
     Push-Location $BackendDir
-    Write-Info "Starting backend..."
+    Write-Info "Starting backend on port $BackendPort..."
+    $env:CORS_ORIGINS = "http://localhost:$FrontendPort,http://localhost:3000,http://localhost:1420,https://tauri.localhost"
     $backendLog = Join-Path $LogsDir "backend.log"
     $backendProc = Start-Process -NoNewWindow -PassThru -FilePath "uv" `
-        -ArgumentList "run uvicorn app.main:app --reload --host 0.0.0.0 --port 8420" `
+        -ArgumentList "run uvicorn app.main:app --reload --host 127.0.0.1 --port $BackendPort" `
         -RedirectStandardOutput $backendLog -RedirectStandardError (Join-Path $LogsDir "backend-err.log")
     $backendProc.Id | Set-Content (Join-Path $LogsDir "backend.pid")
     Pop-Location
 
     # Wait for backend
-    for ($i = 1; $i -le 20; $i++) {
+    for ($i = 1; $i -le 40; $i++) {
         try {
-            $resp = Invoke-WebRequest -Uri "http://localhost:8420/health" -TimeoutSec 1 -ErrorAction Stop
-            Write-Ok "Backend running (PID: $($backendProc.Id))"
+            $resp = Invoke-WebRequest -Uri "http://localhost:$BackendPort/health" -TimeoutSec 1 -ErrorAction Stop
+            Write-Ok "Backend running on port $BackendPort (PID: $($backendProc.Id))"
             break
         } catch {
-            if ($i -eq 20) { Write-Warn "Backend still starting..." }
+            if ($i -eq 40) { Write-Warn "Backend still starting on port $BackendPort..." }
             Start-Sleep -Milliseconds 500
         }
     }
 
-    # Frontend
+    # Frontend — on the chosen port; pointed at the backend we just started
     Push-Location $ProjectRoot
-    Write-Info "Starting frontend..."
+    Write-Info "Starting frontend on port $FrontendPort..."
+    $env:PORT = "$FrontendPort"
+    $env:NEXT_PUBLIC_API_URL = "http://localhost:$BackendPort/api/v1"
+    $env:NEXT_PUBLIC_WS_URL  = "ws://localhost:$BackendPort"
     $frontendLog = Join-Path $LogsDir "frontend.log"
     $frontendProc = Start-Process -NoNewWindow -PassThru -FilePath "pnpm" `
         -ArgumentList "--filter @finance-tracker/web dev" `
@@ -263,13 +294,13 @@ ENVIRONMENT=development
     Pop-Location
 
     # Wait for frontend
-    for ($i = 1; $i -le 20; $i++) {
+    for ($i = 1; $i -le 40; $i++) {
         try {
-            Invoke-WebRequest -Uri "http://localhost:3000" -TimeoutSec 1 -ErrorAction Stop | Out-Null
-            Write-Ok "Frontend running (PID: $($frontendProc.Id))"
+            Invoke-WebRequest -Uri "http://localhost:$FrontendPort" -TimeoutSec 1 -ErrorAction Stop | Out-Null
+            Write-Ok "Frontend running on port $FrontendPort (PID: $($frontendProc.Id))"
             break
         } catch {
-            if ($i -eq 20) { Write-Warn "Frontend still starting..." }
+            if ($i -eq 40) { Write-Warn "Frontend still starting on port $FrontendPort..." }
             Start-Sleep -Milliseconds 500
         }
     }
@@ -280,16 +311,16 @@ ENVIRONMENT=development
     Start-Sleep -Seconds 1
 
     # Open browser
-    Start-Process "http://localhost:3000"
+    Start-Process "http://localhost:$FrontendPort"
 
     Write-Host ""
     Write-Host "+========================================+" -ForegroundColor Green
     Write-Host "|     FinanceTracker is now running!     |" -ForegroundColor Green
     Write-Host "+========================================+" -ForegroundColor Green
     Write-Host ""
-    Write-Host "  App:      http://localhost:3000" -ForegroundColor White
-    Write-Host "  API:      http://localhost:8420" -ForegroundColor White
-    Write-Host "  Docs:     http://localhost:8420/docs" -ForegroundColor White
+    Write-Host "  App:      http://localhost:$FrontendPort" -ForegroundColor White
+    Write-Host "  API:      http://localhost:$BackendPort" -ForegroundColor White
+    Write-Host "  Docs:     http://localhost:$BackendPort/docs" -ForegroundColor White
     Write-Host ""
     Write-Host "  Commands:" -ForegroundColor Yellow
     Write-Host "     .\run.ps1 stop     Stop all services"
