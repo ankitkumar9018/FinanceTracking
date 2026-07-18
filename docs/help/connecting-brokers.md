@@ -34,18 +34,21 @@ You will need:
 3. Click **Create New App**
 4. Fill in the app details:
    - App name: FinanceTracker (or any name you like)
-   - Redirect URL: `http://localhost:8000/api/v1/brokers/zerodha/callback`
+   - Redirect URL: your app address, e.g. `http://localhost:3000` (Zerodha
+     sends you back here with a `request_token` in the address bar after login)
 5. Note down your **API Key** and **API Secret**
 
 ### Step 2: Connect in FinanceTracker
 
 1. Go to **Settings** then **Brokers** then **Zerodha**
-2. Enter your API Key and API Secret
-3. Click **Connect**
-4. You will be redirected to the Zerodha login page
-5. Log in with your Zerodha credentials (Client ID and password)
-6. Authorize the app
-7. You will be redirected back to FinanceTracker
+2. Enter your API Key and API Secret and click **Connect**
+3. The app opens the Zerodha login page (via the `login_url` it returns)
+4. Log in with your Zerodha credentials and authorize the app
+5. Zerodha redirects you to your redirect URL with `?request_token=...` in the
+   address — copy that `request_token`
+6. Paste the `request_token` back into the FinanceTracker connect dialog to
+   finish. (FinanceTracker has no server-side OAuth callback; you complete the
+   connection by pasting the token.)
 
 ### Step 3: Sync Your Data
 
@@ -67,7 +70,8 @@ Zerodha access tokens expire every day at 6 AM IST. You will need to click **Rec
 1. Go to https://api.icicidirect.com/
 2. Register for API access
 3. Create an app to get your **App Key** and **Secret Key**
-4. Set the redirect URL to: `http://localhost:8000/api/v1/brokers/icici_direct/callback`
+4. Set the redirect URL to your app address, e.g. `http://localhost:3000` (you
+   complete the connection in-app; there is no server-side callback endpoint)
 
 ### Step 2: Connect in FinanceTracker
 

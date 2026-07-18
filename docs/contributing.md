@@ -48,11 +48,25 @@ uv run alembic upgrade head
 # Seed development data (optional, creates a demo user)
 uv run python -m app --seed
 
-# Start the backend server
-uv run uvicorn app.main:app --reload --port 8000
+# Start the backend server (recommended — auto-selects a free port)
+uv run python -m app --port 8420
+# or use the repo-root launcher: ./run.sh
 ```
 
-The API is now available at http://localhost:8000 and Swagger docs at http://localhost:8000/docs.
+`python -m app` is preferred because it auto-advances to a free port if `8420`
+is taken (and prints which port it chose). A bare
+`uv run uvicorn app.main:app --reload --port 8420` still works but cannot
+self-select a port.
+
+The API is now available at http://localhost:8420 and Swagger docs at http://localhost:8420/docs.
+
+#### Automatic port selection
+
+The default backend port is `8420`. `python -m app`, the desktop app, and the
+run/start scripts all try `8420` first and automatically advance to the next
+free port (then an OS-assigned ephemeral port) if it's in use — so a co-running
+app on `8420` or `8000` never blocks startup and is never killed. Pass
+`--strict-port` to require the exact port instead.
 
 ### 3. Frontend Setup
 

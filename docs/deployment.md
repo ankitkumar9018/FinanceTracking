@@ -101,7 +101,7 @@ cp backend/.env.example backend/.env
 cd backend && uv run alembic upgrade head && cd ..
 
 # 5. Start backend (terminal 1)
-cd backend && uv run uvicorn app.main:app --reload --port 8000
+cd backend && uv run uvicorn app.main:app --reload --port 8420
 
 # 6. Start web app (terminal 2)
 cd apps/web && pnpm dev
@@ -109,6 +109,8 @@ cd apps/web && pnpm dev
 # 7. Start desktop app (terminal 3, optional)
 cd apps/desktop && pnpm tauri dev
 ```
+
+> **Preferred port & auto-selection:** the backend's default port is **8420**. When launched via `python -m app` (the PyInstaller sidecar, the `build-installer` scripts, and the desktop app all use this entry point), `--port` is treated as a *preference*: if 8420 is already in use the backend automatically advances to the next free port, prints which one it chose, and starts there — so a busy port never blocks startup and no other app's port is ever taken over. Pass `--strict-port` to require the exact port and fail if it's busy instead. A bare `uvicorn app.main:app --port 8420` binds that exact port with no auto-advance.
 
 ### Optional Services
 
@@ -129,9 +131,9 @@ ollama pull llama3.2
 | Service | URL |
 |---|---|
 | Web App | http://localhost:3000 |
-| API | http://localhost:8000 |
-| Swagger Docs | http://localhost:8000/docs |
-| ReDoc Docs | http://localhost:8000/redoc |
+| API | http://localhost:8420 |
+| Swagger Docs | http://localhost:8420/docs |
+| ReDoc Docs | http://localhost:8420/redoc |
 | Redis | redis://localhost:6379 |
 | Ollama | http://localhost:11434 |
 
@@ -150,7 +152,7 @@ The names below are the exact field names read by `config.py`; env-var names are
 | `APP_NAME` | `FinanceTracker` | No | Display name (surfaced in `/health`). |
 | `APP_VERSION` | `0.1.0` | No | Version string (surfaced in `/health`). |
 | `DEBUG` | `false` | Set `false` | Enables SQLAlchemy echo + verbose logging. **Must be `false` in production.** |
-| `API_PORT` | `8000` | No | Default port (CLI `--port` overrides for the sidecar). |
+| `API_PORT` | `8420` | No | Preferred port. The CLI `--port` overrides it for the sidecar, and the backend auto-advances to a free port if it's taken (unless `--strict-port`). |
 | `SECRET_KEY` | `dev-secret-CHANGE-IN-PRODUCTION` | **Yes** | JWT signing key. Generate a long random value (see below). |
 | `FERNET_KEY` | `""` (empty) | **Yes** | Symmetric key encrypting stored broker credentials/secrets. If empty, an **ephemeral** key is generated per process — encrypted data becomes unreadable after restart. Set a persistent key in production. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | No | Access-token lifetime. |
@@ -222,15 +224,15 @@ Do **not** use `--reload` in production. Run uvicorn directly, or gunicorn with 
 ```bash
 # Single-process uvicorn (simple, good behind one container)
 cd backend
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8420 --no-access-log
 
 # Multi-worker uvicorn
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8420 --workers 4
 
 # gunicorn managing uvicorn workers (graceful reloads, worker recycling)
 uv run gunicorn app.main:app \
     -k uvicorn.workers.UvicornWorker \
-    --bind 0.0.0.0:8000 \
+    --bind 0.0.0.0:8420 \
     --workers 4 --timeout 120
 ```
 
@@ -279,7 +281,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "8420:8420"
     volumes:
       - ./backend:/app
       - backend-data:/app/data
@@ -316,7 +318,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=http://localhost:8420
     depends_on:
       - backend
     restart: unless-stopped
@@ -383,9 +385,9 @@ RUN uv sync --frozen --no-dev
 COPY . .
 
 # Run database migrations and start server
-CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8420"]
 
-EXPOSE 8000
+EXPOSE 8420
 ```
 
 ### Web App Dockerfile
@@ -539,7 +541,7 @@ Every macOS install stores its database under `~/Library/Application Support/…
 
 The onefile PyInstaller sidecar extracts its whole bundle on **every** launch, and on first run macOS Gatekeeper / Windows Defender may scan it, so a cold start can take **40–120 seconds**. The Tauri shell (`apps/desktop/src-tauri/src/lib.rs`) handles this:
 
-- **Port selection:** tries `8000–8005` in order, then falls back to any free port.
+- **Port selection:** tries `8420–8425` in order, then falls back to any free OS-assigned port. The sidecar itself (`python -m app`) also treats `--port` as a preference and auto-advances to a free port if the given one is busy, so startup is never blocked and no other app's port is taken over (pass `--strict-port` to require an exact port).
 - **DB path & seed:** resolves `app_data_dir/finance.db`, always passes `--seed` (the seed function is a no-op if the demo user already exists), and passes `--db-path` so the sidecar runs migrations + additive reconciliation.
 - **Immediate loading screen:** the window starts at `about:blank`; a spinner + "First launch can take a minute or two" is injected instantly so users never see a blank window.
 - **Health polling:** a background thread polls `http://127.0.0.1:PORT/health` for up to **120 seconds**. On success it navigates the window to `http://localhost:PORT/#ftport=PORT` — same origin as the API, avoiding mixed-content blocking. The `#ftport=` hash tells the frontend which port the API is on (the Tauri IPC bridge is gone after navigation).
@@ -589,18 +591,19 @@ uv run alembic upgrade head
 uv run alembic downgrade -1
 ```
 
-### The Six Migrations
+### The Seven Migrations
 
-There are currently **6 migrations**, with head at `d2e3f4a5b6c7`:
+There are currently **7 migrations**, with head at `e3f4a5b6c7d8` (listed in chain order):
 
 | Revision | Adds |
 |---|---|
 | `b388e46e4f03` | Initial schema (all base tables). |
-| `8809e230b920` | Unique constraint on `(holding, portfolio)`. |
 | `9ec39aff1e92` | `holdings.currency`. |
 | `abf5040f074b` | `asset` + `fno_position` tables. |
+| `8809e230b920` | Unique constraint on `(holding, portfolio)`. |
 | `c1f2a3b4d5e6` | `users.phone`, `users.telegram_chat_id`, `password_resets` table. |
 | `d2e3f4a5b6c7` | `holdings.fund_type`, `mutual_funds.fund_type`, `user_preferences.tax_settings`, `corporate_actions` table. |
+| `e3f4a5b6c7d8` | `users.totp_backup_codes`. |
 
 ### Production Migration
 
@@ -622,6 +625,20 @@ The startup path (`_run_migrations`) handles three cases:
 3. **Legacy DB** — created by an old `create_all()` with no `alembic_version`. It is **stamped at head** first (so Alembic doesn't try to recreate existing tables), then reconciled additively so columns newer migrations *would* have added (e.g. `phone`, `fund_type`, `tax_settings`) are still created.
 
 Because SQLite can't `ADD COLUMN` with `NOT NULL` and no default, reconciliation adds columns nullable (or with the model's scalar default). Reconciliation failures are caught and logged — they **never block startup**. This guarantees a database created by an *older* app version keeps working after installing a *newer* build.
+
+### Upgrading an Existing Installation (Your Data Is Kept)
+
+Upgrading is safe by design because **the data lives outside the app**. In the desktop build the entire database is a single SQLite file (`finance.db`) in the OS per-user app-data folder — never inside the installed program directory:
+
+| OS | Database file |
+|---|---|
+| macOS | `~/Library/Application Support/com.financetracker.app/finance.db` |
+| Windows | `%APPDATA%\com.financetracker.app\finance.db` (some builds use `%LOCALAPPDATA%\com.financetracker.app\finance.db`) |
+| Linux | `~/.local/share/com.financetracker.app/finance.db` |
+
+Installing a newer version replaces **only the application**, never this folder. And because every launch runs `alembic upgrade head` followed by the additive reconciliation described above, a database created by an *older* build (even one that's months old) is upgraded to the current schema automatically — new tables and columns are added, and **nothing is dropped, renamed, or rewritten**. Existing accounts, portfolios, holdings, and transactions are preserved and stay fully editable.
+
+So the upgrade path is simply: **run the new installer over the old version and the data carries forward intact.** This has been verified end to end (old-schema DB → new build → data intact, schema upgraded, CRUD works). Before a major upgrade, it's still worth exporting a JSON/SQLite backup from the in-app **Reports** page (or copying the `finance.db` file above) as cheap insurance. On a server (PostgreSQL) deployment the same guarantees apply through Alembic; take a `pg_dump` before migrating (see below).
 
 ---
 
@@ -712,7 +729,7 @@ Only the database is treated as critical for the `overall` verdict — Redis, th
 
 # Output:
 # === FinanceTracker Health Check ===
-# Backend API:  OK (http://localhost:8000/health)
+# Backend API:  OK (http://localhost:8420/health)
 # Web App:      OK (http://localhost:3000)
 # Database:     OK (SQLite, 12.5 MB)
 # Redis:        WARN (not running, using fallback)
@@ -744,7 +761,7 @@ Example Caddy configuration:
 
 ```
 financetracker.yourdomain.com {
-    reverse_proxy localhost:8000
+    reverse_proxy localhost:8420
 }
 
 app.financetracker.yourdomain.com {

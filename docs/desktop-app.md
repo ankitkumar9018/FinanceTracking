@@ -9,13 +9,15 @@ FinanceTracker ships as a native desktop app built with **Tauri v2**. It bundles
 1. [Architecture Overview](#architecture-overview)
 2. [Prerequisites](#prerequisites)
 3. [Quick Build (One Command)](#quick-build-one-command)
-4. [Step-by-Step Manual Build](#step-by-step-manual-build)
-5. [Development Mode](#development-mode)
-6. [How the Desktop App Works](#how-the-desktop-app-works)
-7. [Platform-Specific Details](#platform-specific-details)
-8. [CI/CD Automated Builds](#cicd-automated-builds)
-9. [Troubleshooting](#troubleshooting)
-10. [File Structure Reference](#file-structure-reference)
+4. [Building the Windows App](#building-the-windows-app)
+5. [Step-by-Step Manual Build](#step-by-step-manual-build)
+6. [Development Mode](#development-mode)
+7. [How the Desktop App Works](#how-the-desktop-app-works)
+8. [Upgrading an Existing Installation (Your Data Is Kept)](#upgrading-an-existing-installation-your-data-is-kept)
+9. [Platform-Specific Details](#platform-specific-details)
+10. [CI/CD Automated Builds](#cicd-automated-builds)
+11. [Troubleshooting](#troubleshooting)
+12. [File Structure Reference](#file-structure-reference)
 
 ---
 
@@ -46,7 +48,7 @@ FinanceTracker ships as a native desktop app built with **Tauri v2**. It bundles
 - The backend binds to `127.0.0.1` only (not exposed to network)
 - CORS is set to `*` in sidecar mode (safe because local-only)
 - The static frontend is staged into `backend/static` at build time and bundled into the sidecar, so the backend serves the UI itself
-- The port is dynamically assigned; once the backend is healthy the window navigates to `http://localhost:PORT/#ftport=PORT` — the frontend reads the port from the `#ftport` hash and then shares the backend's origin (avoids cross-origin/mixed-content issues in the webview)
+- The port is dynamically assigned (preferred range **8420–8425**, then any free OS-assigned port); once the backend is healthy the window navigates to `http://localhost:PORT/#ftport=PORT` — the frontend reads the port from the `#ftport` hash and then shares the backend's origin (avoids cross-origin/mixed-content issues in the webview)
 - The SQLite database lives in the OS app data directory; its schema is reconciled additively on every launch so a database from an older build keeps working after an upgrade
 - All ML/heavy dependencies are excluded (graceful degradation)
 
@@ -97,6 +99,51 @@ These scripts perform all 7 steps (prerequisite check, dependency install, PyIns
 | Windows | `.exe` (NSIS) | `apps/desktop/src-tauri/target/release/bundle/nsis/` |
 | Linux | `.AppImage` | `apps/desktop/src-tauri/target/release/bundle/appimage/` |
 | Linux | `.deb` | `apps/desktop/src-tauri/target/release/bundle/deb/` |
+
+---
+
+## Building the Windows App
+
+Producing the Windows `.msi` and `.exe` installers is a **single command**: `build-installer.bat`. Run it from the **repository root** in a **Developer Command Prompt for VS 2022** or a normal PowerShell / Command Prompt. (A Developer prompt guarantees the MSVC compiler is on your `PATH`; a normal prompt works too once the Build Tools are installed.)
+
+### Prerequisites (Windows)
+
+| Tool | Version | Install |
+|------|---------|---------|
+| **Node.js** | 20+ | https://nodejs.org |
+| **pnpm** | 9+ | `npm install -g pnpm` |
+| **Python** | 3.12+ | https://python.org (tick **"Add python.exe to PATH"**) |
+| **uv** | latest | `powershell -c "irm https://astral.sh/uv/install.ps1 \| iex"` |
+| **Rust** | stable | https://rustup.rs (installs the `x86_64-pc-windows-msvc` toolchain) |
+| **MSVC Build Tools** | 2022 | "Desktop development with C++" workload — [visualstudio.microsoft.com/visual-cpp-build-tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/). Required to compile the Rust/Tauri shell. |
+| **WebView2** | — | Pre-installed on Windows 10/11. On Windows Server / LTSC the NSIS installer auto-installs it for end users. |
+
+> **You usually don't install these by hand.** `build-installer.bat` checks for each of the above and auto-installs anything missing (Node, pnpm, Python, uv, Rust, and the VS Build Tools) via `winget`/rustup, then updates your `PATH`. If it reports that a freshly installed tool isn't on `PATH` yet, close the terminal, open a new one, and re-run — the second run finds everything.
+
+### One command
+
+```bat
+build-installer.bat
+```
+
+Run from the repo root. The script performs all 7 steps end to end:
+
+1. Checks / auto-installs the prerequisites above (and verifies WebView2)
+2. Installs backend (`uv sync`) and frontend (`pnpm install`) dependencies
+3. Ensures PyInstaller is available
+4. Builds the static Next.js frontend and stages it into `backend/static`
+5. Compiles the Python backend into a standalone **`financetracker-backend.exe`** sidecar with PyInstaller, then smoke-tests that it boots
+6. Builds the Tauri shell and bundles the frontend + sidecar into the installers
+7. Prints the output paths
+
+### Output
+
+| Installer | Path |
+|-----------|------|
+| `.msi` (Windows Installer) | `apps/desktop/src-tauri/target/release/bundle/msi/` |
+| `.exe` (NSIS setup) | `apps/desktop/src-tauri/target/release/bundle/nsis/` |
+
+Double-click the `.msi`, or run the NSIS `.exe`, to install. **First launch takes ~1–2 minutes**: the onefile sidecar extracts its bundle and Windows Defender scans it on the first run, so the app shows a "Starting local server…" loading screen the whole time. This is expected, not a hang — see [Troubleshooting](#troubleshooting).
 
 ---
 
@@ -240,7 +287,7 @@ For active development, use Tauri's dev mode which supports hot-reload:
 ```bash
 # Terminal 1: Start backend
 cd backend
-uv run uvicorn app.main:app --reload --port 8000
+uv run uvicorn app.main:app --reload --port 8420
 
 # Terminal 2: Start Tauri dev (includes frontend dev server)
 cd apps/desktop
@@ -265,12 +312,14 @@ In dev mode:
 3. The setup hook:
    a. Resolves the app data directory (OS-specific)
    b. Creates the SQLite database path
-   c. Finds a free port on localhost (tries 8000–8005, then any free port)
+   c. Finds a free port on localhost (tries 8420–8425, then any free OS-assigned port)
    d. Spawns the sidecar binary with `--port PORT --host 127.0.0.1 --db-path DB_PATH --seed`
    e. **Immediately** injects a loading screen ("Starting local server… First launch can take a minute or two") so the window is never blank while the sidecar boots
    f. On a background thread, waits up to **120 seconds** for the backend `/health` endpoint to respond
 4. When the backend is healthy, the window navigates to `http://localhost:PORT/#ftport=PORT`. The backend serves the static frontend (same origin as the API), and the frontend reads the port from the `#ftport` hash
 5. If the backend does not respond within 120s, the window shows a **self-healing recovery page** that keeps polling `/health` (with a "Retry now" button) and navigates automatically as soon as the backend comes up
+
+> **A busy port never blocks startup:** the Tauri shell scans **8420–8425** and hands the sidecar an already-free port. The sidecar itself (`python -m app`) also treats `--port` as a *preference* — if that port is somehow taken it advances to the next free one rather than failing, and it never grabs a port another app is using. This is why the window is told the chosen port via the `#ftport=` hash. Pass `--strict-port` when running the sidecar by hand to require an exact port instead.
 
 > **Why the wait is so long**: the onefile PyInstaller sidecar re-extracts the whole bundle to a temp directory on *every* launch, and on first run Gatekeeper/antivirus also scans it. A cold start can take **40–120 seconds**. This is normal — the loading screen is expected, not a hang.
 
@@ -305,6 +354,30 @@ The sidecar sets `CORS_ORIGINS=*` because:
   - Windows (WebView2): `https://tauri.localhost`
   - Linux (WebKitGTK): varies
 - Wildcard CORS with `allow_credentials=False` works safely for local-only backends
+
+---
+
+## Upgrading an Existing Installation (Your Data Is Kept)
+
+**Your data lives outside the app.** The entire database is a single SQLite file — `finance.db` — in the OS per-user app-data folder, *not* inside the installed program folder:
+
+| Platform | Database file |
+|----------|---------------|
+| macOS | `~/Library/Application Support/com.financetracker.app/finance.db` |
+| Windows | `%APPDATA%\com.financetracker.app\finance.db` (some builds use `%LOCALAPPDATA%\com.financetracker.app\finance.db`) |
+| Linux | `~/.local/share/com.financetracker.app/finance.db` |
+
+Installing a newer version replaces **only the application**; it never touches this folder. So the upgrade path is simply: **run the new installer over your old version, and your data carries forward.** Hand someone the installer, they run it over the version they already have, and their accounts, portfolios, holdings, and transactions are all still there.
+
+**The schema is upgraded automatically.** On every launch the backend runs Alembic migrations (`alembic upgrade head`) and then an additive schema-reconciliation pass (`_run_migrations` → `_reconcile_schema` in `app/__main__.py`). A database created by an *older* build — even one that's months old — is brought up to the current schema automatically:
+
+- New tables and new columns are **added**
+- **Nothing** is dropped, renamed, or rewritten
+- Existing accounts, portfolios, holdings, and transactions are preserved and remain fully editable
+
+This works whether the old database was created by Alembic or by an early `create_all()` build, and any reconciliation error is logged but **never blocks startup**. The behavior has been verified end to end: an old-schema database opened by a new build ends up with its schema upgraded, its data intact, and full create / read / update / delete still working.
+
+**Before a major upgrade,** it's still worth keeping a backup — export a JSON or SQLite snapshot from the in-app **Reports** page, or just copy the `finance.db` file above (see [Database Backup](#database-backup)). You almost certainly won't need it, but it's cheap insurance.
 
 ---
 

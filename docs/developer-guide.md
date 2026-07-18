@@ -63,13 +63,28 @@ uv run alembic upgrade head
 # (Optional) seed a demo user + default portfolio
 uv run python -m app --seed          # demo@financetracker.dev / demo1234
 
-# Run the API with auto-reload
-uv run uvicorn app.main:app --reload --port 8000
+# Run the API (recommended — auto-selects a free port if 8420 is taken)
+uv run python -m app --port 8420
+# or use the repo-root launcher: ./run.sh
 ```
 
-- API base: `http://localhost:8000/api/v1`
-- Interactive Swagger docs: `http://localhost:8000/docs`
-- Health check: `http://localhost:8000/health`
+`uv run python -m app` is the recommended way to run the backend: it auto-advances
+to a free port when `8420` is busy and prints which port it chose. A bare
+`uv run uvicorn app.main:app --reload --port 8420` still works but cannot
+self-select a port.
+
+- API base: `http://localhost:8420/api/v1`
+- Interactive Swagger docs: `http://localhost:8420/docs`
+- Health check: `http://localhost:8420/health`
+
+#### Automatic port selection
+
+The default backend port is `8420`. `python -m app`, the desktop app, and the
+run/start scripts (`run.sh`, `scripts/start.sh`) all try `8420` first and
+automatically advance to the next free port (and then an OS-assigned ephemeral
+port) if it's already in use — so a co-running app on `8420` or `8000` never
+blocks startup and is never killed. Pass `--strict-port` to require the exact
+port instead of auto-picking a free one.
 
 To install optional extras, use the dependency groups declared in
 `backend/pyproject.toml`:
@@ -96,7 +111,7 @@ pnpm --filter @finance-tracker/web dev
 ```
 
 - Web app: `http://localhost:3000`
-- The web client talks to the backend at `http://localhost:8000/api/v1` (resolved
+- The web client talks to the backend at `http://localhost:8420/api/v1` (resolved
   by `apps/web/src/lib/tauri-port.ts`; in the browser this defaults to the local
   backend, in the desktop app it reads the sidecar port).
 
@@ -114,7 +129,7 @@ deps, runs migrations, starts both servers, and opens the browser:
 ```
 
 Under the hood it runs `uv sync`, `pnpm install`, `uv run alembic upgrade head`,
-then launches `uv run uvicorn app.main:app --host 127.0.0.1 --port 8000` and
+then launches the backend on a free port (preferring `8420`) and
 `pnpm --filter @finance-tracker/web dev`, writing PIDs and logs to `logs/`.
 
 `scripts/start.sh` (and `scripts/stop.sh`, `scripts/setup.sh`,

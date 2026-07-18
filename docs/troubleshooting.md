@@ -41,20 +41,27 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ---
 
-### "Connection refused" when starting the backend
+### "Address already in use" / port 8420 is busy
 
-**Cause**: Port 8000 is already in use.
+**Note**: This is rarely a problem anymore. `python -m app` and the launch
+scripts (`run.sh`, `scripts/start.sh`) auto-advance to a free port
+automatically when `8420` is taken (and print which port they chose), so
+startup does not fail on a busy port.
+
+The only case that still fails is a **bare** `uvicorn ... --port 8420` (or any
+invocation passing `--strict-port`), which requires the exact port.
 
 **Solution**:
 ```bash
-# Find what is using port 8000
-lsof -i :8000
+# Recommended: run via the module entry point, which auto-picks a free port
+cd backend && uv run python -m app --port 8420
 
-# Kill the process
+# ...or pick a different explicit port
+cd backend && uv run uvicorn app.main:app --reload --port 8421
+
+# To see what is holding 8420 (only needed if you insist on that exact port)
+lsof -i :8420
 kill -9 <PID>
-
-# Or start on a different port
-cd backend && uv run uvicorn app.main:app --reload --port 8001
 ```
 
 ---
@@ -127,7 +134,7 @@ pnpm install
 2. Make sure the API URL is set:
    ```bash
    # In apps/web/.env.local
-   NEXT_PUBLIC_API_URL=http://localhost:8000
+   NEXT_PUBLIC_API_URL=http://localhost:8420
    ```
 3. Clear Next.js cache:
    ```bash
@@ -142,7 +149,7 @@ pnpm install
 **Cause**: The backend is not running or the WebSocket URL is wrong.
 
 **Solution**:
-1. Verify the backend is running: `curl http://localhost:8000/health`
+1. Verify the backend is running: `curl http://localhost:8420/health`
 2. Check browser console for the exact error message
 3. If using HTTPS in production, make sure WebSocket uses `wss://` not `ws://`
 
@@ -391,7 +398,7 @@ cd apps/desktop && pnpm tauri build
 **Cause**: The backend sidecar failed to start, or the port was already in use.
 
 **Solution**:
-1. In dev mode, start the backend manually: `cd backend && uv run uvicorn app.main:app --port 8000`
+1. In dev mode, start the backend manually: `cd backend && uv run python -m app --port 8420`
 2. In production (built installer), the sidecar starts automatically — check if the sidecar binary exists:
    ```bash
    ls apps/desktop/src-tauri/binaries/

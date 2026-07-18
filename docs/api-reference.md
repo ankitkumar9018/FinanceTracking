@@ -2,8 +2,8 @@
 
 > FinanceTracker REST API & WebSocket Documentation
 
-**Base URL**: `http://localhost:8000/api/v1`
-**Interactive Docs**: `http://localhost:8000/docs` (Swagger) | `http://localhost:8000/redoc` (ReDoc)
+**Base URL**: `http://localhost:8420/api/v1`
+**Interactive Docs**: `http://localhost:8420/docs` (Swagger) | `http://localhost:8420/redoc` (ReDoc)
 
 All endpoints require JWT authentication unless marked as **Public**. Include the token in the `Authorization` header:
 

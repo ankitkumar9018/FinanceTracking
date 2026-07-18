@@ -510,7 +510,7 @@ apps/desktop/
 |   +-- index.html              # Loader page that navigates to the backend-served frontend
 ```
 
-The desktop WebView navigates to the backend (`http://localhost:8000`), which serves the Next.js static export — so frontend and API are same-origin.
+The desktop WebView navigates to the backend on the dynamically-chosen port (default `8420`, auto-advancing to the next free port if it's busy). The chosen port is conveyed to the frontend, which serves the Next.js static export — so frontend and API stay same-origin.
 
 **Tauri Advantages over Electron:**
 - Bundle size: 5-10MB vs Electron's 100MB+
