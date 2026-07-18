@@ -93,8 +93,12 @@ def parse_cas(file_bytes: bytes, password: str | None) -> list[dict]:
     tmp_path: str | None = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(file_bytes)
+            # Record the path BEFORE writing: NamedTemporaryFile creates the file
+            # on disk the moment it opens (delete=False keeps it), so if the write
+            # itself fails (e.g. ENOSPC) the finally-block must still be able to
+            # unlink it. Assigning after write would leak the file on that path.
             tmp_path = tmp.name
+            tmp.write(file_bytes)
         data = casparser.read_cas_pdf(tmp_path, password or "", output="dict")
     finally:
         if tmp_path and os.path.exists(tmp_path):
