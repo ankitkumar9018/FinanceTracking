@@ -1,8 +1,14 @@
 """CLI entry point for the FinanceTracker backend.
 
-Used by PyInstaller sidecar and for direct invocation:
+Used by the PyInstaller sidecar and for direct invocation:
     python -m app --port 8420 --db-path /path/to/finance.db
     python -m app --port 8420 --db-path /path/to/finance.db --seed
+
+The port is a PREFERENCE: if it's already in use, the server automatically
+advances to the next free port (and prints which one) so it always starts —
+without ever grabbing a port another app is using. Pass --strict-port to
+require the exact port instead. (Prefer this entry point over a bare
+`uvicorn app.main:app`, which cannot self-select a port.)
 """
 
 import argparse
@@ -175,12 +181,39 @@ def _run_seed() -> None:
     asyncio.run(seed())
 
 
+def _find_free_port(host: str, preferred: int, span: int = 10) -> int:
+    """Return a free TCP port.
+
+    Tries the preferred port and the next ``span``-1 ports, then falls back to
+    an OS-assigned ephemeral port. Lets the backend start reliably even when the
+    preferred port is already taken by another app — without ever grabbing a
+    port that is in use.
+    """
+    import socket
+
+    candidates = list(range(preferred, preferred + span)) if preferred and preferred > 0 else []
+    for p in candidates:
+        s = socket.socket()
+        try:
+            s.bind((host, p))
+            s.close()
+            return p
+        except OSError:
+            s.close()
+    s = socket.socket()
+    s.bind((host, 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="FinanceTracker Backend")
-    parser.add_argument("--port", type=int, default=8420, help="Port to listen on")
+    parser.add_argument("--port", type=int, default=8420, help="Preferred port (auto-advances to a free one if taken)")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind to")
     parser.add_argument("--db-path", type=str, default="", help="Path to SQLite database file")
     parser.add_argument("--seed", action="store_true", help="Seed demo user on first run")
+    parser.add_argument("--strict-port", action="store_true", help="Fail if the requested port is busy instead of auto-picking a free one")
     args = parser.parse_args()
 
     if args.db_path:
@@ -204,6 +237,22 @@ def main() -> None:
     if args.seed:
         _run_seed()
 
+    # Resolve the port: prefer the requested one, but auto-advance to a free
+    # port if it's taken (unless --strict-port). This tries the requested port
+    # FIRST, so the desktop sidecar — which is handed an already-free port and
+    # tells the frontend which port that is — normally binds exactly that port.
+    port = args.port
+    if not args.strict_port:
+        port = _find_free_port(args.host, args.port)
+        if port != args.port:
+            print(
+                f"[startup] Port {args.port} is in use — serving on free port {port} instead.\n"
+                f"[startup] API: http://{args.host}:{port}  (point your frontend's "
+                f"NEXT_PUBLIC_API_URL at http://localhost:{port}/api/v1)",
+                flush=True,
+            )
+    os.environ["API_PORT"] = str(port)
+
     # Import the app object directly instead of using string reference.
     # PyInstaller frozen binaries can't resolve string-based module imports.
     from app.main import app
@@ -211,7 +260,7 @@ def main() -> None:
     uvicorn.run(
         app,
         host=args.host,
-        port=args.port,
+        port=port,
         log_level="info",
     )
 
