@@ -18,6 +18,9 @@ from app.database import get_db
 from app.models.password_reset import PasswordReset
 from app.models.user import User
 from app.schemas.auth import (
+    BackupCodesRegenerateRequest,
+    BackupCodesResponse,
+    BackupCodesStatus,
     ForgotPasswordRequest,
     LoginRequest,
     RefreshRequest,
@@ -58,6 +61,49 @@ class TwoFactorVerify(TwoFactorCode):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str = Field(min_length=8, max_length=128)
+
+
+# ── 2FA backup-code helpers ───────────────────────────────────────────────────
+
+_BACKUP_CODE_COUNT = 10
+
+
+def _normalize_backup_code(code: str) -> str:
+    """Normalize a backup code so matching is case- and separator-insensitive."""
+    return "".join(ch for ch in code.lower() if ch.isalnum())
+
+
+def _hash_backup_code(code: str) -> str:
+    """SHA-256 hex hash of a normalized backup code."""
+    return hashlib.sha256(_normalize_backup_code(code).encode()).hexdigest()
+
+
+def _generate_backup_codes() -> tuple[list[str], list[str]]:
+    """Generate a fresh set of backup codes.
+
+    Returns ``(raw_codes, hashes)``. Raw codes are formatted ``xxxx-xxxx`` and
+    are the only time the plaintext exists — only the hashes are persisted.
+    """
+    raw_codes: list[str] = []
+    for _ in range(_BACKUP_CODE_COUNT):
+        token = secrets.token_hex(4)  # 8 hex chars
+        raw_codes.append(f"{token[:4]}-{token[4:]}")
+    hashes = [_hash_backup_code(c) for c in raw_codes]
+    return raw_codes, hashes
+
+
+def _consume_backup_code(user: User, code: str) -> bool:
+    """If ``code`` matches an unused backup code, consume it and return True.
+
+    Reassigns ``user.totp_backup_codes`` to a new list so SQLAlchemy detects the
+    change to the JSON column.
+    """
+    codes = user.totp_backup_codes or []
+    candidate = _hash_backup_code(code)
+    if candidate not in codes:
+        return False
+    user.totp_backup_codes = [h for h in codes if h != candidate]
+    return True
 
 
 # ── Auth endpoints ────────────────────────────────────────────────────────────
@@ -130,10 +176,24 @@ async def login(
     if user.totp_secret:
         if not body.totp_code:
             return {"requires_2fa": True, "message": "Please provide TOTP code"}
+        # Primary path: a valid TOTP code from the authenticator app.
         if not verify_totp(user.totp_secret, body.totp_code):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid TOTP code",
+            # Fallback: allow a one-time backup code (consumed on use) so a
+            # user who lost their authenticator can still get in.
+            if not _consume_backup_code(user, body.totp_code):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid TOTP code",
+                )
+            await db.flush()
+            await audit_log(
+                db,
+                user_id=user.id,
+                action="login_backup_code",
+                resource_type="user",
+                resource_id=user.id,
+                details="logged in with a 2FA backup code",
+                ip_address=request.client.host if request.client else None,
             )
 
     token_data = {"sub": str(user.id), "email": user.email}
@@ -390,8 +450,15 @@ async def verify_2fa(
     if not verify_totp(body.secret, body.code):
         raise HTTPException(status_code=400, detail="Invalid TOTP code")
     user.totp_secret = body.secret
+    # Issue one-time recovery codes; the raw values are shown here exactly once.
+    raw_codes, hashes = _generate_backup_codes()
+    user.totp_backup_codes = hashes  # reassign so SQLAlchemy tracks the change
     await db.flush()
-    return {"verified": True, "message": "2FA is now active"}
+    return {
+        "verified": True,
+        "message": "2FA is now active",
+        "backup_codes": raw_codes,
+    }
 
 
 @router.post("/2fa/disable")
@@ -406,5 +473,41 @@ async def disable_2fa(
     if not verify_totp(user.totp_secret, body.code):
         raise HTTPException(status_code=400, detail="Invalid TOTP code")
     user.totp_secret = None
+    user.totp_backup_codes = None  # recovery codes are meaningless without 2FA
     await db.flush()
     return {"message": "2FA has been disabled"}
+
+
+@router.get("/2fa/backup-codes/status", response_model=BackupCodesStatus)
+async def backup_codes_status(
+    user: User = Depends(get_current_user),
+) -> BackupCodesStatus:
+    """Return how many unused 2FA backup codes remain (never the codes)."""
+    return BackupCodesStatus(remaining=len(user.totp_backup_codes or []))
+
+
+@router.post("/2fa/backup-codes/regenerate", response_model=BackupCodesResponse)
+async def regenerate_backup_codes(
+    body: BackupCodesRegenerateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BackupCodesResponse:
+    """Generate a fresh set of backup codes, invalidating any previous ones.
+
+    Requires a current TOTP code. The raw codes are returned exactly once.
+    """
+    if not user.totp_secret:
+        raise HTTPException(status_code=400, detail="2FA is not enabled")
+    if not verify_totp(user.totp_secret, body.code):
+        raise HTTPException(status_code=400, detail="Invalid TOTP code")
+    raw_codes, hashes = _generate_backup_codes()
+    user.totp_backup_codes = hashes  # reassign so SQLAlchemy tracks the change
+    await db.flush()
+    await audit_log(
+        db,
+        user_id=user.id,
+        action="regenerate_backup_codes",
+        resource_type="user",
+        resource_id=user.id,
+    )
+    return BackupCodesResponse(backup_codes=raw_codes)

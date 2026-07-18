@@ -51,3 +51,26 @@ class UserResponse(BaseModel):
     telegram_chat_id: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+# ── 2FA backup codes ──────────────────────────────────────────────────────────
+
+class BackupCodesRegenerateRequest(BaseModel):
+    """Request to regenerate 2FA backup codes — requires a current TOTP code."""
+
+    code: str = Field(..., min_length=6, max_length=6, description="Current TOTP code")
+
+
+class BackupCodesResponse(BaseModel):
+    """Raw backup codes, returned exactly once at generation time."""
+
+    backup_codes: list[str]
+    message: str = (
+        "Save these backup codes now — each works once and they will not be shown again."
+    )
+
+
+class BackupCodesStatus(BaseModel):
+    """How many unused backup codes remain (the codes themselves are never returned)."""
+
+    remaining: int

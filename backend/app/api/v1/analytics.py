@@ -7,6 +7,7 @@ returning data.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -17,8 +18,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_db
+from app.models.dividend import Dividend
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
+from app.models.transaction import Transaction
 from app.models.user import User
 from app.services.concentration_service import analyze_concentration
 from app.services.drift_service import check_drift, set_target_allocation
@@ -59,6 +62,26 @@ async def _verify_portfolio_ownership(
             detail="Portfolio not found or does not belong to the current user",
         )
     return portfolio
+
+
+def _month_range(start: str, end: str) -> list[str]:
+    """Return every ``YYYY-MM`` month from ``start`` to ``end`` inclusive.
+
+    Used to build a contiguous cash-flow timeline so quiet months (no
+    transactions) still appear with zero activity and the cumulative line
+    stays flat instead of jumping across gaps.
+    """
+    start_year, start_month = int(start[:4]), int(start[5:7])
+    end_year, end_month = int(end[:4]), int(end[5:7])
+    months: list[str] = []
+    year, month = start_year, start_month
+    while (year, month) <= (end_year, end_month):
+        months.append(f"{year:04d}-{month:02d}")
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return months
 
 
 # ---------------------------------------------------------------------------
@@ -610,3 +633,124 @@ async def economic_calendar(
     await _verify_portfolio_ownership(portfolio_id, user, db)
     feed = await get_economic_calendar(portfolio_id, db)
     return {"portfolio_id": portfolio_id, **feed}
+
+
+# ---------------------------------------------------------------------------
+# 13. Cash Flow Timeline
+# ---------------------------------------------------------------------------
+
+@router.get("/cash-flow/{portfolio_id}")
+async def get_cash_flow(
+    portfolio_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Build a chronological cash-flow timeline for a portfolio.
+
+    Aggregates, per calendar month (``YYYY-MM``):
+
+    * **invested_out** — BUY transactions as money out (negative):
+      ``-(quantity * price + brokerage)``.
+    * **realized_in** — SELL transactions as money in (positive), net of
+      brokerage: ``quantity * price - brokerage``.
+    * **dividends_in** — dividend cash received (``total_amount``), booked on
+      the payment date (falling back to the ex-date when no payment date is
+      recorded).
+
+    ``net`` is the sum of the three per month; ``cumulative`` is the running
+    net across the contiguous month range. All amounts are in the portfolio's
+    currency.
+    """
+    portfolio = await _verify_portfolio_ownership(portfolio_id, user, db)
+
+    # Transactions for every holding in this portfolio
+    tx_result = await db.execute(
+        select(Transaction)
+        .join(Holding, Transaction.holding_id == Holding.id)
+        .where(Holding.portfolio_id == portfolio_id)
+    )
+    transactions = tx_result.scalars().all()
+
+    # Dividends for every holding in this portfolio
+    div_result = await db.execute(
+        select(Dividend)
+        .join(Holding, Dividend.holding_id == Holding.id)
+        .where(Holding.portfolio_id == portfolio_id)
+    )
+    dividends = div_result.scalars().all()
+
+    buckets: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"invested_out": 0.0, "realized_in": 0.0, "dividends_in": 0.0}
+    )
+
+    for tx in transactions:
+        if tx.date is None:
+            continue
+        month = tx.date.strftime("%Y-%m")
+        gross = float(tx.quantity or 0) * float(tx.price or 0)
+        brokerage = float(tx.brokerage or 0)
+        tx_type = (tx.transaction_type or "").upper()
+        if tx_type == "BUY":
+            buckets[month]["invested_out"] += -(gross + brokerage)
+        elif tx_type == "SELL":
+            buckets[month]["realized_in"] += gross - brokerage
+
+    for dv in dividends:
+        booked = dv.payment_date or dv.ex_date
+        if booked is None:
+            continue
+        month = booked.strftime("%Y-%m")
+        buckets[month]["dividends_in"] += float(dv.total_amount or 0)
+
+    months_seq: list[str] = []
+    if buckets:
+        active = sorted(buckets.keys())
+        months_seq = _month_range(active[0], active[-1])
+
+    monthly: list[dict] = []
+    cumulative: list[dict] = []
+    running = 0.0
+    total_invested = 0.0
+    total_realized = 0.0
+    total_dividends = 0.0
+
+    for month in months_seq:
+        bucket = buckets.get(
+            month,
+            {"invested_out": 0.0, "realized_in": 0.0, "dividends_in": 0.0},
+        )
+        invested = round(bucket["invested_out"], 2)
+        realized = round(bucket["realized_in"], 2)
+        divs = round(bucket["dividends_in"], 2)
+        net = round(invested + realized + divs, 2)
+        monthly.append(
+            {
+                "month": month,
+                "invested_out": invested,
+                "realized_in": realized,
+                "dividends_in": divs,
+                "net": net,
+            }
+        )
+        running = round(running + net, 2)
+        cumulative.append({"month": month, "cumulative_net": running})
+        total_invested += invested
+        total_realized += realized
+        total_dividends += divs
+
+    totals = {
+        "total_invested": round(total_invested, 2),
+        "total_realized": round(total_realized, 2),
+        "total_dividends": round(total_dividends, 2),
+        "net_cash_flow": round(
+            total_invested + total_realized + total_dividends, 2
+        ),
+    }
+
+    return {
+        "portfolio_id": portfolio_id,
+        "currency": portfolio.currency,
+        "monthly": monthly,
+        "totals": totals,
+        "cumulative": cumulative,
+    }

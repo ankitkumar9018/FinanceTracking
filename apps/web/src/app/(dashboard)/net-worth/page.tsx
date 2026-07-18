@@ -15,6 +15,7 @@ import {
   Gem,
   Trash2,
   Loader2,
+  LifeBuoy,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { api } from "@/lib/api-client";
@@ -349,6 +350,212 @@ function AddAssetModal({
 }
 
 /* ------------------------------------------------------------------ */
+/*  Emergency Fund Card                                                */
+/* ------------------------------------------------------------------ */
+
+interface EmergencyFundData {
+  liquid_value: number;
+  liquid_incl_stocks: number;
+  monthly_expenses: number;
+  months_covered: number | null;
+  months_covered_incl_stocks: number | null;
+  status: "critical" | "adequate" | "strong" | "unknown";
+  currency: string;
+  breakdown: { asset_type: string; value: number; liquid: boolean }[];
+}
+
+// Remember the last-entered figure so the indicator persists between visits.
+const EMERGENCY_EXPENSES_KEY = "ft-monthly-expenses";
+const EMERGENCY_TARGET_MONTHS = 6;
+
+const EMERGENCY_STATUS_STYLES: Record<
+  EmergencyFundData["status"],
+  { label: string; pill: string; bar: string; note: string }
+> = {
+  critical: {
+    label: "Critical",
+    pill: "bg-red-500/15 text-red-500",
+    bar: "bg-red-500",
+    note: "Under 3 months of cover — consider building your buffer.",
+  },
+  adequate: {
+    label: "Adequate",
+    pill: "bg-amber-500/15 text-amber-600",
+    bar: "bg-amber-500",
+    note: "3-6 months of cover — a solid cushion.",
+  },
+  strong: {
+    label: "Strong",
+    pill: "bg-green-500/15 text-green-500",
+    bar: "bg-green-500",
+    note: "Over 6 months of cover — well protected.",
+  },
+  unknown: {
+    label: "Enter expenses",
+    pill: "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]",
+    bar: "bg-[hsl(var(--muted-foreground))]/40",
+    note: "Enter your monthly expenses to gauge your coverage.",
+  },
+};
+
+function EmergencyFundCard({ currency }: { currency: string }) {
+  const [expenses, setExpenses] = useState("");
+  const [fund, setFund] = useState<EmergencyFundData | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  // Restore the previously entered figure on mount.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = localStorage.getItem(EMERGENCY_EXPENSES_KEY);
+    if (saved) setExpenses(saved);
+  }, []);
+
+  const fetchFund = useCallback(
+    async (value: number) => {
+      setLoading(true);
+      try {
+        const qs =
+          `?monthly_expenses=${encodeURIComponent(value)}` +
+          `&display_currency=${encodeURIComponent(currency)}`;
+        const result = await api.get<EmergencyFundData>(`/net-worth/emergency-fund${qs}`);
+        setFund(result);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to load emergency fund");
+        setFund(null);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [currency],
+  );
+
+  // Debounced fetch whenever the expenses input (or currency) changes.
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      if (expenses) localStorage.setItem(EMERGENCY_EXPENSES_KEY, expenses);
+      else localStorage.removeItem(EMERGENCY_EXPENSES_KEY);
+    }
+    const parsed = parseFloat(expenses);
+    const value = Number.isFinite(parsed) ? parsed : 0;
+    const t = setTimeout(() => fetchFund(value), 500);
+    return () => clearTimeout(t);
+  }, [expenses, fetchFund]);
+
+  const style = EMERGENCY_STATUS_STYLES[fund?.status ?? "unknown"];
+  const months = fund?.months_covered ?? null;
+  const monthsInclStocks = fund?.months_covered_incl_stocks ?? null;
+  const progress =
+    months != null ? Math.min((months / EMERGENCY_TARGET_MONTHS) * 100, 100) : 0;
+  const fundCurrency = fund?.currency ?? currency;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.05, duration: 0.4 }}
+      className="rounded-xl border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="rounded-full bg-[hsl(var(--primary))]/10 p-2.5">
+            <LifeBuoy className="h-5 w-5 text-[hsl(var(--primary))]" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold">Emergency Fund</h2>
+            <p className="text-xs text-[hsl(var(--muted-foreground))]">
+              Months of expenses your liquid assets can cover
+            </p>
+          </div>
+        </div>
+        <span
+          className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-xs font-medium ${style.pill}`}
+          role="status"
+          aria-label={`Emergency fund status: ${style.label}`}
+        >
+          {loading ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          ) : (
+            style.label
+          )}
+        </span>
+      </div>
+
+      {/* Input */}
+      <div className="mt-5">
+        <label
+          htmlFor="ef-monthly-expenses"
+          className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1"
+        >
+          Monthly expenses ({fundCurrency})
+        </label>
+        <input
+          id="ef-monthly-expenses"
+          type="number"
+          min="0"
+          step="100"
+          inputMode="decimal"
+          value={expenses}
+          onChange={(e) => setExpenses(e.target.value)}
+          aria-label={`Monthly expenses in ${fundCurrency}`}
+          className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
+          placeholder="e.g. 50000"
+        />
+      </div>
+
+      {/* Coverage figure */}
+      <div className="mt-5 flex items-end justify-between gap-4">
+        <div>
+          <p className="text-4xl font-bold tracking-tight tabular-nums">
+            {months != null ? `${months.toFixed(1)}` : "—"}
+            <span className="ml-1.5 text-base font-medium text-[hsl(var(--muted-foreground))]">
+              {months != null && months === 1 ? "month" : "months"} covered
+            </span>
+          </p>
+          <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+            {formatCurrency(fund?.liquid_value ?? 0, fundCurrency)} liquid
+            {monthsInclStocks != null && (
+              <> &middot; {monthsInclStocks.toFixed(1)} months incl. stocks</>
+            )}
+          </p>
+        </div>
+      </div>
+
+      {/* Progress toward 6-month target */}
+      <div className="mt-4">
+        <div
+          className="h-2 w-full overflow-hidden rounded-full bg-[hsl(var(--muted))]"
+          role="progressbar"
+          aria-label="Progress toward a 6-month emergency fund"
+          aria-valuemin={0}
+          aria-valuemax={EMERGENCY_TARGET_MONTHS}
+          aria-valuenow={months != null ? Math.min(months, EMERGENCY_TARGET_MONTHS) : 0}
+        >
+          <motion.div
+            initial={{ width: 0 }}
+            animate={{ width: `${progress}%` }}
+            transition={{ duration: 0.6, ease: "easeOut" }}
+            className={`h-full rounded-full ${style.bar}`}
+          />
+        </div>
+        <div className="mt-1 flex items-center justify-between text-xs text-[hsl(var(--muted-foreground))]">
+          <span>0</span>
+          <span>{EMERGENCY_TARGET_MONTHS}-month target</span>
+        </div>
+      </div>
+
+      {/* Status note + liquidity legend */}
+      <p className="mt-4 text-xs text-[hsl(var(--muted-foreground))]">{style.note}</p>
+      <p className="mt-2 text-xs text-[hsl(var(--muted-foreground))]/70">
+        Liquid assets: fixed deposits, crypto and gold. Stocks are semi-liquid
+        (shown separately as &ldquo;incl. stocks&rdquo;); bonds and real estate
+        are treated as illiquid.
+      </p>
+    </motion.div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Page Component                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -522,6 +729,9 @@ export default function NetWorthPage() {
               </p>
             )}
           </motion.div>
+
+          {/* ---- Emergency Fund Indicator ---- */}
+          <EmergencyFundCard currency={effectiveCurrency} />
 
           {/* ---- Chart + Asset Cards ---- */}
           <div className="grid gap-6 lg:grid-cols-2">

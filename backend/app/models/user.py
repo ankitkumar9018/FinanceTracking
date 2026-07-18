@@ -19,6 +19,9 @@ class User(Base):
     )
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     totp_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # One-time 2FA backup codes: list of SHA-256 hashes (raw codes shown once
+    # at generation). Each is consumed on use so it can't be replayed.
+    totp_backup_codes: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # E.164 phone (e.g. +919876543210) for WhatsApp/SMS notification channels
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # Per-user Telegram chat id — so alerts go to each user, not one global chat

@@ -10,6 +10,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
 from app.database import get_db
@@ -28,6 +29,11 @@ from app.services.export_service import (
     generate_tax_report_html,
 )
 from app.services.tax_service import (
+    EXCHANGE_JURISDICTION_MAP,
+    INDIA_LTCG_RATE,
+    INDIA_STCG_RATE,
+    _add_months,
+    build_open_lots,
     compute_german_allowance,
     compute_tax_for_transaction,
     estimate_portfolio_vorabpauschale,
@@ -36,6 +42,10 @@ from app.services.tax_service import (
 )
 
 router = APIRouter()
+
+# STCG lots within this many days of the 12-month mark get a best-effort estimate
+# of the tax saved by waiting for LTCG treatment (20 % -> 12.5 %).
+_LTCG_SOON_DAYS = 30
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +66,34 @@ class FundTypeUpdate(BaseModel):
     """Set a holding's fund class for German Teilfreistellung. ``None`` clears it."""
 
     fund_type: FundType | None = None
+
+
+class HoldingPeriodLot(BaseModel):
+    """One still-open FIFO buy lot and its LTCG-eligibility timing (India)."""
+
+    stock_symbol: str
+    purchase_date: date
+    quantity: float
+    ltcg_date: date
+    days_remaining: int
+    status: Literal["STCG", "LTCG"]
+    potential_tax_saving: float | None = None
+
+
+class HoldingPeriodSummary(BaseModel):
+    """Roll-up counts for the holding-period timer."""
+
+    stcg_lots: int
+    ltcg_lots: int
+    next_eligible_date: date | None = None
+
+
+class HoldingPeriodTimer(BaseModel):
+    """Response for the Indian LTCG holding-period timer."""
+
+    portfolio_id: int
+    lots: list[HoldingPeriodLot]
+    summary: HoldingPeriodSummary
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +334,106 @@ async def portfolio_vorabpauschale(
     return await estimate_portfolio_vorabpauschale(
         portfolio_id=portfolio_id, db=db, year=year
     )
+
+
+@router.get("/holding-period/{portfolio_id}", response_model=HoldingPeriodTimer)
+async def holding_period_timer(
+    portfolio_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """LTCG holding-period timer for Indian (NSE/BSE) holdings in a portfolio.
+
+    For every still-open FIFO buy lot of each Indian holding, report when the lot
+    crosses the 12-calendar-month mark and becomes LTCG-eligible (taxed at 12.5 %
+    instead of the 20 % STCG rate). ``days_remaining`` counts down to
+    ``ltcg_date`` (0 or negative = already LTCG). German/other-jurisdiction
+    holdings are skipped — the short-/long-term split is India-specific.
+
+    Where a current price is available, STCG lots within ``_LTCG_SOON_DAYS`` of
+    eligibility carry a best-effort ``potential_tax_saving`` = unrealized gain ×
+    (20 % − 12.5 %) — the tax saved by waiting for LTCG treatment.
+    """
+    port_result = await db.execute(
+        select(Portfolio).where(
+            Portfolio.id == portfolio_id,
+            Portfolio.user_id == user.id,
+        )
+    )
+    if port_result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Portfolio not found",
+        )
+
+    indian_exchanges = [
+        ex for ex, jur in EXCHANGE_JURISDICTION_MAP.items() if jur == "IN"
+    ]
+    result = await db.execute(
+        select(Holding)
+        .options(selectinload(Holding.transactions))
+        .where(
+            Holding.portfolio_id == portfolio_id,
+            Holding.exchange.in_(indian_exchanges),
+        )
+    )
+    holdings = list(result.scalars().all())
+
+    today = date.today()
+    lots: list[dict] = []
+    for holding in holdings:
+        current_price = (
+            float(holding.current_price) if holding.current_price is not None else None
+        )
+        for lot in build_open_lots(list(holding.transactions)):
+            purchase_date = lot["date"]
+            quantity = lot["qty"]
+            ltcg_date = _add_months(purchase_date, 12)
+            days_remaining = (ltcg_date - today).days
+            is_ltcg = days_remaining <= 0
+
+            potential_tax_saving: float | None = None
+            # Best-effort: only for still-STCG lots close to the 12-month mark
+            # that have a live price and an unrealized gain to save tax on.
+            if (
+                not is_ltcg
+                and 0 < days_remaining <= _LTCG_SOON_DAYS
+                and current_price is not None
+            ):
+                unrealized_gain = (current_price - lot["price"]) * quantity
+                if unrealized_gain > 0:
+                    potential_tax_saving = round(
+                        unrealized_gain * (INDIA_STCG_RATE - INDIA_LTCG_RATE), 2
+                    )
+
+            lots.append(
+                {
+                    "stock_symbol": holding.stock_symbol,
+                    "purchase_date": purchase_date,
+                    "quantity": round(quantity, 6),
+                    "ltcg_date": ltcg_date,
+                    "days_remaining": days_remaining,
+                    "status": "LTCG" if is_ltcg else "STCG",
+                    "potential_tax_saving": potential_tax_saving,
+                }
+            )
+
+    # Soonest-to-become-LTCG first: STCG lots by ascending days remaining, then
+    # already-eligible lots.
+    lots.sort(key=lambda x: (x["status"] != "STCG", x["days_remaining"]))
+
+    stcg_lots = sum(1 for x in lots if x["status"] == "STCG")
+    stcg_dates = [x["ltcg_date"] for x in lots if x["status"] == "STCG"]
+
+    return {
+        "portfolio_id": portfolio_id,
+        "lots": lots,
+        "summary": {
+            "stcg_lots": stcg_lots,
+            "ltcg_lots": len(lots) - stcg_lots,
+            "next_eligible_date": min(stcg_dates) if stcg_dates else None,
+        },
+    }
 
 
 @router.put("/settings")

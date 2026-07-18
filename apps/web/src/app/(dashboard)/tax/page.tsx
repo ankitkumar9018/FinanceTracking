@@ -10,9 +10,12 @@ import {
   PiggyBank,
   Landmark,
   Info,
+  Hourglass,
+  Clock,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
+import { EmptyState } from "@/components/shared/empty-state";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
@@ -83,6 +86,26 @@ interface VorabEstimate {
   total_estimated_tax: number;
 }
 
+interface HoldingPeriodLot {
+  stock_symbol: string;
+  purchase_date: string;
+  quantity: number;
+  ltcg_date: string;
+  days_remaining: number;
+  status: "STCG" | "LTCG";
+  potential_tax_saving: number | null;
+}
+
+interface HoldingPeriodTimer {
+  portfolio_id: number;
+  lots: HoldingPeriodLot[];
+  summary: {
+    stcg_lots: number;
+    ltcg_lots: number;
+    next_eligible_date: string | null;
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
@@ -107,6 +130,12 @@ export default function TaxPage() {
   const [vorab, setVorab] = useState<VorabEstimate | null>(null);
   const [advLoading, setAdvLoading] = useState(false);
   const [savingFiling, setSavingFiling] = useState(false);
+
+  /* India holding-period (LTCG timer) state */
+  const [holdingPeriod, setHoldingPeriod] = useState<HoldingPeriodTimer | null>(
+    null
+  );
+  const [hpLoading, setHpLoading] = useState(false);
 
   const activePortfolioId = usePortfolioStore((s) => s.activePortfolioId);
   const fetchPortfolios = usePortfolioStore((s) => s.fetchPortfolios);
@@ -174,6 +203,37 @@ export default function TaxPage() {
   useEffect(() => {
     loadGermanAdvanced();
   }, [loadGermanAdvanced]);
+
+  /* Load the India holding-period LTCG timer for the active portfolio */
+  const loadHoldingPeriod = useCallback(async () => {
+    if (jurisdiction !== "IN" || !activePortfolioId) {
+      setHoldingPeriod(null);
+      return;
+    }
+    setHpLoading(true);
+    try {
+      const hp = await api.get<HoldingPeriodTimer>(
+        `/tax/holding-period/${activePortfolioId}`
+      );
+      setHoldingPeriod(hp);
+    } catch {
+      toast.error("Failed to load holding-period timer");
+    } finally {
+      setHpLoading(false);
+    }
+  }, [jurisdiction, activePortfolioId]);
+
+  useEffect(() => {
+    loadHoldingPeriod();
+  }, [loadHoldingPeriod]);
+
+  /* Lots sorted soonest-to-become-LTCG first, already-eligible lots last */
+  const sortedLots = holdingPeriod
+    ? [...holdingPeriod.lots].sort((a, b) => {
+        if (a.status !== b.status) return a.status === "STCG" ? -1 : 1;
+        return a.days_remaining - b.days_remaining;
+      })
+    : [];
 
   /* Persist the single/joint filing election, then refresh the allowance */
   async function handleFilingChange(filing: "single" | "joint") {
@@ -495,6 +555,148 @@ export default function TaxPage() {
               above. Vorabpauschale figures are estimates and not tax advice.
             </p>
           </div>
+        </section>
+      )}
+
+      {/* ---- Holding Period Timer (India LTCG eligibility) ---- */}
+      {jurisdiction === "IN" && (
+        <section
+          aria-label="Holding period timer"
+          className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]"
+        >
+          <div className="flex items-start gap-2 border-b border-[hsl(var(--border))] px-5 py-4">
+            <Hourglass className="mt-0.5 h-5 w-5 shrink-0 text-[hsl(var(--primary))]" />
+            <div className="flex-1">
+              <h2 className="font-semibold">Holding Period Timer</h2>
+              <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                When each open lot crosses 12 months and turns LTCG-eligible
+                (12.5% vs 20% STCG)
+              </p>
+            </div>
+            {holdingPeriod && sortedLots.length > 0 && (
+              <div className="text-right text-xs text-[hsl(var(--muted-foreground))]">
+                <span>
+                  <span className="font-semibold text-amber-600">
+                    {holdingPeriod.summary.stcg_lots}
+                  </span>{" "}
+                  short-term ·{" "}
+                  <span className="font-semibold text-emerald-600">
+                    {holdingPeriod.summary.ltcg_lots}
+                  </span>{" "}
+                  eligible
+                </span>
+                {holdingPeriod.summary.next_eligible_date && (
+                  <div className="mt-0.5">
+                    Next eligible{" "}
+                    {formatDate(holdingPeriod.summary.next_eligible_date)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {hpLoading ? (
+            <div className="space-y-2 p-5">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="h-10 animate-pulse rounded bg-[hsl(var(--muted))]"
+                />
+              ))}
+            </div>
+          ) : !activePortfolioId ? (
+            <div className="p-5">
+              <EmptyState
+                icon={Clock}
+                title="Select a portfolio"
+                hint="Choose a portfolio to see when its Indian holdings become LTCG-eligible."
+              />
+            </div>
+          ) : sortedLots.length === 0 ? (
+            <div className="p-5">
+              <EmptyState
+                icon={Clock}
+                title="No open Indian lots"
+                hint="Buy NSE/BSE holdings to track their 12-month LTCG eligibility here."
+              />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[hsl(var(--border))] text-left text-xs text-[hsl(var(--muted-foreground))]">
+                    <th className="px-5 py-3 font-medium">Stock</th>
+                    <th className="px-5 py-3 font-medium">Purchase Date</th>
+                    <th className="px-5 py-3 font-medium text-right">Quantity</th>
+                    <th className="px-5 py-3 font-medium text-right">
+                      Days Remaining
+                    </th>
+                    <th className="px-5 py-3 font-medium">LTCG-Eligible Date</th>
+                    <th className="px-5 py-3 font-medium text-right">
+                      Est. Saving
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedLots.map((lot, i) => {
+                    const soon =
+                      lot.status === "STCG" && lot.days_remaining <= 30;
+                    return (
+                      <motion.tr
+                        key={`${lot.stock_symbol}-${lot.purchase_date}-${i}`}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: i * 0.02 }}
+                        className={`border-b border-[hsl(var(--border))] last:border-0 hover:bg-[hsl(var(--muted))]/50 ${
+                          soon ? "bg-amber-500/5" : ""
+                        }`}
+                      >
+                        <td className="px-5 py-3 font-medium">
+                          {lot.stock_symbol}
+                        </td>
+                        <td className="px-5 py-3 text-[hsl(var(--muted-foreground))]">
+                          {formatDate(lot.purchase_date)}
+                        </td>
+                        <td className="px-5 py-3 text-right font-mono">
+                          {lot.quantity}
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          {lot.status === "LTCG" ? (
+                            <span
+                              className="inline-flex rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-600"
+                              aria-label="Already LTCG-eligible"
+                            >
+                              Eligible
+                            </span>
+                          ) : (
+                            <span
+                              className={`font-mono ${
+                                soon
+                                  ? "font-semibold text-amber-600"
+                                  : "text-[hsl(var(--foreground))]"
+                              }`}
+                              aria-label={`${lot.days_remaining} days until LTCG-eligible`}
+                            >
+                              {lot.days_remaining}{" "}
+                              {lot.days_remaining === 1 ? "day" : "days"}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3 text-[hsl(var(--muted-foreground))]">
+                          {formatDate(lot.ltcg_date)}
+                        </td>
+                        <td className="px-5 py-3 text-right font-mono text-[hsl(var(--profit))]">
+                          {lot.potential_tax_saving != null
+                            ? formatCurrency(lot.potential_tax_saving)
+                            : "—"}
+                        </td>
+                      </motion.tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
 

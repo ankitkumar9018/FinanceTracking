@@ -8,9 +8,11 @@ import {
   BarChart3,
   AlertTriangle,
   ChevronDown,
+  Umbrella,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { api } from "@/lib/api-client";
+import { formatCurrency } from "@/lib/utils";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { motion } from "framer-motion";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -39,6 +41,23 @@ interface HoldingRisk {
   volatility: number | null;
   weight: number | null;
   risk_contribution: number | null;
+}
+
+interface HedgeEstimate {
+  portfolio_value: number;
+  beta: number;
+  notional_hedged: number;
+  index_price: number;
+  puts_needed: number;
+  est_premium_per_put: number;
+  est_total_cost: number;
+  cost_pct_of_portfolio: number;
+  assumptions: {
+    implied_vol_pct: number;
+    months: number;
+    protection_pct: number;
+  };
+  disclaimer: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -104,6 +123,17 @@ export default function RiskPage() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // Downside protection / hedge estimate (informational, interactive)
+  const [hedgeInputs, setHedgeInputs] = useState({
+    protection_pct: "80",
+    months: "3",
+    implied_vol_pct: "20",
+    index_price: "",
+  });
+  const [hedge, setHedge] = useState<HedgeEstimate | null>(null);
+  const [hedgeLoading, setHedgeLoading] = useState(false);
+  const [hedgeError, setHedgeError] = useState<string | null>(null);
+
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
@@ -154,11 +184,44 @@ export default function RiskPage() {
     }
   }, []);
 
+  const loadHedge = useCallback(
+    async (portfolioId: number) => {
+      setHedgeLoading(true);
+      setHedgeError(null);
+      try {
+        const params = new URLSearchParams({
+          protection_pct: hedgeInputs.protection_pct || "0",
+          months: hedgeInputs.months || "1",
+          implied_vol_pct: hedgeInputs.implied_vol_pct || "0",
+        });
+        if (hedgeInputs.index_price.trim()) {
+          params.set("index_price", hedgeInputs.index_price.trim());
+        }
+        const data = await api.get<HedgeEstimate>(
+          `/indicators/hedge/${portfolioId}?${params.toString()}`,
+        );
+        setHedge(data);
+      } catch (err) {
+        setHedge(null);
+        const msg =
+          err instanceof Error ? err.message : "Failed to estimate hedge cost";
+        setHedgeError(msg);
+        toast.error(msg);
+      } finally {
+        setHedgeLoading(false);
+      }
+    },
+    [hedgeInputs],
+  );
+
   useEffect(() => {
     if (activePortfolioId) {
       loadRiskData(activePortfolioId);
       loadConcentration(activePortfolioId);
     }
+    // Reset any prior hedge estimate when the active portfolio changes.
+    setHedge(null);
+    setHedgeError(null);
   }, [activePortfolioId, loadRiskData, loadConcentration]);
 
   function handlePortfolioChange(id: number) {
@@ -371,6 +434,186 @@ export default function RiskPage() {
           loading={concentrationLoading}
           error={concentrationError}
         />
+      )}
+
+      {/* ---- Downside Protection / Hedge Estimate ---- */}
+      {showContent && (
+        <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5">
+          <div className="flex items-start gap-3">
+            <div className="rounded-md bg-[hsl(var(--primary))]/10 p-2">
+              <Umbrella className="h-5 w-5 text-[hsl(var(--primary))]" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold">
+                Downside Protection (Hedge Estimate)
+              </h2>
+              <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                Ballpark cost of protecting your portfolio&apos;s downside with
+                index put options.
+              </p>
+            </div>
+          </div>
+
+          {/* Prominent disclaimer */}
+          <div className="mt-4 flex items-start gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-700 dark:text-yellow-400">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              <strong>Rough informational estimate, not options pricing or
+              advice.</strong>{" "}
+              The premium is a crude heuristic (no Black-Scholes, no live options
+              data, no strike/lot-size modelling). Do not use it as a quote or a
+              recommendation to trade.
+            </span>
+          </div>
+
+          {/* Inputs */}
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="block">
+              <span className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                Protection %
+              </span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                max={100}
+                aria-label="Percentage of downside to protect"
+                value={hedgeInputs.protection_pct}
+                onChange={(e) =>
+                  setHedgeInputs((s) => ({ ...s, protection_pct: e.target.value }))
+                }
+                className="mt-1 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                Months
+              </span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={1}
+                max={24}
+                aria-label="Protection horizon in months"
+                value={hedgeInputs.months}
+                onChange={(e) =>
+                  setHedgeInputs((s) => ({ ...s, months: e.target.value }))
+                }
+                className="mt-1 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                Implied Vol %
+              </span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                max={200}
+                aria-label="Assumed annualized implied volatility percentage"
+                value={hedgeInputs.implied_vol_pct}
+                onChange={(e) =>
+                  setHedgeInputs((s) => ({ ...s, implied_vol_pct: e.target.value }))
+                }
+                className="mt-1 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                Index Price
+              </span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                aria-label="Hedging index price level (leave blank for a default)"
+                placeholder="Auto (~24000)"
+                value={hedgeInputs.index_price}
+                onChange={(e) =>
+                  setHedgeInputs((s) => ({ ...s, index_price: e.target.value }))
+                }
+                className="mt-1 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={() => activePortfolioId && loadHedge(activePortfolioId)}
+              disabled={hedgeLoading || !activePortfolioId}
+              aria-label="Calculate hedge cost estimate"
+              className="inline-flex items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              <Umbrella className="h-4 w-4" />
+              {hedgeLoading ? "Estimating…" : "Calculate estimate"}
+            </button>
+          </div>
+
+          {hedgeError && !hedgeLoading && (
+            <p className="mt-3 text-sm text-red-600" role="alert">
+              {hedgeError}
+            </p>
+          )}
+
+          {/* Outputs */}
+          {hedge && !hedgeLoading && (
+            <div className="mt-5">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {[
+                  {
+                    label: "Notional Hedged",
+                    value: formatCurrency(
+                      hedge.notional_hedged,
+                      activePortfolio?.currency ?? "INR",
+                    ),
+                  },
+                  {
+                    label: "Puts Needed",
+                    value: hedge.puts_needed.toFixed(2),
+                  },
+                  {
+                    label: "Est. Total Cost",
+                    value: formatCurrency(
+                      hedge.est_total_cost,
+                      activePortfolio?.currency ?? "INR",
+                    ),
+                  },
+                  {
+                    label: "Cost % of Portfolio",
+                    value: `${hedge.cost_pct_of_portfolio.toFixed(2)}%`,
+                  },
+                ].map((o) => (
+                  <div
+                    key={o.label}
+                    className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4"
+                  >
+                    <p className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                      {o.label}
+                    </p>
+                    <p className="mt-1.5 text-xl font-bold">{o.value}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 text-xs text-[hsl(var(--muted-foreground))]">
+                Based on portfolio value{" "}
+                {formatCurrency(
+                  hedge.portfolio_value,
+                  activePortfolio?.currency ?? "INR",
+                )}
+                , beta {hedge.beta.toFixed(2)}, index level{" "}
+                {hedge.index_price.toLocaleString()}, protecting{" "}
+                {hedge.assumptions.protection_pct}% of downside over{" "}
+                {hedge.assumptions.months} month(s) at{" "}
+                {hedge.assumptions.implied_vol_pct}% implied vol.
+              </p>
+              <p className="mt-2 text-[10px] italic text-[hsl(var(--muted-foreground))]">
+                {hedge.disclaimer}
+              </p>
+            </div>
+          )}
+        </div>
       )}
 
       {/* ---- Per-Holding Risk Table ---- */}

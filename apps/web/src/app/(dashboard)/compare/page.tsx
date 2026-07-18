@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
-import { GitCompare, Plus, X, Loader2 } from "lucide-react";
+import { GitCompare, Plus, X, Loader2, Users } from "lucide-react";
 import { api, ApiError } from "@/lib/api-client";
 import {
   formatCurrency,
@@ -55,6 +55,28 @@ interface CompareRow {
   exchange: string;
 }
 
+interface PeerMetrics {
+  symbol: string;
+  name: string;
+  current_price: number | null;
+  day_change_pct: number | null;
+  pe_ratio: number | null;
+  market_cap: number | null;
+  dividend_yield: number | null;
+  week_52_high: number | null;
+  week_52_low: number | null;
+  week_52_position: number | null;
+  beta: number | null;
+}
+
+interface PeerResult {
+  symbol: string;
+  sector: string | null;
+  target: PeerMetrics | null;
+  peers: PeerMetrics[];
+  coverage_note: string;
+}
+
 const DAY_OPTIONS = [
   { value: 30, label: "30 days" },
   { value: 90, label: "90 days" },
@@ -79,6 +101,13 @@ export default function ComparePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CompareResult | null>(null);
+
+  // ── Peer comparison (single symbol vs curated sector peers) ──────────
+  const [peerSymbol, setPeerSymbol] = useState("");
+  const [peerExchange, setPeerExchange] = useState("NSE");
+  const [peerLoading, setPeerLoading] = useState(false);
+  const [peerError, setPeerError] = useState<string | null>(null);
+  const [peerResult, setPeerResult] = useState<PeerResult | null>(null);
 
   function updateRow(index: number, patch: Partial<CompareRow>) {
     setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
@@ -117,6 +146,29 @@ export default function ComparePage() {
       toast.error(message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handlePeerCompare() {
+    const sym = peerSymbol.trim().toUpperCase();
+    if (!sym) {
+      toast.error("Enter a symbol to find its sector peers");
+      return;
+    }
+
+    setPeerLoading(true);
+    setPeerError(null);
+    try {
+      const data = await api.get<PeerResult>(
+        `/comparison/peers/${encodeURIComponent(sym)}?exchange=${encodeURIComponent(peerExchange)}`,
+      );
+      setPeerResult(data);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to load peer comparison";
+      setPeerError(message);
+      toast.error(message);
+    } finally {
+      setPeerLoading(false);
     }
   }
 
@@ -390,6 +442,185 @@ export default function ComparePage() {
           hint="Enter 2-3 symbols above and hit Compare to see their metrics and a normalized price chart."
         />
       )}
+
+      {/* ── Peer Comparison ─────────────────────────────────────────── */}
+      <div className="space-y-4 border-t border-[hsl(var(--border))] pt-6">
+        <div>
+          <h2 className="flex items-center gap-2 text-xl font-bold tracking-tight">
+            <Users className="h-5 w-5" />
+            Peer Comparison
+          </h2>
+          <p className="text-sm text-[hsl(var(--muted-foreground))]">
+            Enter one stock to see how it stacks up against curated liquid peers from its sector.
+          </p>
+        </div>
+
+        {/* Input form */}
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4">
+          <input
+            type="text"
+            value={peerSymbol}
+            onChange={(e) => setPeerSymbol(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handlePeerCompare();
+            }}
+            placeholder="Symbol (e.g. HDFCBANK)"
+            aria-label="Peer comparison stock symbol"
+            className={`${inputClass} min-w-48 flex-1`}
+          />
+          <select
+            value={peerExchange}
+            onChange={(e) => setPeerExchange(e.target.value)}
+            aria-label="Peer comparison exchange"
+            className={`${inputClass} w-44`}
+          >
+            <option value="NSE">NSE (India)</option>
+            <option value="BSE">BSE (India)</option>
+            <option value="XETRA">XETRA (Germany)</option>
+          </select>
+          <button
+            onClick={handlePeerCompare}
+            disabled={peerLoading}
+            aria-label="Find sector peers"
+            className="inline-flex items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 transition-colors disabled:opacity-50"
+          >
+            {peerLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Users className="h-4 w-4" />
+            )}
+            {peerLoading ? "Loading..." : "Find Peers"}
+          </button>
+        </div>
+
+        {/* Results */}
+        {peerError ? (
+          <ErrorState message={peerError} onRetry={handlePeerCompare} />
+        ) : peerLoading ? (
+          <div className="h-72 animate-pulse rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]" />
+        ) : peerResult ? (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              {peerResult.sector && (
+                <span className="rounded-full bg-[hsl(var(--muted))] px-3 py-1 text-xs font-medium">
+                  Sector: {peerResult.sector}
+                </span>
+              )}
+              <span className="text-[hsl(var(--muted-foreground))]">
+                {peerResult.coverage_note}
+              </span>
+            </div>
+
+            {peerResult.target == null && peerResult.peers.length === 0 ? (
+              <EmptyState
+                icon={Users}
+                title="No peer data available"
+                hint="We couldn't fetch metrics for this symbol. Check the symbol and exchange, then try again."
+              />
+            ) : (
+              <div className="overflow-hidden rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
+                        <th className="px-4 py-3 text-left">Stock</th>
+                        <th className="px-4 py-3 text-right">Price</th>
+                        <th className="px-4 py-3 text-right">Day Change</th>
+                        <th className="px-4 py-3 text-right">P/E</th>
+                        <th className="px-4 py-3 text-right">Market Cap</th>
+                        <th className="px-4 py-3 text-right">Div Yield</th>
+                        <th className="px-4 py-3 text-right">52W Pos</th>
+                        <th className="px-4 py-3 text-right">Beta</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        ...(peerResult.target
+                          ? [{ p: peerResult.target, isTarget: true }]
+                          : []),
+                        ...peerResult.peers.map((p) => ({ p, isTarget: false })),
+                      ].map(({ p, isTarget }) => {
+                          const ccy = currencyForExchange(peerExchange);
+                          return (
+                            <tr
+                              key={`${isTarget ? "target-" : ""}${p.symbol}`}
+                              className={`border-b border-[hsl(var(--border))] last:border-0 transition-colors ${
+                                isTarget
+                                  ? "bg-[hsl(var(--primary))]/10 font-medium"
+                                  : "hover:bg-[hsl(var(--muted))]/20"
+                              }`}
+                            >
+                              <td className="px-4 py-3 text-left">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-[hsl(var(--foreground))]">
+                                    {p.symbol}
+                                  </span>
+                                  {isTarget && (
+                                    <span className="rounded bg-[hsl(var(--primary))] px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[hsl(var(--primary-foreground))]">
+                                      Target
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-xs font-normal text-[hsl(var(--muted-foreground))]">
+                                  {p.name}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-right font-mono">
+                                {formatCurrency(p.current_price, ccy)}
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                {p.day_change_pct != null ? (
+                                  <span
+                                    className={`font-mono ${
+                                      p.day_change_pct >= 0
+                                        ? "text-[hsl(var(--profit))]"
+                                        : "text-[hsl(var(--loss))]"
+                                    }`}
+                                  >
+                                    {formatPercent(p.day_change_pct)}
+                                  </span>
+                                ) : (
+                                  <span className="text-[hsl(var(--muted-foreground))]">
+                                    {"—"}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-right font-mono">
+                                {p.pe_ratio != null ? p.pe_ratio.toFixed(2) : "—"}
+                              </td>
+                              <td className="px-4 py-3 text-right font-mono">
+                                {humanizeMarketCap(p.market_cap, ccy)}
+                              </td>
+                              <td className="px-4 py-3 text-right font-mono">
+                                {p.dividend_yield != null
+                                  ? `${p.dividend_yield.toFixed(2)}%`
+                                  : "—"}
+                              </td>
+                              <td className="px-4 py-3 text-right font-mono">
+                                {p.week_52_position != null
+                                  ? `${p.week_52_position.toFixed(0)}%`
+                                  : "—"}
+                              </td>
+                              <td className="px-4 py-3 text-right font-mono">
+                                {p.beta != null ? p.beta.toFixed(2) : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <EmptyState
+            icon={Users}
+            title="Find sector peers"
+            hint="Enter a single symbol above and hit Find Peers to compare it against curated peers from its sector."
+          />
+        )}
+      </div>
     </div>
   );
 }

@@ -40,6 +40,7 @@ import {
   Split,
   Filter,
   CalendarClock,
+  Activity,
 } from "lucide-react";
 
 interface NavItem {
@@ -69,6 +70,7 @@ const NAV_SECTIONS: NavSection[] = [
     heading: "Analysis",
     items: [
       { href: "/visualizations", label: "Analytics", icon: BarChart2 },
+      { href: "/cash-flow", label: "Cash Flow", icon: Activity },
       { href: "/compare", label: "Compare", icon: Scale },
       { href: "/screener", label: "Screener", icon: Filter },
       { href: "/risk", label: "Risk", icon: ShieldAlert },

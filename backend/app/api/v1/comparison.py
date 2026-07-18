@@ -11,7 +11,11 @@ from app.database import get_db
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.user import User
-from app.services.comparison_service import compare_stocks
+from app.services.comparison_service import (
+    PeerMetrics,
+    compare_peers,
+    compare_stocks,
+)
 from app.services.stop_loss_service import (
     get_stop_loss_holdings,
     remove_stop_loss,
@@ -57,6 +61,43 @@ async def compare(
         ],
         "price_history": result.price_history,
         "period_days": result.period_days,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Peer Comparison
+# ---------------------------------------------------------------------------
+
+def _peer_to_dict(p: PeerMetrics) -> dict:
+    return {
+        "symbol": p.symbol,
+        "name": p.name,
+        "current_price": p.current_price,
+        "day_change_pct": p.day_change_pct,
+        "pe_ratio": p.pe_ratio,
+        "market_cap": p.market_cap,
+        "dividend_yield": p.dividend_yield,
+        "week_52_high": p.week_52_high,
+        "week_52_low": p.week_52_low,
+        "week_52_position": p.week_52_position,
+        "beta": p.beta,
+    }
+
+
+@router.get("/peers/{symbol}")
+async def peers(
+    symbol: str,
+    exchange: str = Query("NSE", description="Exchange for the symbol"),
+    user: User = Depends(get_current_user),
+):
+    """Compare a stock against curated sector peers."""
+    result = await compare_peers(symbol, exchange)
+    return {
+        "symbol": result.symbol,
+        "sector": result.sector,
+        "target": _peer_to_dict(result.target) if result.target else None,
+        "peers": [_peer_to_dict(p) for p in result.peers],
+        "coverage_note": result.coverage_note,
     }
 
 

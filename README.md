@@ -270,9 +270,11 @@ financeTracking/
 
 ## Documentation
 
+📖 **[Read the User Manual online](https://claude.ai/code/artifact/1eafd1dd-b818-4ac9-92aa-b2f5de6f08c2)** — a polished, navigable web version with diagrams, light/dark themes, and a full table of contents.
+
 | Document | Description |
 |---|---|
-| [**User Manual**](docs/user-manual.md) | Complete step-by-step guide for investors — also as an offline [HTML page](docs/user-manual.html) |
+| [**User Manual**](docs/user-manual.md) | Complete step-by-step guide for investors — [online](https://claude.ai/code/artifact/1eafd1dd-b818-4ac9-92aa-b2f5de6f08c2) or offline [HTML](docs/user-manual.html) |
 | [Developer Guide](docs/developer-guide.md) | Setup, project structure, conventions, add-a-feature walkthrough, testing |
 | [Architecture](docs/architecture.md) | System design, diagrams, data flow |
 | [API Reference](docs/api-reference.md) | REST endpoints & WebSocket channels |

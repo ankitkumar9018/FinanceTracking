@@ -88,18 +88,17 @@ export default function LoginPage() {
             <input
               id="totp"
               type="text"
-              inputMode="numeric"
               autoComplete="one-time-code"
               required
               autoFocus
-              maxLength={6}
+              maxLength={12}
               value={totpCode}
-              onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))}
+              onChange={(e) => setTotpCode(e.target.value.replace(/[^a-zA-Z0-9-]/g, ""))}
               className="flex h-10 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm font-mono tracking-widest focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
-              placeholder="123456"
+              placeholder="123456 or backup code"
             />
             <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
-              Enter the 6-digit code from your authenticator app.
+              Enter the 6-digit code from your authenticator app — or one of your backup codes if you can&apos;t access it.
             </p>
           </div>
         )}

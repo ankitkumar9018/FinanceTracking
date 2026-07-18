@@ -508,6 +508,49 @@ def _build_consumed_lots(
     return consumed
 
 
+def build_open_lots(transactions: list[Transaction]) -> list[dict]:
+    """Replay BUY/SELL transactions FIFO and return the still-open buy lots.
+
+    Mirrors the FIFO consumption in :func:`_build_consumed_lots`, but instead of
+    the lots a SELL draws from, this returns the lots that remain UNSOLD after
+    every SELL has been applied. Each returned lot is
+    ``{"qty": remaining, "price": buy price, "date": buy date}``; a lot that was
+    partially sold keeps only its remaining quantity. Lots are ordered oldest
+    buy first (FIFO order), which is also the LTCG-clock order.
+    """
+    # Ordered by (date, id) so a BUY and SELL on the same day resolve
+    # deterministically (earlier-created first) — same rule as the consumed path.
+    ordered = sorted(transactions, key=lambda t: (t.date, t.id))
+
+    lots: list[dict] = []
+    for t in ordered:
+        if t.transaction_type == "BUY":
+            lots.append(
+                {
+                    "qty": float(t.quantity),
+                    "price": float(t.price),
+                    "date": t.date,
+                }
+            )
+            continue
+
+        if t.transaction_type != "SELL":
+            continue
+
+        # Consume this SELL's quantity FIFO from the front of the queue.
+        remaining = float(t.quantity)
+        while remaining > 1e-12 and lots:
+            lot = lots[0]
+            matched = min(remaining, lot["qty"])
+            lot["qty"] -= matched
+            remaining -= matched
+            if lot["qty"] <= 1e-12:
+                lots.pop(0)
+
+    # Defensive: drop any lot rounded down to (effectively) zero.
+    return [lot for lot in lots if lot["qty"] > 1e-12]
+
+
 async def compute_tax_for_transaction(
     transaction_id: int,
     user_id: int,
