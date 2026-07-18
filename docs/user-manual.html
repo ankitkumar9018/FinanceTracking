@@ -1,0 +1,1477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FinanceTracker — Complete User Manual</title>
+<style>
+  :root {
+    /* neutrals: cool slate with faint teal bias */
+    --ground: #f6f9f8;
+    --surface: #ffffff;
+    --surface-2: #eef3f2;
+    --surface-3: #e4ebea;
+    --ink: #132029;
+    --ink-soft: #3f5159;
+    --ink-faint: #6b7d84;
+    --line: #d6e0de;
+    --line-strong: #c2d0cd;
+    /* accent: deep emerald/teal, sparing */
+    --accent: #0b7a5b;
+    --accent-ink: #0a6b50;
+    --accent-wash: rgba(11,122,91,0.08);
+    /* semantic only */
+    --gain: #16a34a;
+    --loss: #dc2626;
+    --warn: #b45309;
+    /* zone tints (semantic, not accent) */
+    --zone-dark-red: #dc2626;
+    --zone-light-red: #f0a3a3;
+    --zone-light-green: #86d29c;
+    --zone-dark-green: #16a34a;
+
+    --shadow: 0 1px 2px rgba(19,32,41,0.05), 0 8px 24px rgba(19,32,41,0.06);
+    --radius: 10px;
+    --maxread: 68ch;
+    --sidebar-w: 17rem;
+    --topbar-h: 3.75rem;
+
+    --fs-eyebrow: 0.72rem;
+    --f-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --f-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0e1416;
+      --surface: #141c1f;
+      --surface-2: #182226;
+      --surface-3: #1f2b30;
+      --ink: #e6eef0;
+      --ink-soft: #aebcc0;
+      --ink-faint: #7d8f94;
+      --line: #263338;
+      --line-strong: #32444a;
+      --accent: #2dd4a7;
+      --accent-ink: #37e0b2;
+      --accent-wash: rgba(45,212,167,0.10);
+      --gain: #34d399;
+      --loss: #f87171;
+      --warn: #fbbf24;
+      --zone-dark-red: #f87171;
+      --zone-light-red: #b06a6a;
+      --zone-light-green: #4d7d5f;
+      --zone-dark-green: #34d399;
+      --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 10px 30px rgba(0,0,0,0.35);
+    }
+  }
+  /* explicit toggle must win both directions */
+  :root[data-theme="light"] {
+    --ground: #f6f9f8; --surface: #ffffff; --surface-2: #eef3f2; --surface-3: #e4ebea;
+    --ink: #132029; --ink-soft: #3f5159; --ink-faint: #6b7d84;
+    --line: #d6e0de; --line-strong: #c2d0cd;
+    --accent: #0b7a5b; --accent-ink: #0a6b50; --accent-wash: rgba(11,122,91,0.08);
+    --gain: #16a34a; --loss: #dc2626; --warn: #b45309;
+    --zone-dark-red: #dc2626; --zone-light-red: #f0a3a3; --zone-light-green: #86d29c; --zone-dark-green: #16a34a;
+    --shadow: 0 1px 2px rgba(19,32,41,0.05), 0 8px 24px rgba(19,32,41,0.06);
+  }
+  :root[data-theme="dark"] {
+    --ground: #0e1416; --surface: #141c1f; --surface-2: #182226; --surface-3: #1f2b30;
+    --ink: #e6eef0; --ink-soft: #aebcc0; --ink-faint: #7d8f94;
+    --line: #263338; --line-strong: #32444a;
+    --accent: #2dd4a7; --accent-ink: #37e0b2; --accent-wash: rgba(45,212,167,0.10);
+    --gain: #34d399; --loss: #f87171; --warn: #fbbf24;
+    --zone-dark-red: #f87171; --zone-light-red: #b06a6a; --zone-light-green: #4d7d5f; --zone-dark-green: #34d399;
+    --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 10px 30px rgba(0,0,0,0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { animation: none !important; transition: none !important; }
+  }
+
+  body, .ft-root { margin: 0; }
+  .ft-root {
+    font-family: var(--f-ui);
+    color: var(--ink);
+    background: var(--ground);
+    line-height: 1.65;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    scroll-behavior: smooth;
+  }
+
+  /* ---------- Top bar ---------- */
+  .topbar {
+    position: sticky; top: 0; z-index: 40;
+    height: var(--topbar-h);
+    display: flex; align-items: center; gap: 1rem;
+    padding: 0 1.25rem;
+    background: color-mix(in srgb, var(--ground) 86%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: baseline; gap: 0.6rem; min-width: 0; }
+  .brand-mark {
+    font-weight: 800; font-size: 1.02rem; letter-spacing: -0.02em;
+    color: var(--ink); white-space: nowrap;
+  }
+  .brand-mark .dot { color: var(--accent); }
+  .brand-tag {
+    font-size: 0.8rem; color: var(--ink-faint);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border-left: 1px solid var(--line-strong); padding-left: 0.6rem;
+  }
+  .topbar-spacer { flex: 1; }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 2.3rem; height: 2.3rem; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--surface);
+    color: var(--ink-soft); cursor: pointer; font-size: 1.05rem;
+    transition: border-color .15s, color .15s, background .15s;
+  }
+  .icon-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .hamburger { display: none; }
+
+  /* ---------- Shell ---------- */
+  .shell { display: grid; grid-template-columns: var(--sidebar-w) minmax(0,1fr); align-items: start; }
+
+  /* ---------- Sidebar TOC ---------- */
+  .sidebar {
+    position: sticky; top: var(--topbar-h);
+    height: calc(100vh - var(--topbar-h));
+    overflow-y: auto; overscroll-behavior: contain;
+    border-right: 1px solid var(--line);
+    padding: 1.4rem 0.9rem 3rem 1.25rem;
+    background: var(--ground);
+  }
+  .toc-head {
+    font-size: var(--fs-eyebrow); font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--ink-faint);
+    margin: 0 0 0.7rem 0.5rem;
+  }
+  .toc { list-style: none; margin: 0; padding: 0; }
+  .toc-group { margin-top: 0.9rem; }
+  .toc-group:first-child { margin-top: 0; }
+  .toc-group-label {
+    font-size: 0.66rem; font-weight: 700; letter-spacing: 0.15em;
+    text-transform: uppercase; color: var(--accent);
+    padding: 0.3rem 0.5rem 0.35rem; margin: 0;
+    display: block;
+  }
+  .toc a {
+    display: flex; gap: 0.55rem; align-items: baseline;
+    padding: 0.32rem 0.5rem; border-radius: 7px;
+    color: var(--ink-soft); text-decoration: none;
+    font-size: 0.88rem; line-height: 1.35;
+    border-left: 2px solid transparent;
+    transition: color .12s, background .12s;
+  }
+  .toc a .num { color: var(--ink-faint); font-variant-numeric: tabular-nums; font-size: 0.78rem; min-width: 1.2rem; }
+  .toc a:hover { color: var(--ink); background: var(--surface-2); }
+  .toc a.active {
+    color: var(--accent); background: var(--accent-wash);
+    border-left-color: var(--accent); font-weight: 600;
+  }
+  .toc a.active .num { color: var(--accent); }
+  .toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* ---------- Main ---------- */
+  .main { padding: 2.4rem clamp(1.25rem, 4vw, 3.5rem) 6rem; min-width: 0; }
+  .doc-head { max-width: var(--maxread); margin-bottom: 2.6rem; }
+  .doc-eyebrow {
+    font-size: var(--fs-eyebrow); font-weight: 700; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 0.7rem;
+  }
+  .doc-title {
+    font-size: clamp(2rem, 4.6vw, 2.9rem); line-height: 1.08;
+    letter-spacing: -0.025em; font-weight: 800; margin: 0 0 0.7rem;
+    text-wrap: balance;
+  }
+  .doc-lede { font-size: 1.08rem; color: var(--ink-soft); margin: 0; text-wrap: pretty; }
+  .doc-meta {
+    display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.3rem;
+  }
+  .chip {
+    font-size: 0.76rem; font-weight: 600; letter-spacing: 0.02em;
+    padding: 0.24rem 0.6rem; border-radius: 999px;
+    background: var(--surface-2); color: var(--ink-soft);
+    border: 1px solid var(--line);
+  }
+
+  section { max-width: var(--maxread); scroll-margin-top: calc(var(--topbar-h) + 1rem); }
+  section + section { margin-top: 3.4rem; }
+  .part-rule {
+    max-width: none; margin: 3.4rem 0 0; border: 0; height: 1px;
+    background: linear-gradient(90deg, var(--accent), transparent);
+    max-width: var(--maxread);
+  }
+  .part-rule + section { margin-top: 1.4rem; }
+
+  .sec-eyebrow {
+    font-size: var(--fs-eyebrow); font-weight: 700; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 0.5rem;
+  }
+  h2 {
+    font-size: clamp(1.5rem, 3vw, 1.9rem); line-height: 1.15;
+    letter-spacing: -0.02em; font-weight: 800; margin: 0 0 0.9rem;
+    text-wrap: balance; display: flex; gap: 0.7rem; align-items: baseline;
+  }
+  h2 .h2num {
+    font-size: 0.9rem; font-weight: 700; color: var(--accent);
+    font-variant-numeric: tabular-nums; letter-spacing: 0;
+    padding-top: 0.15rem; flex: none;
+  }
+  h3 {
+    font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em;
+    margin: 2rem 0 0.6rem; text-wrap: balance;
+  }
+  h4 { font-size: 0.98rem; font-weight: 700; margin: 1.4rem 0 0.4rem; color: var(--ink); }
+  p { margin: 0 0 0.95rem; text-wrap: pretty; }
+  a { color: var(--accent); text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+  a:hover { text-decoration-color: var(--accent); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+  strong { font-weight: 700; color: var(--ink); }
+
+  ul, ol { margin: 0 0 1rem; padding-left: 1.35rem; }
+  li { margin: 0.32rem 0; }
+  ol { counter-reset: none; }
+  ol li::marker { color: var(--accent); font-weight: 700; }
+  ul li::marker { color: var(--line-strong); }
+
+  code {
+    font-family: var(--f-mono); font-size: 0.86em;
+    background: var(--surface-2); border: 1px solid var(--line);
+    padding: 0.1em 0.38em; border-radius: 5px; color: var(--ink);
+    word-break: break-word;
+  }
+  pre {
+    font-family: var(--f-mono); font-size: 0.85rem;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 1rem 1.1rem;
+    overflow-x: auto; margin: 0 0 1.1rem;
+  }
+  pre code { background: none; border: 0; padding: 0; }
+
+  /* ---------- Callouts ---------- */
+  .callout {
+    display: grid; grid-template-columns: auto 1fr; gap: 0.7rem;
+    padding: 0.85rem 1rem; margin: 1.1rem 0; border-radius: var(--radius);
+    border: 1px solid var(--line); background: var(--surface);
+    font-size: 0.95rem; box-shadow: var(--shadow);
+  }
+  .callout .co-ico { font-weight: 800; line-height: 1.5; }
+  .callout p:last-child { margin: 0; }
+  .callout p:first-child { margin-top: 0; }
+  .callout.tip { border-left: 3px solid var(--accent); }
+  .callout.tip .co-ico { color: var(--accent); }
+  .callout.warn { border-left: 3px solid var(--warn); }
+  .callout.warn .co-ico { color: var(--warn); }
+  .callout .co-label {
+    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.12em;
+    text-transform: uppercase; display: block; margin-bottom: 0.15rem;
+  }
+  .callout.tip .co-label { color: var(--accent); }
+  .callout.warn .co-label { color: var(--warn); }
+
+  /* ---------- Tables ---------- */
+  .table-wrap { overflow-x: auto; margin: 0 0 1.2rem; border: 1px solid var(--line); border-radius: var(--radius); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; min-width: 30rem; }
+  thead th {
+    text-align: left; font-weight: 700; font-size: 0.74rem;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint);
+    background: var(--surface-2); padding: 0.6rem 0.85rem;
+    border-bottom: 1px solid var(--line-strong); white-space: nowrap;
+  }
+  tbody td { padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:nth-child(even) { background: color-mix(in srgb, var(--surface-2) 45%, transparent); }
+  td code { white-space: nowrap; }
+  .num-col { font-variant-numeric: tabular-nums; }
+
+  /* zone swatches in the action table */
+  .swatch { display: inline-block; width: 0.85rem; height: 0.85rem; border-radius: 3px; vertical-align: -1px; margin-right: 0.35rem; border: 1px solid rgba(0,0,0,0.15); }
+  .sw-none { background: var(--surface-3); }
+  .sw-lr { background: var(--zone-light-red); }
+  .sw-dr { background: var(--zone-dark-red); }
+  .sw-lg { background: var(--zone-light-green); }
+  .sw-dg { background: var(--zone-dark-green); }
+  .flag-y { color: var(--loss); font-weight: 700; }
+  .flag-n { color: var(--ink-faint); font-weight: 700; }
+
+  /* ---------- Legend ---------- */
+  .legend {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface); padding: 1.1rem 1.2rem; margin: 1.3rem 0;
+    box-shadow: var(--shadow);
+  }
+  .legend h4 { margin: 0 0 0.2rem; }
+  .legend-sub { font-size: 0.85rem; color: var(--ink-faint); margin: 0 0 0.9rem; }
+  .legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+  @media (max-width: 560px) { .legend-grid { grid-template-columns: 1fr; } }
+  .legend-col h5 { margin: 0 0 0.5rem; font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-faint); }
+  .legend-row { display: flex; align-items: center; gap: 0.55rem; font-size: 0.88rem; margin: 0.35rem 0; }
+  .lg-chip {
+    font-variant-numeric: tabular-nums; font-weight: 700; font-size: 0.82rem;
+    padding: 0.12rem 0.5rem; border-radius: 6px; min-width: 4.3rem; text-align: center;
+  }
+  .lg-gain { color: var(--gain); background: color-mix(in srgb, var(--gain) 14%, transparent); }
+  .lg-loss { color: var(--loss); background: color-mix(in srgb, var(--loss) 14%, transparent); }
+  .lg-swatch { width: 1.3rem; height: 1.3rem; border-radius: 5px; flex: none; border: 1px solid rgba(0,0,0,0.12); }
+
+  /* ---------- Mermaid ---------- */
+  .diagram {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface); padding: 1rem; margin: 1.2rem 0;
+    overflow-x: auto; box-shadow: var(--shadow);
+  }
+  .diagram pre.mermaid { background: none; border: 0; padding: 0; margin: 0; text-align: center; }
+  .diagram-cap { font-size: 0.78rem; color: var(--ink-faint); margin: 0.5rem 0 0; text-align: center; }
+
+  /* keyboard kbd */
+  kbd {
+    font-family: var(--f-mono); font-size: 0.8em;
+    background: var(--surface-2); border: 1px solid var(--line-strong);
+    border-bottom-width: 2px; border-radius: 5px; padding: 0.08em 0.4em; color: var(--ink);
+    white-space: nowrap;
+  }
+
+  .backtop { margin-top: 0.4rem; }
+  .backtop a { font-size: 0.8rem; color: var(--ink-faint); text-decoration: none; }
+  .backtop a:hover { color: var(--accent); }
+
+  footer.doc-foot {
+    max-width: var(--maxread); margin-top: 4rem; padding-top: 1.4rem;
+    border-top: 1px solid var(--line); font-size: 0.85rem; color: var(--ink-faint);
+  }
+
+  /* ---------- Mobile drawer ---------- */
+  .backdrop { display: none; }
+  @media (max-width: 720px) {
+    .shell { grid-template-columns: 1fr; }
+    .hamburger { display: inline-flex; }
+    .brand-tag { display: none; }
+    .sidebar {
+      position: fixed; top: 0; left: 0; bottom: 0; height: 100vh;
+      width: min(20rem, 84vw); z-index: 60;
+      transform: translateX(-100%); transition: transform .22s ease;
+      border-right: 1px solid var(--line); box-shadow: var(--shadow);
+      padding-top: 1.2rem;
+    }
+    .ft-root.nav-open .sidebar { transform: translateX(0); }
+    .backdrop {
+      display: block; position: fixed; inset: 0; z-index: 50;
+      background: rgba(6,12,14,0.5); opacity: 0; pointer-events: none;
+      transition: opacity .2s;
+    }
+    .ft-root.nav-open .backdrop { opacity: 1; pointer-events: auto; }
+    .main { padding: 1.6rem 1.15rem 4rem; }
+    section, .doc-head, .part-rule, footer.doc-foot { max-width: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar, .backdrop { transition: none; }
+  }
+</style>
+
+<style>
+  /* standalone build: pre-rendered Mermaid SVGs sit on a fixed light card so
+     the neutral-theme dark text stays legible in both light and dark modes */
+  .diagram { background: #ffffff; border-color: #d6e0de; }
+  .mermaid-svg { text-align: center; overflow-x: auto; }
+  .mermaid-svg svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+</style>
+</head>
+<body>
+<div class="ft-root" id="ftRoot">
+  <div class="topbar">
+    <button class="icon-btn hamburger" id="hamburger" aria-label="Open table of contents" aria-expanded="false" aria-controls="sidebar">☰</button>
+    <div class="brand">
+      <span class="brand-mark">Finance<span class="dot">Tracker</span></span>
+      <span class="brand-tag">User manual — Indian &amp; German markets</span>
+    </div>
+    <span class="topbar-spacer"></span>
+    <button class="icon-btn" id="themeToggle" aria-label="Toggle light and dark theme" title="Toggle theme"><span id="themeIcon">◑</span></button>
+  </div>
+
+  <div class="shell">
+    <nav class="sidebar" id="sidebar" aria-label="Table of contents">
+      <p class="toc-head">Contents</p>
+      <ul class="toc" id="toc">
+        <li class="toc-group">
+          <span class="toc-group-label">Getting started</span>
+          <a href="#introduction"><span class="num">1</span><span>Introduction</span></a>
+          <a href="#getting-started"><span class="num">2</span><span>Getting Started</span></a>
+        </li>
+        <li class="toc-group">
+          <span class="toc-group-label">Your portfolio</span>
+          <a href="#dashboard"><span class="num">3</span><span>The Dashboard</span></a>
+          <a href="#portfolios"><span class="num">4</span><span>Portfolios</span></a>
+          <a href="#holdings-transactions"><span class="num">5</span><span>Holdings &amp; Transactions</span></a>
+        </li>
+        <li class="toc-group">
+          <span class="toc-group-label">Staying informed</span>
+          <a href="#watchlist-alerts"><span class="num">6</span><span>Watchlist &amp; Alerts</span></a>
+          <a href="#charts"><span class="num">7</span><span>Charts</span></a>
+        </li>
+        <li class="toc-group">
+          <span class="toc-group-label">Taxes &amp; income</span>
+          <a href="#taxes"><span class="num">8</span><span>Taxes</span></a>
+          <a href="#mutual-funds-dividends"><span class="num">9</span><span>Mutual Funds &amp; Dividends</span></a>
+        </li>
+        <li class="toc-group">
+          <span class="toc-group-label">Wealth &amp; risk</span>
+          <a href="#net-worth"><span class="num">10</span><span>Net Worth</span></a>
+          <a href="#analytics-risk"><span class="num">11</span><span>Analytics &amp; Risk</span></a>
+        </li>
+        <li class="toc-group">
+          <span class="toc-group-label">Planning &amp; discovery</span>
+          <a href="#planning"><span class="num">12</span><span>Planning</span></a>
+          <a href="#discovery"><span class="num">13</span><span>Discovery</span></a>
+        </li>
+        <li class="toc-group">
+          <span class="toc-group-label">Intelligence</span>
+          <a href="#ai-assistant"><span class="num">14</span><span>AI Assistant</span></a>
+          <a href="#brokers"><span class="num">15</span><span>Brokers</span></a>
+        </li>
+        <li class="toc-group">
+          <span class="toc-group-label">Data &amp; settings</span>
+          <a href="#import-export-reports"><span class="num">16</span><span>Import, Export &amp; Reports</span></a>
+          <a href="#settings"><span class="num">17</span><span>Settings</span></a>
+        </li>
+        <li class="toc-group">
+          <span class="toc-group-label">Desktop &amp; help</span>
+          <a href="#desktop-app"><span class="num">18</span><span>The Desktop App</span></a>
+          <a href="#troubleshooting-faq"><span class="num">19</span><span>Troubleshooting &amp; FAQ</span></a>
+          <a href="#shortcuts-tips"><span class="num">20</span><span>Shortcuts &amp; Tips</span></a>
+        </li>
+      </ul>
+    </nav>
+    <div class="backdrop" id="backdrop"></div>
+
+    <main class="main">
+      <header class="doc-head" id="top">
+        <p class="doc-eyebrow">Complete User Manual</p>
+        <h1 class="doc-title">Track, understand, and grow your investments.</h1>
+        <p class="doc-lede">Your friendly, step-by-step guide to managing a portfolio across Indian (NSE/BSE) and German (XETRA) markets. Written for you, the investor — no technical knowledge needed.</p>
+        <div class="doc-meta">
+          <span class="chip">NSE · BSE · XETRA</span>
+          <span class="chip">₹ INR &amp; € EUR</span>
+          <span class="chip">20 sections</span>
+          <span class="chip">Web &amp; Desktop</span>
+        </div>
+      </header>
+
+      <!-- ============ 1 ============ -->
+      <section id="introduction">
+        <p class="sec-eyebrow">Getting started</p>
+        <h2><span class="h2num">01</span><span>Introduction — What This App Is &amp; Who It's For</span></h2>
+        <p><strong>FinanceTracker</strong> is a personal investment portfolio tracker built for retail investors in <strong>India</strong> and <strong>Germany</strong>. It brings everything about your money into one place: your stocks, mutual funds, dividends, other assets (gold, crypto, fixed deposits, real estate), your taxes, and your long-term goals.</p>
+
+        <h3>What makes it different</h3>
+        <ul>
+          <li><strong>Two markets, one app.</strong> It understands the NSE and BSE (India) and XETRA (Germany), including the quirks of each — the exchange suffixes, the currencies (₹ and €), and each country's tax rules.</li>
+          <li><strong>Colour-coded "action needed" system.</strong> Instead of staring at rows of numbers, each stock lights up in colour when it crosses a price zone you care about, so you can tell at a glance what needs your attention.</li>
+          <li><strong>You own your data.</strong> In the desktop app everything runs locally on your own computer — your holdings never leave your machine, and the AI assistant can run fully offline.</li>
+          <li><strong>Graceful, not fragile.</strong> Live prices, AI, brokers, and notifications are all optional add-ons. If any of them is unavailable, the rest of the app keeps working normally.</li>
+        </ul>
+
+        <h3>Who it's for</h3>
+        <ul>
+          <li>Long-term investors who want a clear picture of their whole portfolio.</li>
+          <li>People who currently track investments in a spreadsheet and want something smarter (you can import your Excel file directly).</li>
+          <li>Anyone managing <strong>both</strong> Indian and German holdings and tired of juggling two systems.</li>
+          <li>Investors who want tax estimates, dividend forecasts, and goal planning without hiring an advisor.</li>
+        </ul>
+
+        <h3>How to read this manual</h3>
+        <p>Each section maps to an area of the app's left-hand sidebar. You do not need to read it front to back — set up your account (Section 2), get your holdings in (Section 5 or 16), then explore whatever interests you.</p>
+
+        <div class="callout warn">
+          <span class="co-ico">!</span>
+          <div>
+            <span class="co-label">A word on the numbers</span>
+            <p>Prices come from public market data (via yfinance) and can be delayed. Tax figures, dividend forecasts, risk metrics, and AI insights are <strong>estimates to help you think</strong>, not financial or tax advice. Always confirm important decisions with a qualified professional.</p>
+          </div>
+        </div>
+      </section>
+
+      <hr class="part-rule">
+
+      <!-- ============ 2 ============ -->
+      <section id="getting-started">
+        <h2><span class="h2num">02</span><span>Getting Started</span></h2>
+        <p>This section takes you from zero to a working account: creating your login, signing in, turning on extra security, recovering a forgotten password, and the guided tour that greets you on first launch.</p>
+
+        <h3>The big picture</h3>
+        <div class="diagram">
+          <div class="mermaid-svg"><svg id="my-svg" width="100%" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" class="flowchart" style="max-width: 498.75px; background-color: transparent;" viewBox="0 0 498.75 1262.265625" role="graphics-document document" aria-roledescription="flowchart-v2"><style>#my-svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;fill:#000000;}@keyframes edge-animation-frame{from{stroke-dashoffset:0;}}@keyframes dash{to{stroke-dashoffset:0;}}#my-svg .edge-animation-slow{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 50s linear infinite;stroke-linecap:round;}#my-svg .edge-animation-fast{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 20s linear infinite;stroke-linecap:round;}#my-svg .error-icon{fill:#552222;}#my-svg .error-text{fill:#552222;stroke:#552222;}#my-svg .edge-thickness-normal{stroke-width:1px;}#my-svg .edge-thickness-thick{stroke-width:3.5px;}#my-svg .edge-pattern-solid{stroke-dasharray:0;}#my-svg .edge-thickness-invisible{stroke-width:0;fill:none;}#my-svg .edge-pattern-dashed{stroke-dasharray:3;}#my-svg .edge-pattern-dotted{stroke-dasharray:2;}#my-svg .marker{fill:#666;stroke:#666;}#my-svg .marker.cross{stroke:#666;}#my-svg svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;}#my-svg p{margin:0;}#my-svg .label{font-family:"trebuchet ms",verdana,arial,sans-serif;color:#000000;}#my-svg .cluster-label text{fill:#333;}#my-svg .cluster-label span{color:#333;}#my-svg .cluster-label span p{background-color:transparent;}#my-svg .label text,#my-svg span{fill:#000000;color:#000000;}#my-svg .node rect,#my-svg .node circle,#my-svg .node ellipse,#my-svg .node polygon,#my-svg .node path{fill:#eee;stroke:#999;stroke-width:1px;}#my-svg .rough-node .label text,#my-svg .node .label text,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-anchor:middle;}#my-svg .node .katex path{fill:#000;stroke:#000;stroke-width:1px;}#my-svg .rough-node .label,#my-svg .node .label,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-align:center;}#my-svg .node.clickable{cursor:pointer;}#my-svg .root .anchor path{fill:#666!important;stroke-width:0;stroke:#666;}#my-svg .arrowheadPath{fill:#333333;}#my-svg .edgePath .path{stroke:#666;stroke-width:2.0px;}#my-svg .flowchart-link{stroke:#666;fill:none;}#my-svg .edgeLabel{background-color:white;text-align:center;}#my-svg .edgeLabel p{background-color:white;}#my-svg .edgeLabel rect{opacity:0.5;background-color:white;fill:white;}#my-svg .labelBkg{background-color:rgba(255, 255, 255, 0.5);}#my-svg .cluster rect{fill:hsl(0, 0%, 98.9215686275%);stroke:#707070;stroke-width:1px;}#my-svg .cluster text{fill:#333;}#my-svg .cluster span{color:#333;}#my-svg div.mermaidTooltip{position:absolute;text-align:center;max-width:200px;padding:2px;font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:12px;background:hsl(-160, 0%, 93.3333333333%);border:1px solid #707070;border-radius:2px;pointer-events:none;z-index:100;}#my-svg .flowchartTitleText{text-anchor:middle;font-size:18px;fill:#000000;}#my-svg rect.text{fill:none;stroke-width:0;}#my-svg .icon-shape,#my-svg .image-shape{background-color:white;text-align:center;}#my-svg .icon-shape p,#my-svg .image-shape p{background-color:white;padding:2px;}#my-svg .icon-shape rect,#my-svg .image-shape rect{opacity:0.5;background-color:white;fill:white;}#my-svg .label-icon{display:inline-block;height:1em;overflow:visible;vertical-align:-0.125em;}#my-svg .node .label-icon path{fill:currentColor;stroke:revert;stroke-width:revert;}#my-svg :root{--mermaid-font-family:"trebuchet ms",verdana,arial,sans-serif;}</style><g><marker id="my-svg_flowchart-v2-pointEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-pointStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="4.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 5 L 10 10 L 10 0 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="11" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-1" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossEnd" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="12" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossStart" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="-1" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><g class="root"><g class="clusters"/><g class="edgePaths"><path d="M322.148,62L322.148,66.167C322.148,70.333,322.148,78.667,322.148,86.333C322.148,94,322.148,101,322.148,104.5L322.148,108" id="L_A_B_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_A_B_0" data-points="W3sieCI6MzIyLjE0ODQzNzUsInkiOjYyfSx7IngiOjMyMi4xNDg0Mzc1LCJ5Ijo4N30seyJ4IjozMjIuMTQ4NDM3NSwieSI6MTEyfV0=" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M343.061,269.853L346.01,279.505C348.958,289.157,354.854,308.461,357.802,323.613C360.75,338.766,360.75,349.766,360.75,355.266L360.75,360.766" id="L_B_C_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_B_C_0" data-points="W3sieCI6MzQzLjA2MTQyNTMwOTU3MDA0LCJ5IjoyNjkuODUyNjM3MTkwNDI5OTZ9LHsieCI6MzYwLjc1LCJ5IjozMjcuNzY1NjI1fSx7IngiOjM2MC43NSwieSI6MzY0Ljc2NTYyNX1d" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M275.537,244.155L260.352,258.09C245.166,272.025,214.794,299.895,199.608,326.497C184.422,353.099,184.422,378.432,184.422,401.766C184.422,425.099,184.422,446.432,198.182,462.294C211.943,478.156,239.464,488.547,253.224,493.743L266.984,498.938" id="L_B_D_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_B_D_0" data-points="W3sieCI6Mjc1LjUzNzQ5MjY1MTA4MjYzLCJ5IjoyNDQuMTU0NjgwMTUxMDgyNjZ9LHsieCI6MTg0LjQyMTg3NSwieSI6MzI3Ljc2NTYyNX0seyJ4IjoxODQuNDIxODc1LCJ5Ijo0MDMuNzY1NjI1fSx7IngiOjE4NC40MjE4NzUsInkiOjQ2Ny43NjU2MjV9LHsieCI6MjcwLjcyNjU2MjUsInkiOjUwMC4zNTA3OTcxNTk1MDk5fV0=" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M360.75,442.766L360.75,446.932C360.75,451.099,360.75,459.432,358.054,467.23C355.359,475.028,349.967,482.291,347.271,485.922L344.576,489.554" id="L_C_D_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_C_D_0" data-points="W3sieCI6MzYwLjc1LCJ5Ijo0NDIuNzY1NjI1fSx7IngiOjM2MC43NSwieSI6NDY3Ljc2NTYyNX0seyJ4IjozNDIuMTkxNTU2NDkwMzg0NjQsInkiOjQ5Mi43NjU2MjV9XQ==" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M270.727,537.637L248.605,545.325C226.484,553.013,182.242,568.389,160.121,581.578C138,594.766,138,605.766,138,611.266L138,616.766" id="L_D_E_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_D_E_0" data-points="W3sieCI6MjcwLjcyNjU2MjUsInkiOjUzNy42MzcwNzcyMDgyMjJ9LHsieCI6MTM4LCJ5Ijo1ODMuNzY1NjI1fSx7IngiOjEzOCwieSI6NjIwLjc2NTYyNX1d" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M170.21,734.056L179.375,745.591C188.54,757.126,206.869,780.196,216.034,797.231C225.199,814.266,225.199,825.266,225.199,830.766L225.199,836.266" id="L_E_F_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_E_F_0" data-points="W3sieCI6MTcwLjIxMDA0NDgyNDM3MTc4LCJ5Ijo3MzQuMDU1NTgwMTc1NjI4M30seyJ4IjoyMjUuMTk5MjE4NzUsInkiOjgwMy4yNjU2MjV9LHsieCI6MjI1LjE5OTIxODc1LCJ5Ijo4NDAuMjY1NjI1fV0=" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M105.79,734.056L96.625,745.591C87.46,757.126,69.131,780.196,59.966,804.397C50.801,828.599,50.801,853.932,50.801,877.266C50.801,900.599,50.801,921.932,57.215,936.424C63.63,950.916,76.459,958.566,82.873,962.392L89.288,966.217" id="L_E_G_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_E_G_0" data-points="W3sieCI6MTA1Ljc4OTk1NTE3NTYyODI0LCJ5Ijo3MzQuMDU1NTgwMTc1NjI4M30seyJ4Ijo1MC44MDA3ODEyNSwieSI6ODAzLjI2NTYyNX0seyJ4Ijo1MC44MDA3ODEyNSwieSI6ODc5LjI2NTYyNX0seyJ4Ijo1MC44MDA3ODEyNSwieSI6OTQzLjI2NTYyNX0seyJ4Ijo5Mi43MjM0ODI1NzIxMTUzOSwieSI6OTY4LjI2NTYyNX1d" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M225.199,918.266L225.199,922.432C225.199,926.599,225.199,934.932,218.785,942.924C212.37,950.916,199.541,958.566,193.127,962.392L186.712,966.217" id="L_F_G_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_F_G_0" data-points="W3sieCI6MjI1LjE5OTIxODc1LCJ5Ijo5MTguMjY1NjI1fSx7IngiOjIyNS4xOTkyMTg3NSwieSI6OTQzLjI2NTYyNX0seyJ4IjoxODMuMjc2NTE3NDI3ODg0NiwieSI6OTY4LjI2NTYyNX1d" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M138,1022.266L138,1026.432C138,1030.599,138,1038.932,138,1046.599C138,1054.266,138,1061.266,138,1064.766L138,1068.266" id="L_G_H_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_G_H_0" data-points="W3sieCI6MTM4LCJ5IjoxMDIyLjI2NTYyNX0seyJ4IjoxMzgsInkiOjEwNDcuMjY1NjI1fSx7IngiOjEzOCwieSI6MTA3Mi4yNjU2MjV9XQ==" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M138,1150.266L138,1154.432C138,1158.599,138,1166.932,138,1174.599C138,1182.266,138,1189.266,138,1192.766L138,1196.266" id="L_H_I_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_H_I_0" data-points="W3sieCI6MTM4LCJ5IjoxMTUwLjI2NTYyNX0seyJ4IjoxMzgsInkiOjExNzUuMjY1NjI1fSx7IngiOjEzOCwieSI6MTIwMC4yNjU2MjV9XQ==" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M322.148,546.766L322.148,552.932C322.148,559.099,322.148,571.432,326.778,590.762C331.408,610.091,340.667,636.417,345.297,649.579L349.926,662.742" id="L_D_J_0" class="edge-thickness-normal edge-pattern-dotted edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_D_J_0" data-points="W3sieCI6MzIyLjE0ODQzNzUsInkiOjU0Ni43NjU2MjV9LHsieCI6MzIyLjE0ODQzNzUsInkiOjU4My43NjU2MjV9LHsieCI6MzUxLjI1MzQ4ODA0MTAwMjMsInkiOjY2Ni41MTU2MjV9XQ==" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M370.247,666.516L375.097,652.724C379.948,638.932,389.65,611.349,387.575,591.816C385.5,572.283,371.649,560.801,364.724,555.06L357.798,549.318" id="L_J_D_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_J_D_0" data-points="W3sieCI6MzcwLjI0NjUxMTk1ODk5NzcsInkiOjY2Ni41MTU2MjV9LHsieCI6Mzk5LjM1MTU2MjUsInkiOjU4My43NjU2MjV9LHsieCI6MzU0LjcxODUwNTg1OTM3NSwieSI6NTQ2Ljc2NTYyNX1d" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/></g><g class="edgeLabels"><g class="edgeLabel"><g class="label" data-id="L_A_B_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(360.75, 327.765625)"><g class="label" data-id="L_B_C_0" transform="translate(-9.3984375, -12)"><foreignObject width="18.796875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>No</p></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(184.421875, 403.765625)"><g class="label" data-id="L_B_D_0" transform="translate(-11.328125, -12)"><foreignObject width="22.65625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>Yes</p></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_C_D_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_D_E_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(225.19921875, 803.265625)"><g class="label" data-id="L_E_F_0" transform="translate(-11.328125, -12)"><foreignObject width="22.65625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>Yes</p></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(50.80078125, 879.265625)"><g class="label" data-id="L_E_G_0" transform="translate(-9.3984375, -12)"><foreignObject width="18.796875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>No</p></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_F_G_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_G_H_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_H_I_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel" transform="translate(322.1484375, 583.765625)"><g class="label" data-id="L_D_J_0" transform="translate(-57.203125, -12)"><foreignObject width="114.40625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"><p>forgot password</p></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_J_D_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g></g><g class="nodes"><g class="node default" id="flowchart-A-0" transform="translate(322.1484375, 35)"><rect class="basic label-container" style="" x="-105.2890625" y="-27" width="210.578125" height="54"/><g class="label" style="" transform="translate(-75.2890625, -12)"><rect/><foreignObject width="150.578125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Open FinanceTracker</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-B-1" transform="translate(322.1484375, 201.3828125)"><polygon points="89.3828125,0 178.765625,-89.3828125 89.3828125,-178.765625 0,-89.3828125" class="label-container" transform="translate(-88.8828125, 89.3828125)"/><g class="label" style="" transform="translate(-62.3828125, -12)"><rect/><foreignObject width="124.765625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Have an account?</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-C-3" transform="translate(360.75, 403.765625)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Register: email, password, name, currency</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-D-5" transform="translate(322.1484375, 519.765625)"><rect class="basic label-container" style="" x="-51.421875" y="-27" width="102.84375" height="54"/><g class="label" style="" transform="translate(-21.421875, -12)"><rect/><foreignObject width="42.84375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Log in</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-E-9" transform="translate(138, 693.515625)"><polygon points="72.75,0 145.5,-72.75 72.75,-145.5 0,-72.75" class="label-container" transform="translate(-72.25, 72.75)"/><g class="label" style="" transform="translate(-45.75, -12)"><rect/><foreignObject width="91.5" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>2FA enabled?</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-F-11" transform="translate(225.19921875, 879.265625)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Enter 6-digit authenticator code</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-G-13" transform="translate(138, 995.265625)"><rect class="basic label-container" style="" x="-127.5859375" y="-27" width="255.171875" height="54"/><g class="label" style="" transform="translate(-97.5859375, -12)"><rect/><foreignObject width="195.171875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Onboarding wizard, 5 steps</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-H-17" transform="translate(138, 1111.265625)"><rect class="basic label-container" style="" x="-130" y="-39" width="260" height="78"/><g class="label" style="" transform="translate(-100, -24)"><rect/><foreignObject width="200" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table; white-space: break-spaces; line-height: 1.5; max-width: 200px; text-align: center; width: 200px;"><span class="nodeLabel"><p>Import your portfolio or add stocks manually</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-I-19" transform="translate(138, 1227.265625)"><rect class="basic label-container" style="" x="-111.296875" y="-27" width="222.59375" height="54"/><g class="label" style="" transform="translate(-81.296875, -12)"><rect/><foreignObject width="162.59375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Dashboard — you're in!</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-J-21" transform="translate(360.75, 693.515625)"><rect class="basic label-container" style="" x="-100" y="-27" width="200" height="54"/><g class="label" style="" transform="translate(-70, -12)"><rect/><foreignObject width="140" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Reset via email link</p></span></div></foreignObject></g></g></g></g></g></svg></div>
+          <p class="diagram-cap">Getting started — your first-run journey</p>
+        </div>
+
+        <h3>2.1 Create your account (Register)</h3>
+        <ol>
+          <li>Open FinanceTracker — in a browser at <code>http://localhost:3000</code>, or by launching the <strong>desktop app</strong>.</li>
+          <li>On the login screen, click <strong>Register</strong> (or "Create an account").</li>
+          <li>Enter your <strong>email address</strong>, choose a <strong>strong password</strong>, and set a <strong>display name</strong> (this is just how the app greets you).</li>
+          <li>Pick your <strong>preferred currency</strong> — <strong>INR</strong> (₹) if you invest mainly in India, or <strong>EUR</strong> (€) for Germany. This becomes your account's base currency; you can still view totals in other currencies later.</li>
+          <li>Click <strong>Create Account</strong>. You'll be signed in automatically.</li>
+        </ol>
+        <div class="callout tip">
+          <span class="co-ico">→</span>
+          <div><span class="co-label">Tip</span><p>Use a password you don't reuse anywhere else. If you plan to add 2FA (recommended), have your authenticator app ready — see 2.3.</p></div>
+        </div>
+
+        <h3>2.2 Log in</h3>
+        <ol>
+          <li>On the login screen, enter your <strong>email</strong> and <strong>password</strong>.</li>
+          <li>If you have Two-Factor Authentication turned on, you'll also be asked for the <strong>6-digit code</strong> from your authenticator app.</li>
+          <li>Click <strong>Sign In</strong>.</li>
+        </ol>
+        <p>The app keeps you signed in and quietly refreshes your session in the background. If your session ever expires, you'll simply be asked to log in again.</p>
+
+        <h3>2.3 Turn on Two-Factor Authentication (2FA)</h3>
+        <p>2FA adds a second lock to your account: even if someone learns your password, they can't get in without your phone.</p>
+        <ol>
+          <li>Go to <strong>Settings</strong> in the sidebar, then the <strong>Security</strong> section.</li>
+          <li>Click <strong>Set up Two-Factor Authentication</strong>.</li>
+          <li>Open an authenticator app (Google Authenticator, Authy, 1Password, etc.) and either <strong>scan the QR code</strong> shown or type in the <strong>secret key</strong> by hand.</li>
+          <li>Your authenticator now shows a rotating 6-digit code. Type the current code into the app to <strong>confirm</strong> and finish setup.</li>
+          <li>From now on, that code is required every time you log in.</li>
+        </ol>
+        <p><strong>To turn 2FA off later:</strong> return to Settings → Security, choose <strong>Disable</strong>, and enter a current code to confirm.</p>
+        <div class="callout tip">
+          <span class="co-ico">→</span>
+          <div><span class="co-label">Tip</span><p>Store the secret key somewhere safe (a password manager). If you lose your phone and only have the QR, you'll want a backup.</p></div>
+        </div>
+
+        <h3>2.4 Forgot your password?</h3>
+        <ol>
+          <li>On the login screen, click <strong>Forgot password?</strong></li>
+          <li>Enter the <strong>email</strong> on your account and click <strong>Send reset link</strong>.</li>
+          <li>For your privacy, the app always says <em>"if that email exists, a reset link was sent"</em> — it never reveals whether an email is registered.</li>
+          <li>Open the reset link you receive, choose a <strong>new password</strong> (at least 8 characters), confirm it, and save.</li>
+          <li>Return to the login screen and sign in with the new password.</li>
+        </ol>
+
+        <h3>2.5 The onboarding wizard (first-launch tour)</h3>
+        <p>The very first time you log in, a friendly 5-step overlay walks you through the basics. You can click <strong>Skip</strong> (the ✕ in the corner) at any point and come back to any feature later.</p>
+        <ol>
+          <li><strong>Welcome</strong> — a quick hello and what the app is for.</li>
+          <li><strong>Import your portfolio</strong> — jump straight to importing an Excel file, or choose <strong>Add manually</strong> to enter stocks one at a time. (You can also skip and do this later.)</li>
+          <li><strong>Your dashboard</strong> — a preview of the colour coding, so you know at a glance what green and red mean (large gain, moderate gain, neutral, moderate loss, large loss).</li>
+          <li><strong>Stay informed</strong> — a pointer to Settings where you set up alerts and notifications (email, push, in-app).</li>
+          <li><strong>You're all set!</strong> — a little confetti, then a button straight to your dashboard.</li>
+        </ol>
+        <div class="callout tip">
+          <span class="co-ico">→</span>
+          <div><span class="co-label">Tip</span><p>The wizard only appears once. To re-explore, use the <strong>Help</strong> section in the sidebar or the <strong>?</strong> button, and read the relevant section of this manual.</p></div>
+        </div>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <hr class="part-rule">
+
+      <!-- ============ 3 ============ -->
+      <section id="dashboard">
+        <p class="sec-eyebrow">Your portfolio</p>
+        <h2><span class="h2num">03</span><span>The Dashboard</span></h2>
+        <p>The dashboard is your home base — the page you land on after logging in. It gives you the whole picture in one glance, then lets you drill in.</p>
+
+        <h3>3.1 The top bar (always visible)</h3>
+        <p>Running across the top of every page:</p>
+        <ul>
+          <li><strong>Portfolio selector</strong> — a dropdown to switch between your portfolios (see <a href="#portfolios">Section 4</a>).</li>
+          <li><strong>Display-currency dropdown</strong> — pick <strong>INR / EUR / USD</strong> to convert the totals shown on screen into that currency <em>for viewing only</em>. It does <strong>not</strong> change how your holdings are stored or your account's base currency. Great for a quick "what's this worth in euros?" check.</li>
+          <li><strong>New portfolio</strong> button (the <strong>+</strong>) — create another portfolio without leaving the page.</li>
+          <li><strong>Refresh</strong> button (the circular arrow) — fetch the latest prices on demand. A toast tells you how many stocks were updated.</li>
+          <li><strong>Theme toggle</strong> (sun/moon) — switch between light and dark.</li>
+          <li><strong>Notification bell</strong> — your in-app notification centre (see 3.4).</li>
+          <li><strong>Your name &amp; sign-out</strong> — on the far right.</li>
+        </ul>
+
+        <h3>3.2 Summary &amp; performance cards</h3>
+        <p>At the top of the dashboard you'll see cards that update with smooth animated transitions:</p>
+        <ul>
+          <li><strong>Total Portfolio Value</strong> — the current market value of everything you hold.</li>
+          <li><strong>Day's P&amp;L</strong> — how much you gained or lost today, in both amount and percentage.</li>
+          <li><strong>Top Gainer / Top Loser</strong> — your best and worst performers today.</li>
+          <li><strong>XIRR card</strong> — your portfolio's <em>money-weighted annualised return</em>. Unlike a simple percentage, XIRR accounts for <strong>when</strong> you invested each amount, so it's the fairest single number for "how am I really doing?"</li>
+          <li><strong>Benchmark card</strong> — how your portfolio stacks up against a market index such as <strong>NIFTY50</strong> (India), <strong>SENSEX</strong>, <strong>DAX</strong> (Germany), <strong>S&amp;P 500</strong>, or <strong>NASDAQ</strong>.</li>
+        </ul>
+
+        <h3>3.3 Live prices</h3>
+        <p>Where live streaming is available, prices update <strong>automatically</strong> over a live connection (you'll see numbers tick without doing anything). When streaming isn't available, the app refreshes prices on a short interval instead. Either way, you can always press the <strong>Refresh</strong> button in the top bar to pull fresh prices right now.</p>
+
+        <h3>3.4 The notification bell</h3>
+        <p>The <strong>bell icon</strong> in the top bar is your in-app notification centre:</p>
+        <ul>
+          <li>A <strong>red badge</strong> shows how many alerts have triggered since you last looked.</li>
+          <li>Click the bell to open the panel and read your recent triggered alerts (stock, message, and time).</li>
+          <li>Opening the panel marks everything as seen and clears the badge.</li>
+        </ul>
+        <p>This works even if you haven't set up email or messaging — every triggered alert is logged here.</p>
+
+        <h3>3.5 The holdings table &amp; heatmap</h3>
+        <p>Below the cards is your <strong>holdings table</strong> — the heart of the dashboard — and a <strong>heatmap</strong> where each stock is a rectangle sized by its weight and coloured by performance (green for gains, red for losses). Both are covered in detail in <a href="#holdings-transactions">Section 5</a>.</p>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <!-- ============ 4 ============ -->
+      <section id="portfolios">
+        <h2><span class="h2num">04</span><span>Portfolios</span></h2>
+        <p>A <strong>portfolio</strong> is a container for a set of holdings. Most people keep separate portfolios for different purposes — for example one for <strong>Indian long-term stocks</strong> and another for <strong>German ETFs</strong> — so their currencies, taxes, and performance stay cleanly separated.</p>
+
+        <h3>4.1 Create a new portfolio</h3>
+        <ol>
+          <li>In the <strong>top bar</strong>, click <strong>New portfolio</strong> (the <strong>+</strong> button).</li>
+          <li>In the dialog, enter a <strong>Name</strong> (e.g. "India Long Term").</li>
+          <li>Choose the <strong>Currency</strong>: <strong>INR (₹)</strong>, <strong>EUR (€)</strong>, or <strong>USD ($)</strong>.</li>
+          <li>Optionally tick <strong>Set as default portfolio</strong> — the default is the one that loads first when you open the app.</li>
+          <li>Click <strong>Create</strong>. The new portfolio is created and selected immediately.</li>
+        </ol>
+
+        <h3>4.2 Switch between portfolios</h3>
+        <p>Use the <strong>portfolio selector</strong> dropdown in the top bar. Every page — dashboard, holdings, tax, risk, and so on — updates to reflect the portfolio you've selected.</p>
+
+        <h3>4.3 The default portfolio</h3>
+        <p>The <strong>default</strong> portfolio is the one shown when you first log in. To change it, create a portfolio with <strong>Set as default</strong> ticked, or update the setting when editing a portfolio.</p>
+        <div class="callout tip">
+          <span class="co-ico">→</span>
+          <div><span class="co-label">Tip</span><p>Keep currencies consistent within a portfolio. Put your ₹ holdings in an INR portfolio and your € holdings in a EUR one; then use the top-bar <strong>display-currency</strong> dropdown whenever you want to eyeball a combined figure in a single currency.</p></div>
+        </div>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <!-- ============ 5 ============ -->
+      <section id="holdings-transactions">
+        <h2><span class="h2num">05</span><span>Holdings &amp; Transactions</span></h2>
+        <p>This is where your actual investments live. A <strong>holding</strong> is a stock you own; each holding is built from one or more <strong>transactions</strong> (buys and sells). The app keeps your cumulative quantity and average price up to date automatically.</p>
+
+        <h3>5.1 Add a stock</h3>
+        <ol>
+          <li>Open <strong>Holdings</strong> (or the dashboard) and click <strong>+ Add Stock</strong>.</li>
+          <li>Start typing the stock name or symbol — a <strong>search dropdown</strong> appears with matches. Pick your stock (e.g. "Reliance Industries — NSE").</li>
+          <li>Enter the <strong>purchase details</strong>: date, quantity, and price.</li>
+          <li>Optionally set your <strong>range levels</strong> (base level, mid ranges, top level) — these power the colour-coded action system (see 5.5).</li>
+          <li>Click <strong>Add</strong>. The stock appears in your table with its current price fetched automatically.</li>
+        </ol>
+
+        <h3>5.2 Add a transaction to an existing stock</h3>
+        <ol>
+          <li>Find the stock in your holdings table and open its <strong>detail view</strong> (click the row).</li>
+          <li>Click <strong>+ Add Transaction</strong>.</li>
+          <li>Choose <strong>BUY</strong> or <strong>SELL</strong>.</li>
+          <li>Enter the <strong>date, quantity, and price</strong>.</li>
+          <li>Click <strong>Save</strong>. Your cumulative quantity and weighted-average price recalculate instantly.</li>
+        </ol>
+        <p>Recording your <strong>sells</strong> matters — they feed the tax calculations (capital gains) in <a href="#taxes">Section 8</a>.</p>
+
+        <h3>5.3 Edit or delete a holding</h3>
+        <ul>
+          <li><strong>Edit:</strong> open the <strong>Edit Holding</strong> dialog on the Holdings page to change details, range levels, <strong>Target %</strong> (for allocation-drift alerts), and <strong>Stop-Loss</strong> (see 5.6).</li>
+          <li><strong>Inline edits:</strong> you can click directly on a range value in the table (base, mid ranges, top) to edit it in place — press <kbd>Enter</kbd> to save.</li>
+          <li><strong>Delete:</strong> remove a holding (and optionally its transactions) from its row's menu.</li>
+        </ul>
+
+        <h3>5.4 Bulk edit</h3>
+        <p>On the Holdings page, switch on <strong>bulk edit mode</strong> to show checkboxes. Select several holdings and a floating toolbar lets you apply actions to all of them at once — handy for tidying up range levels or tags across many stocks.</p>
+
+        <h3>5.5 The 5-zone "action needed" colour system</h3>
+        <p>This is the app's signature feature. For each stock you define price <strong>zones</strong>; the app then colours the row and sets an <strong>Action Needed</strong> flag (Y/N) based on where the current price sits.</p>
+        <p>You set these levels per stock:</p>
+        <ul>
+          <li><strong>Base Level</strong> — the lowest price you're comfortable with (critical support).</li>
+          <li><strong>Lower Mid Range 2 / 1</strong> — your caution band, below your comfort zone.</li>
+          <li><strong>Upper Mid Range 1 / 2</strong> — your opportunity band, above the normal zone.</li>
+          <li><strong>Top Level</strong> — your target price (where you might take profit).</li>
+        </ul>
+
+        <div class="diagram">
+          <div class="mermaid-svg"><svg id="my-svg" width="100%" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" class="flowchart" style="max-width: 264.047px; background-color: transparent;" viewBox="0 0 264.046875 781" role="graphics-document document" aria-roledescription="flowchart-v2"><style>#my-svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;fill:#000000;}@keyframes edge-animation-frame{from{stroke-dashoffset:0;}}@keyframes dash{to{stroke-dashoffset:0;}}#my-svg .edge-animation-slow{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 50s linear infinite;stroke-linecap:round;}#my-svg .edge-animation-fast{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 20s linear infinite;stroke-linecap:round;}#my-svg .error-icon{fill:#552222;}#my-svg .error-text{fill:#552222;stroke:#552222;}#my-svg .edge-thickness-normal{stroke-width:1px;}#my-svg .edge-thickness-thick{stroke-width:3.5px;}#my-svg .edge-pattern-solid{stroke-dasharray:0;}#my-svg .edge-thickness-invisible{stroke-width:0;fill:none;}#my-svg .edge-pattern-dashed{stroke-dasharray:3;}#my-svg .edge-pattern-dotted{stroke-dasharray:2;}#my-svg .marker{fill:#666;stroke:#666;}#my-svg .marker.cross{stroke:#666;}#my-svg svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;}#my-svg p{margin:0;}#my-svg .label{font-family:"trebuchet ms",verdana,arial,sans-serif;color:#000000;}#my-svg .cluster-label text{fill:#333;}#my-svg .cluster-label span{color:#333;}#my-svg .cluster-label span p{background-color:transparent;}#my-svg .label text,#my-svg span{fill:#000000;color:#000000;}#my-svg .node rect,#my-svg .node circle,#my-svg .node ellipse,#my-svg .node polygon,#my-svg .node path{fill:#eee;stroke:#999;stroke-width:1px;}#my-svg .rough-node .label text,#my-svg .node .label text,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-anchor:middle;}#my-svg .node .katex path{fill:#000;stroke:#000;stroke-width:1px;}#my-svg .rough-node .label,#my-svg .node .label,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-align:center;}#my-svg .node.clickable{cursor:pointer;}#my-svg .root .anchor path{fill:#666!important;stroke-width:0;stroke:#666;}#my-svg .arrowheadPath{fill:#333333;}#my-svg .edgePath .path{stroke:#666;stroke-width:2.0px;}#my-svg .flowchart-link{stroke:#666;fill:none;}#my-svg .edgeLabel{background-color:white;text-align:center;}#my-svg .edgeLabel p{background-color:white;}#my-svg .edgeLabel rect{opacity:0.5;background-color:white;fill:white;}#my-svg .labelBkg{background-color:rgba(255, 255, 255, 0.5);}#my-svg .cluster rect{fill:hsl(0, 0%, 98.9215686275%);stroke:#707070;stroke-width:1px;}#my-svg .cluster text{fill:#333;}#my-svg .cluster span{color:#333;}#my-svg div.mermaidTooltip{position:absolute;text-align:center;max-width:200px;padding:2px;font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:12px;background:hsl(-160, 0%, 93.3333333333%);border:1px solid #707070;border-radius:2px;pointer-events:none;z-index:100;}#my-svg .flowchartTitleText{text-anchor:middle;font-size:18px;fill:#000000;}#my-svg rect.text{fill:none;stroke-width:0;}#my-svg .icon-shape,#my-svg .image-shape{background-color:white;text-align:center;}#my-svg .icon-shape p,#my-svg .image-shape p{background-color:white;padding:2px;}#my-svg .icon-shape rect,#my-svg .image-shape rect{opacity:0.5;background-color:white;fill:white;}#my-svg .label-icon{display:inline-block;height:1em;overflow:visible;vertical-align:-0.125em;}#my-svg .node .label-icon path{fill:currentColor;stroke:revert;stroke-width:revert;}#my-svg :root{--mermaid-font-family:"trebuchet ms",verdana,arial,sans-serif;}</style><g><marker id="my-svg_flowchart-v2-pointEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-pointStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="4.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 5 L 10 10 L 10 0 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="11" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-1" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossEnd" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="12" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossStart" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="-1" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><g class="root"><g class="clusters"/><g class="edgePaths"/><g class="edgeLabels"/><g class="nodes"><g class="root" transform="translate(0, 0)"><g class="clusters"><g class="cluster" id="Z" data-look="classic"><rect style="" x="8" y="8" width="248.046875" height="765"/><g class="cluster-label" transform="translate(46.46875, 8)"><foreignObject width="171.109375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Price zones, low to high</p></span></div></foreignObject></g></g></g><g class="edgePaths"><path d="M132.023,123.5L132.023,129.75C132.023,136,132.023,148.5,132.023,160.333C132.023,172.167,132.023,183.333,132.023,188.917L132.023,194.5" id="L_DR_LR_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_DR_LR_0" data-points="W3sieCI6MTMyLjAyMzQzNzUsInkiOjEyMy41fSx7IngiOjEzMi4wMjM0Mzc1LCJ5IjoxNjF9LHsieCI6MTMyLjAyMzQzNzUsInkiOjE5OC41fV0=" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M132.023,276.5L132.023,282.75C132.023,289,132.023,301.5,132.023,313.333C132.023,325.167,132.023,336.333,132.023,341.917L132.023,347.5" id="L_LR_N_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_LR_N_0" data-points="W3sieCI6MTMyLjAyMzQzNzUsInkiOjI3Ni41fSx7IngiOjEzMi4wMjM0Mzc1LCJ5IjozMTR9LHsieCI6MTMyLjAyMzQzNzUsInkiOjM1MS41fV0=" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M132.023,429.5L132.023,435.75C132.023,442,132.023,454.5,132.023,466.333C132.023,478.167,132.023,489.333,132.023,494.917L132.023,500.5" id="L_N_LG_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_N_LG_0" data-points="W3sieCI6MTMyLjAyMzQzNzUsInkiOjQyOS41fSx7IngiOjEzMi4wMjM0Mzc1LCJ5Ijo0Njd9LHsieCI6MTMyLjAyMzQzNzUsInkiOjUwNC41fV0=" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/><path d="M132.023,582.5L132.023,588.75C132.023,595,132.023,607.5,132.023,619.333C132.023,631.167,132.023,642.333,132.023,647.917L132.023,653.5" id="L_LG_DG_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_LG_DG_0" data-points="W3sieCI6MTMyLjAyMzQzNzUsInkiOjU4Mi41fSx7IngiOjEzMi4wMjM0Mzc1LCJ5Ijo2MjB9LHsieCI6MTMyLjAyMzQzNzUsInkiOjY1Ny41fV0=" marker-end="url(#my-svg_flowchart-v2-pointEnd)"/></g><g class="edgeLabels"><g class="edgeLabel"><g class="label" data-id="L_DR_LR_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_LR_N_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_N_LG_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_LG_DG_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g></g><g class="nodes"><g class="node default" id="flowchart-DR-0" transform="translate(132.0234375, 84.5)"><rect class="basic label-container" style="" x="-81.7421875" y="-39" width="163.484375" height="78"/><g class="label" style="" transform="translate(-51.7421875, -24)"><rect/><foreignObject width="103.484375" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Dark Red<br />at/below Base</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-LR-1" transform="translate(132.0234375, 237.5)"><rect class="basic label-container" style="" x="-88.34375" y="-39" width="176.6875" height="78"/><g class="label" style="" transform="translate(-58.34375, -24)"><rect/><foreignObject width="116.6875" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Light Red<br />lower mid range</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-N-3" transform="translate(132.0234375, 390.5)"><rect class="basic label-container" style="" x="-74.2109375" y="-39" width="148.421875" height="78"/><g class="label" style="" transform="translate(-44.2109375, -24)"><rect/><foreignObject width="88.421875" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>No colour<br />normal zone</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-LG-5" transform="translate(132.0234375, 543.5)"><rect class="basic label-container" style="" x="-89.0234375" y="-39" width="178.046875" height="78"/><g class="label" style="" transform="translate(-59.0234375, -24)"><rect/><foreignObject width="118.046875" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Light Green<br />upper mid range</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-DG-7" transform="translate(132.0234375, 696.5)"><rect class="basic label-container" style="" x="-77.46875" y="-39" width="154.9375" height="78"/><g class="label" style="" transform="translate(-47.46875, -24)"><rect/><foreignObject width="94.9375" height="48"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Dark Green<br />at/above Top</p></span></div></foreignObject></g></g></g></g></g></g></g></svg></div>
+          <p class="diagram-cap">The 5-zone action ladder, low price to high</p>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Colour</th><th>Action</th><th>What it's telling you</th><th>What you might do</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><span class="swatch sw-none"></span>No colour</td><td><span class="flag-n">N</span></td><td>Price is in the normal range</td><td>Relax, nothing needed</td></tr>
+              <tr><td><span class="swatch sw-lr"></span>Light Red</td><td><span class="flag-y">Y</span></td><td>Entered the lower mid (caution) zone</td><td>Watch closely; consider buying the dip</td></tr>
+              <tr><td><span class="swatch sw-dr"></span>Dark Red</td><td><span class="flag-y">Y</span></td><td>At or below your base level (critical)</td><td>Serious attention; re-evaluate the position</td></tr>
+              <tr><td><span class="swatch sw-lg"></span>Light Green</td><td><span class="flag-y">Y</span></td><td>Entered the upper mid (opportunity) zone</td><td>Consider booking partial profits</td></tr>
+              <tr><td><span class="swatch sw-dg"></span>Dark Green</td><td><span class="flag-y">Y</span></td><td>At or above your top level (target hit)</td><td>Consider selling — your target is met</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p><strong>Visual cues:</strong> light-red and light-green cells gently pulse to catch your eye; dark-red shows a warning icon; dark-green shows a celebration icon. When a stock crosses a zone, the app updates the colour immediately, can send you a notification, and logs it in your notification history.</p>
+
+        <div class="callout warn">
+          <span class="co-ico">!</span>
+          <div><span class="co-label">Don't confuse the two colour systems</span><p>The dashboard <strong>heatmap</strong> uses a separate, simpler colour scale based purely on today's gain/loss (large loss → neutral → large gain). The heatmap is about <em>performance</em>; the table colours are about <em>your chosen action zones</em>.</p></div>
+        </div>
+
+        <div class="legend">
+          <h4>Colour legend</h4>
+          <p class="legend-sub">Two different meanings, two different scales — this is the app's whole visual language.</p>
+          <div class="legend-grid">
+            <div class="legend-col">
+              <h5>Performance — heatmap &amp; P&amp;L</h5>
+              <div class="legend-row"><span class="lg-chip lg-gain">+2.4%</span><span>Gain — you're up on the day / position</span></div>
+              <div class="legend-row"><span class="lg-chip lg-loss">−1.8%</span><span>Loss — you're down</span></div>
+            </div>
+            <div class="legend-col">
+              <h5>Action zones — holdings table</h5>
+              <div class="legend-row"><span class="lg-swatch sw-dr"></span><span>Dark red — at/below base (critical)</span></div>
+              <div class="legend-row"><span class="lg-swatch sw-lr"></span><span>Light red — lower-mid caution</span></div>
+              <div class="legend-row"><span class="lg-swatch sw-none"></span><span>No colour — normal zone</span></div>
+              <div class="legend-row"><span class="lg-swatch sw-lg"></span><span>Light green — upper-mid opportunity</span></div>
+              <div class="legend-row"><span class="lg-swatch sw-dg"></span><span>Dark green — at/above top (target hit)</span></div>
+            </div>
+          </div>
+        </div>
+
+        <h3>5.6 Stop-loss</h3>
+        <ol>
+          <li>Open the <strong>Edit Holding</strong> dialog and set a <strong>Stop-Loss</strong> price.</li>
+          <li>A stop-loss pill appears on that stock's row; it turns <strong>red</strong> when the current price falls to or below your stop-loss level.</li>
+          <li>To remove it, clear the field.</li>
+        </ol>
+
+        <h3>5.7 Custom columns</h3>
+        <p>You control which columns the holdings table shows and in what order.</p>
+        <ol>
+          <li>Go to <strong>Settings → Display → Customize Columns</strong>.</li>
+          <li>Toggle <strong>built-in columns</strong> on/off (Sector, P&amp;L amount, Volume, Dividend Yield, and more — 13 built-ins in total).</li>
+          <li>Click <strong>+ Add Custom Column</strong> to create your own (give it a name and a type: text, number, or date).</li>
+          <li><strong>Drag</strong> columns to reorder them.</li>
+        </ol>
+        <p>The default columns are: <strong>Stock</strong>, <strong>Quantity</strong>, <strong>Avg Price</strong>, <strong>Current Price</strong>, <strong>P&amp;L %</strong>, <strong>Action Needed</strong>, and <strong>RSI</strong> (a momentum indicator — see <a href="#charts">Charts</a>).</p>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <hr class="part-rule">
+
+      <!-- ============ 6 ============ -->
+      <section id="watchlist-alerts">
+        <p class="sec-eyebrow">Staying informed</p>
+        <h2><span class="h2num">06</span><span>Watchlist &amp; Alerts</span></h2>
+        <p>Track stocks you're <em>thinking</em> about, and get told when <em>anything</em> you care about happens — on any channel you like.</p>
+
+        <h3>6.1 Watchlist — stocks you don't own yet</h3>
+        <ol>
+          <li>Go to <strong>Watchlist</strong> in the sidebar and click <strong>+ Add to Watchlist</strong>.</li>
+          <li>Search for a stock and set your <strong>desired buy price</strong> and <strong>range levels</strong>.</li>
+          <li>The same colour-coded zone system applies, so a watchlist stock lights up when it enters your buy zone.</li>
+          <li>When you're ready, use <strong>Add to Portfolio</strong> to convert it into a holding.</li>
+        </ol>
+
+        <h3>6.2 Alerts — get notified automatically</h3>
+        <p>Go to <strong>Alerts</strong> in the sidebar to create rules that watch your holdings and ping you when a condition is met.</p>
+        <h4>Create an alert</h4>
+        <ol>
+          <li>Choose the <strong>holding</strong> the alert is about.</li>
+          <li>Pick an <strong>alert type</strong>:
+            <ul>
+              <li><strong>Price Range</strong> — trigger when the price crosses a threshold (above or below a value you set).</li>
+              <li><strong>RSI</strong> — trigger when the momentum indicator (RSI 14) rises above or falls below a level you set (commonly 70 for overbought, 30 for oversold).</li>
+            </ul>
+          </li>
+          <li>Set the <strong>direction</strong> (above/below) and the <strong>threshold</strong>.</li>
+          <li>Choose the <strong>notification channel</strong> (see 6.3).</li>
+          <li>Save. You can edit, change channels for, or delete any alert later.</li>
+        </ol>
+        <p><strong>Alert history:</strong> a history list shows every time your alerts have fired — the same data behind the top-bar notification bell.</p>
+
+        <h3>6.3 Notification channels &amp; per-user destinations</h3>
+        <p>Alerts can reach you on any of these channels:</p>
+        <ul>
+          <li><strong>In-App</strong> — always available; shows in the notification bell. No setup needed.</li>
+          <li><strong>Email</strong> — via SendGrid.</li>
+          <li><strong>Telegram</strong> — via a Telegram bot.</li>
+          <li><strong>WhatsApp</strong> — via Twilio.</li>
+          <li><strong>SMS</strong> — via Twilio.</li>
+        </ul>
+        <p>The messaging channels use <strong>your own destination</strong>: your <strong>phone number</strong> (for WhatsApp/SMS) and your <strong>Telegram chat ID</strong> (detected automatically when you message the bot). Set these up once in <strong>Settings → Notifications</strong>; see <a href="#settings">Section 17</a> for the step-by-step for each channel and the <strong>Test</strong> buttons that confirm they work.</p>
+        <div class="callout tip">
+          <span class="co-ico">→</span>
+          <div><span class="co-label">Tip</span><p>Route noisy, routine alerts (light red / light green) to <strong>In-App + Email</strong>, and reserve <strong>Telegram/WhatsApp/SMS</strong> for the critical ones (dark red / dark green) so your phone only buzzes when it really matters.</p></div>
+        </div>
+
+        <h3>6.4 Allocation-drift alerts</h3>
+        <p>The Alerts page also has an <strong>Allocation Drift</strong> section. If you've set a <strong>Target %</strong> on a holding (in the Edit Holding dialog), this section flags any stock whose actual weight has drifted <strong>beyond</strong> your target — a minor drift up to 10%, a <strong>major</strong> drift beyond that — so you know when it's time to rebalance.</p>
+
+        <h3>6.5 The notification centre</h3>
+        <p>The <strong>bell</strong> in the top bar collects every triggered alert in one place, with an unread badge. See <a href="#dashboard">3.4</a>.</p>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <!-- ============ 7 ============ -->
+      <section id="charts">
+        <h2><span class="h2num">07</span><span>Charts</span></h2>
+        <p>Charts help you see a stock's story over time and how it sits against the zones you set.</p>
+
+        <h3>7.1 Open a chart</h3>
+        <p>Click a stock's <strong>name</strong> or its <strong>Action Needed</strong> cell, or go to the <strong>Charts</strong> page in the sidebar and pick a symbol.</p>
+
+        <h3>7.2 Price (candlestick) chart</h3>
+        <ul>
+          <li><strong>Candlesticks</strong> — each candle is one day. <strong>Green</strong> = closed higher than it opened; <strong>red</strong> = closed lower. The thick <strong>body</strong> is the open-to-close range; the thin <strong>wicks</strong> are the day's high and low.</li>
+          <li><strong>Volume bars</strong> at the bottom show how many shares traded each day.</li>
+          <li><strong>Horizontal lines</strong> mark your range levels (base, mid ranges, top) so you can see where price is relative to your zones.</li>
+        </ul>
+
+        <h3>7.3 RSI chart</h3>
+        <p>The <strong>RSI</strong> (Relative Strength Index) is a momentum gauge from 0 to 100:</p>
+        <ul>
+          <li><strong>Above 70</strong> (red zone): possibly <strong>overbought</strong> — price may cool off.</li>
+          <li><strong>Below 30</strong> (green zone): possibly <strong>oversold</strong> — price may bounce.</li>
+          <li><strong>30–70</strong>: normal territory.</li>
+        </ul>
+        <p>Click the <strong>RSI</strong> cell in your holdings table to jump straight to a stock's RSI chart.</p>
+
+        <h3>7.4 Time periods &amp; indicator overlays</h3>
+        <ul>
+          <li><strong>Time period buttons</strong> — <strong>7d, 30d (default), 90d, 1Y, All</strong>.</li>
+          <li><strong>Overlays</strong> you can toggle for deeper analysis: <strong>Moving Averages</strong> (SMA/EMA), <strong>Bollinger Bands</strong> (the normal price band), <strong>MACD</strong> (trend-change momentum), and <strong>Fibonacci</strong> levels (mathematical support/resistance).</li>
+        </ul>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <hr class="part-rule">
+
+      <!-- ============ 8 ============ -->
+      <section id="taxes">
+        <p class="sec-eyebrow">Taxes &amp; income</p>
+        <h2><span class="h2num">08</span><span>Taxes</span></h2>
+        <p>FinanceTracker estimates your capital-gains tax for <strong>both</strong> India and Germany, following each country's actual rules, and produces a report you can hand to your accountant. Open <strong>Tax</strong> in the sidebar; use the <strong>India / Germany</strong> tabs and the <strong>financial-year selector</strong> at the top.</p>
+        <div class="callout warn">
+          <span class="co-ico">!</span>
+          <div><span class="co-label">Estimates only</span><p>These are estimates to help you plan. Always confirm with a tax professional before filing.</p></div>
+        </div>
+
+        <h3>8.1 Indian capital-gains tax</h3>
+        <ul>
+          <li><strong>STCG (Short-Term Capital Gains):</strong> for stocks held <strong>under 12 months</strong>, taxed at <strong>20%</strong>.</li>
+          <li><strong>LTCG (Long-Term Capital Gains):</strong> for stocks held <strong>over 12 months</strong>, taxed at <strong>12.5%</strong>, with the first <strong>₹1.25 lakh of long-term gains exempt each financial year</strong>.</li>
+          <li><strong>FIFO matching:</strong> when you sell, gains are matched <strong>lot by lot</strong> on a first-in-first-out basis, so each sale is paired with your oldest remaining shares — exactly as the tax rules require.</li>
+          <li><strong>31-January-2018 grandfathering:</strong> for long-term gains on shares bought before 1 Feb 2018, the app applies the grandfathered cost basis (the higher of your actual cost and the 31-Jan-2018 fair market value, capped at the sale price) where it lowers your taxable gain.</li>
+          <li>India's financial year runs <strong>April–March</strong>.</li>
+        </ul>
+
+        <h3>8.2 German capital-gains tax</h3>
+        <p>Switch to the <strong>Germany</strong> tab to see two extra panels alongside the summary:</p>
+        <ul>
+          <li><strong>Abgeltungssteuer</strong> — a flat <strong>26.375%</strong> on capital gains (25% plus the solidarity surcharge).</li>
+          <li><strong>Teilfreistellung (partial exemption)</strong> — for fund holdings, a portion of the gain is tax-free depending on the fund type: <strong>equity funds 30%</strong>, <strong>mixed funds 15%</strong>, <strong>real-estate funds 60%</strong>. Set a <strong>fund type</strong> on a holding (or import it) and the exemption is applied automatically.</li>
+          <li><strong>Sparer-Pauschbetrag (tax-free allowance)</strong> — a progress bar showing how much of your annual allowance you've used. A <strong>Single / Joint</strong> toggle switches the allowance between <strong>€1,000</strong> (single) and <strong>€2,000</strong> (jointly assessed couples). The netting of gains against your allowance honours both the joint setting and any Teilfreistellung.</li>
+          <li><strong>Estimated Vorabpauschale</strong> — an estimate of the <em>advance lump-sum tax</em> charged on accumulating funds, calculated from the official Basiszins (base-rate) table. Set a fund type on your XETRA fund holdings to see it.</li>
+        </ul>
+
+        <h3>8.3 The tax dashboard</h3>
+        <p>The Tax page shows, for the selected year and country:</p>
+        <ul>
+          <li>A <strong>year-wise summary</strong> of gains and losses.</li>
+          <li>The <strong>STCG vs LTCG</strong> breakdown (India).</li>
+          <li><strong>Tax-harvesting suggestions</strong> — "sell these losing positions to offset gains and reduce your bill."</li>
+        </ul>
+
+        <h3>8.4 The ITR-ready capital-gains tax report</h3>
+        <p>You can download a consolidated report suitable for filing:</p>
+        <ol>
+          <li>Go to the <strong>Reports</strong> page in the sidebar.</li>
+          <li>Find the <strong>Capital Gains Tax Report</strong> card.</li>
+          <li>Pick the <strong>financial year</strong> and the <strong>jurisdiction</strong> (India or Germany).</li>
+          <li>Download as <strong>CSV</strong> or <strong>HTML</strong>. The report lists per-transaction gains plus STCG/LTCG, tax, and exemption totals — ready to review or forward to your accountant.</li>
+        </ol>
+        <p>You can also <strong>bulk import/export tax records</strong> as CSV from the Import and Reports pages (see <a href="#import-export-reports">Section 16</a>).</p>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <!-- ============ 9 ============ -->
+      <section id="mutual-funds-dividends">
+        <h2><span class="h2num">09</span><span>Mutual Funds &amp; Dividends</span></h2>
+
+        <h3>9.1 Mutual funds</h3>
+        <p>Open <strong>Mutual Funds</strong> in the sidebar.</p>
+        <ol>
+          <li><strong>Add funds</strong> — enter them manually, or <strong>bulk-import</strong> from a CSV (a template is available on the Import page).</li>
+          <li><strong>Refresh NAV</strong> — pull the latest Net Asset Value from mfapi.in.</li>
+          <li><strong>XIRR</strong> — your money-weighted annualised return across your funds appears in the summary.</li>
+          <li><strong>Overlap X-Ray</strong> — see how much your funds hold the <em>same</em> underlying stocks (a look-through analysis), shown as a heatmap plus a list of the top common holdings. Two funds with heavy overlap mean you're less diversified than you think.</li>
+          <li><strong>Fee Analyzer</strong> — your weighted <strong>expense ratio</strong> and the projected <strong>fee drag</strong> over 5, 10, and 20 years, with high-fee funds flagged.</li>
+        </ol>
+        <div class="callout tip">
+          <span class="co-ico">→</span>
+          <div><span class="co-label">Good to know</span><p>The Overlap X-Ray and Fee Analyzer are best-effort and depend on public fund-constituent and expense data; each panel tells you how many of your funds it could cover.</p></div>
+        </div>
+
+        <h3>9.2 Dividends</h3>
+        <p>Open <strong>Dividends</strong> in the sidebar.</p>
+        <ol>
+          <li><strong>Record a dividend</strong> received on any holding (amount and date).</li>
+          <li>Mark whether it was <strong>reinvested (DRIP)</strong> — dividends put straight back into more shares.</li>
+          <li>The <strong>dividend calendar</strong> shows your monthly dividend totals.</li>
+          <li><strong>Forward income forecast</strong> — projects your dividend income for the <strong>next 12 months</strong>, with an estimated annual total, <strong>forward yield</strong>, and <strong>yield on cost</strong> (your income measured against what you originally paid), plus a per-holding breakdown.</li>
+          <li>Delete any dividend record with the trash button on its row.</li>
+        </ol>
+        <div class="callout tip">
+          <span class="co-ico">→</span>
+          <div><span class="co-label">Good to know</span><p>Forecasts are best-effort estimates based on dividend history and rates — treat them as a guide, not a guarantee.</p></div>
+        </div>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <hr class="part-rule">
+
+      <!-- ============ 10 ============ -->
+      <section id="net-worth">
+        <p class="sec-eyebrow">Wealth &amp; risk</p>
+        <h2><span class="h2num">10</span><span>Net Worth</span></h2>
+        <p>Your stocks are only part of the picture. The <strong>Net Worth</strong> page pulls <em>everything</em> together — including assets the app can't fetch prices for — so you see your true total.</p>
+
+        <h3>10.1 Supported asset types</h3>
+        <ul>
+          <li><strong>Stocks</strong> — pulled in automatically from your portfolio holdings.</li>
+          <li><strong>Crypto</strong> — Bitcoin, Ethereum, etc., with live pricing when you give a ticker.</li>
+          <li><strong>Gold</strong> — physical gold or gold ETFs, with live pricing.</li>
+          <li><strong>Fixed Deposits</strong> — bank FDs (track interest rate and maturity), valued manually.</li>
+          <li><strong>Bonds</strong> — government and corporate bonds.</li>
+          <li><strong>Real Estate</strong> — property, with a manual valuation you update yourself.</li>
+        </ul>
+
+        <h3>10.2 How to use it</h3>
+        <ol>
+          <li>Go to <strong>Net Worth</strong> in the sidebar — your stock holdings are already included.</li>
+          <li>Click <strong>+ Add Asset</strong> and choose the type (crypto, gold, FD, bonds, real estate).</li>
+          <li>For crypto and gold with a ticker, prices update <strong>automatically</strong>; for FDs and real estate, you set and update the value yourself.</li>
+          <li>Remove any asset with the delete button on its card.</li>
+        </ol>
+        <p>The page shows a <strong>donut chart</strong> breaking down your wealth by asset type and a single <strong>total net worth</strong> figure. Use the top-bar <strong>display-currency</strong> dropdown to see that total in INR, EUR, or USD.</p>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <!-- ============ 11 ============ -->
+      <section id="analytics-risk">
+        <h2><span class="h2num">11</span><span>Analytics &amp; Risk</span></h2>
+        <p>These pages turn your raw holdings into insight: how risky your portfolio is, how concentrated, how it's drifting, and how its parts move together.</p>
+
+        <h3>11.1 Risk dashboard</h3>
+        <p>Open <strong>Risk</strong> in the sidebar for the selected portfolio.</p>
+        <ul>
+          <li><strong>Colour-coded metric cards:</strong>
+            <ul>
+              <li><strong>Sharpe Ratio</strong> &amp; <strong>Sortino Ratio</strong> — risk-adjusted return (higher is better).</li>
+              <li><strong>Max Drawdown</strong> — the worst peak-to-trough fall you've endured.</li>
+              <li><strong>VaR (95%)</strong> — the maximum daily loss you'd expect on 95% of days.</li>
+              <li><strong>Volatility</strong> — annualised ups-and-downs.</li>
+            </ul>
+          </li>
+          <li><strong>Diversification score</strong> — grades how well-spread your portfolio is, based on how much weight sits in single stocks and single sectors (a concentration measure, HHI-based). It flags any name or sector that's over-weight.</li>
+          <li><strong>Per-holding risk table</strong> — each stock's beta, correlation, volatility, weight, and contribution to your overall risk.</li>
+        </ul>
+
+        <h3>11.2 Analytics page</h3>
+        <p>Open <strong>Analytics</strong> in the sidebar for deeper visual breakdowns, including:</p>
+        <ul>
+          <li><strong>Correlation heatmap</strong> — which holdings move together (and which offset each other).</li>
+          <li><strong>Monthly returns calendar</strong> — a coloured grid of month-by-month performance.</li>
+          <li><strong>Drawdown chart</strong> — your portfolio's decline-from-peak over time.</li>
+          <li><strong>Sector treemap</strong> — where your money sits across sectors.</li>
+        </ul>
+
+        <h3>11.3 Drift &amp; sector rotation</h3>
+        <ul>
+          <li><strong>Allocation drift</strong> — how far each holding has strayed from its <strong>Target %</strong> (set in Edit Holding); the same signal that powers the drift alerts in <a href="#watchlist-alerts">6.4</a>.</li>
+          <li><strong>Sector rotation</strong> — how your sector mix is shifting month over month, so you can spot when you've quietly become over-exposed to one theme.</li>
+        </ul>
+
+        <h3>11.4 52-week position &amp; data freshness</h3>
+        <ul>
+          <li><strong>52-week high/low proximity</strong> — a bar showing how close each stock is to its yearly extremes.</li>
+          <li><strong>Freshness badges</strong> — a <strong>Live / Recent / Stale</strong> pill tells you how current the price data is, aware of each exchange's market hours.</li>
+        </ul>
+
+        <h3>11.5 Market Heatmap</h3>
+        <p>Open <strong>Market Map</strong> in the sidebar for a treemap of your holdings grouped by sector — each rectangle sized by weight and coloured by performance. A fast way to see what's driving your day.</p>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <hr class="part-rule">
+
+      <!-- ============ 12 ============ -->
+      <section id="planning">
+        <p class="sec-eyebrow">Planning &amp; discovery</p>
+        <h2><span class="h2num">12</span><span>Planning</span></h2>
+        <p>Turn "I hope it works out" into a plan. These tools project the future, test strategies against the past, and suggest better mixes.</p>
+
+        <h3>12.1 Goals &amp; the SIP calculator</h3>
+        <p>Open <strong>Goals</strong> in the sidebar.</p>
+        <h4>Create a goal</h4>
+        <ol>
+          <li>Click <strong>+ New Goal</strong>.</li>
+          <li>Fill in the <strong>name</strong> (e.g. "House Down Payment"), <strong>target amount</strong>, <strong>target date</strong>, and <strong>category</strong> (Retirement, House, Education, Travel, Emergency, or Custom).</li>
+          <li>Optionally <strong>link a portfolio</strong> so progress tracks automatically.</li>
+          <li>Click <strong>Create</strong>.</li>
+        </ol>
+        <p><strong>Each goal shows</strong> a progress gauge, invested-vs-target, the <strong>monthly SIP</strong> needed to reach it on time, and time remaining. Hit 25/50/75/100% and you get a little celebration.</p>
+        <h4>Planning calculators (below your goals)</h4>
+        <ul>
+          <li><strong>FIRE / Retirement</strong> — enter your current net worth (auto-filled from Net Worth), monthly contribution, expected annual return, annual retirement expenses, withdrawal rate, and an optional <strong>annual step-up</strong>. It projects your <strong>FIRE number</strong> (the corpus that covers your expenses), how many years to reach it, and a year-by-year corpus table.</li>
+          <li><strong>SIP Calculator</strong> — compare your final corpus <strong>with vs. without</strong> an annual <strong>step-up</strong>, so you can see how much a rising SIP adds over the years.</li>
+        </ul>
+
+        <h3>12.2 What-If simulator</h3>
+        <p>Open <strong>What If</strong> in the sidebar to test a hypothetical before committing real money.</p>
+        <ol>
+          <li>Enter a <strong>stock symbol</strong>, an <strong>investment amount</strong>, and a <strong>date range</strong>.</li>
+          <li>Click <strong>Simulate</strong> to see what those returns <em>would have been</em>.</li>
+          <li>Compare against benchmarks (NIFTY50, S&amp;P 500, etc.).</li>
+        </ol>
+
+        <h3>12.3 Backtesting</h3>
+        <p>Open <strong>Backtest</strong> in the sidebar to test a <strong>trading strategy</strong> against historical data:</p>
+        <ol>
+          <li>Choose a strategy — <strong>RSI</strong>, <strong>SMA crossover</strong>, or <strong>Bollinger Bands</strong>.</li>
+          <li>Pick a symbol and a period.</li>
+          <li>Run it to get an <strong>equity curve</strong> and performance metrics, so you can see how the rule would have played out.</li>
+        </ol>
+
+        <h3>12.4 Portfolio optimizer</h3>
+        <p>Open <strong>Optimizer</strong> in the sidebar. Using <strong>mean-variance optimisation</strong>, it suggests weightings that aim to improve your risk-adjusted return and plots an <strong>efficient frontier</strong> of the trade-off between risk and return. Treat it as a conversation starter, not a command.</p>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <!-- ============ 13 ============ -->
+      <section id="discovery">
+        <h2><span class="h2num">13</span><span>Discovery</span></h2>
+        <p>Find new ideas and keep on top of market events.</p>
+
+        <h3>13.1 Stock screener</h3>
+        <p>Open <strong>Screener</strong> in the sidebar. It filters a <strong>curated universe of liquid stocks</strong> (major NSE and XETRA names) — not the entire market.</p>
+        <ol>
+          <li>Choose an <strong>exchange</strong> (NSE or XETRA) and, optionally, a <strong>sector</strong>.</li>
+          <li>Set any mix of min/max filters: <strong>market cap, P/E, dividend yield, price, RSI (14), 52-week position, day change</strong>.</li>
+          <li>Optionally add extra <strong>symbols</strong> to include.</li>
+          <li>Click <strong>Run Screen</strong>. Results appear in a <strong>sortable</strong> table — click any header to sort. A summary line reports how many stocks were scanned and how many matched.</li>
+        </ol>
+
+        <h3>13.2 Compare stocks</h3>
+        <p>Open <strong>Compare</strong> in the sidebar to put <strong>2–3 stocks side by side</strong>.</p>
+        <ol>
+          <li>Enter 2 or 3 symbols and pick each one's exchange (NSE, BSE, or XETRA).</li>
+          <li>Choose a period (30, 90, 180 days, or 1 year).</li>
+          <li>Click <strong>Compare</strong>.</li>
+        </ol>
+        <p>You get a <strong>metrics table</strong> (current price, day change, 52-week high/low, P/E, market cap, volume, dividend yield, beta) plus a <strong>normalised price chart</strong> where every stock is rebased to 100 at the start — a true apples-to-apples view.</p>
+
+        <h3>13.3 Corporate actions</h3>
+        <p>Open <strong>Corporate Actions</strong> in the sidebar. The app detects <strong>stock splits</strong> and <strong>bonus issues</strong> on your holdings and adjusts them for you.</p>
+        <ol>
+          <li>Click <strong>Detect now</strong> to scan your holdings against market data.</li>
+          <li>Detected actions appear under <strong>Pending review</strong> with the ratio and ex-date.</li>
+          <li>Click <strong>Apply</strong> to adjust the holding (quantity multiplied, average price divided by the ratio) or <strong>Dismiss</strong> to ignore it.</li>
+          <li>Applied and dismissed actions move to <strong>History</strong>, so you always have a record.</li>
+        </ol>
+
+        <h3>13.4 Economic &amp; earnings calendars</h3>
+        <ul>
+          <li><strong>Economic Calendar</strong> — upcoming catalysts for your portfolio in one chronological agenda, tagged <strong>Earnings</strong>, <strong>Ex-Dividend</strong>, or <strong>Macro</strong> (each with a region flag and, for macro, a low/medium/high importance mark). Filter pills at the top let you show one type at a time.</li>
+          <li><strong>Earnings</strong> — a monthly calendar grid of earnings dates for all your holdings, with urgency badges; click a date to see who reports that day.</li>
+          <li><strong>SIP Calendar</strong> — a monthly grid combining your recurring investments (SIPs), dividends, and earnings, with color-coded dots. SIP dates are auto-detected from recurring transaction patterns.</li>
+        </ul>
+
+        <h3>13.5 IPO tracker</h3>
+        <p>Open <strong>IPO Tracker</strong> in the sidebar to browse upcoming, open, and recently listed IPOs across the <strong>Upcoming / Open / Listed</strong> tabs.</p>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <hr class="part-rule">
+
+      <!-- ============ 14 ============ -->
+      <section id="ai-assistant">
+        <p class="sec-eyebrow">Intelligence</p>
+        <h2><span class="h2num">14</span><span>AI Assistant</span></h2>
+        <p>Ask questions about your portfolio in plain English (or speak them), and get insights powered by machine-learning models.</p>
+
+        <h3>14.1 Chat</h3>
+        <ol>
+          <li>Open <strong>AI Assistant</strong> in the sidebar (or the chat icon in the bottom-right corner).</li>
+          <li>Type a question and press <kbd>Enter</kbd>. Examples:
+            <ul>
+              <li>"Which of my stocks are underperforming?"</li>
+              <li>"What's the RSI trend for Reliance?"</li>
+              <li>"How much tax will I owe this year?"</li>
+              <li>"What's my portfolio's Sharpe ratio?"</li>
+              <li>"Show me stocks where action is needed."</li>
+            </ul>
+          </li>
+          <li>Your chat <strong>sessions</strong> are saved so you can revisit past conversations.</li>
+        </ol>
+
+        <h3>14.2 Voice input</h3>
+        <p>Click the <strong>microphone</strong> to speak your question — a waveform animates while it listens, and it auto-submits when you finish. Handy on the desktop app or a touch device.</p>
+
+        <h3>14.3 Market insights</h3>
+        <p>Click <strong>Insights</strong> to open the insights panel, enter a symbol, and switch between three tabs:</p>
+        <ul>
+          <li><strong>Prediction</strong> — a short-term price forecast (next few days) with a mini chart.</li>
+          <li><strong>Anomalies</strong> — unusual price/volume days flagged over the recent period.</li>
+          <li><strong>Sentiment</strong> — an overall <strong>bullish / bearish / neutral</strong> read from recent news.</li>
+        </ul>
+
+        <h3>14.4 AI providers &amp; privacy</h3>
+        <p>By default the assistant runs <strong>locally via Ollama</strong> — free, private, and works offline. You can optionally connect <strong>OpenAI (GPT)</strong>, <strong>Claude</strong>, or <strong>Gemini</strong> with your own API key in <strong>Settings → AI Assistant</strong>. If the app can't reach any provider, it simply shows an "AI assistant offline" message and everything else keeps working.</p>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <!-- ============ 15 ============ -->
+      <section id="brokers">
+        <h2><span class="h2num">15</span><span>Brokers</span></h2>
+        <p>Connecting a broker lets the app <strong>sync your holdings</strong> so you don't have to enter them by hand.</p>
+
+        <h3>15.1 What's supported</h3>
+        <ul>
+          <li><strong>India:</strong> <strong>Zerodha</strong> and <strong>ICICI Direct</strong> are connectable today. <strong>Angel One, Groww, Upstox,</strong> and <strong>5Paisa</strong> are listed as <strong>coming soon</strong>.</li>
+          <li><strong>Germany:</strong> <strong>Deutsche Bank</strong> and <strong>comdirect</strong> are <strong>coming soon</strong>.</li>
+        </ul>
+
+        <h3>15.2 Connect a broker</h3>
+        <ol>
+          <li>Open <strong>Brokers</strong> in the sidebar and click <strong>Connect</strong> next to your broker.</li>
+          <li>Enter your <strong>API credentials</strong> (API key and secret).</li>
+          <li><strong>For Zerodha (OAuth):</strong> the app shows a broker <strong>login link</strong> — open it, log in at Zerodha, and copy the <code>request_token</code> from the page you're redirected to. Paste that token back into the connect form to finish.</li>
+          <li>Your credentials are stored <strong>encrypted</strong>.</li>
+        </ol>
+
+        <h3>15.3 After connecting</h3>
+        <ul>
+          <li>Use the <strong>Sync</strong> button to pull your holdings into the selected portfolio.</li>
+          <li><strong>Prices still come from public market data</strong> (yfinance) — there's no real-time broker price feed.</li>
+          <li><strong>You still set your own range levels</strong> — the broker doesn't control your action zones.</li>
+        </ul>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <hr class="part-rule">
+
+      <!-- ============ 16 ============ -->
+      <section id="import-export-reports">
+        <p class="sec-eyebrow">Data &amp; settings</p>
+        <h2><span class="h2num">16</span><span>Import, Export &amp; Reports</span></h2>
+        <p>Get your data in from a spreadsheet, and get polished reports and backups out.</p>
+
+        <h3>16.1 Import from Excel</h3>
+        <p>If you already track investments in Excel, import them in one go.</p>
+        <p><strong>Prepare your file (.xlsx)</strong> with columns like these — names don't have to match exactly, the app maps them for you:</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Column</th><th>Required?</th><th>Example</th></tr></thead>
+            <tbody>
+              <tr><td>Stock Name</td><td>Yes</td><td>Reliance Industries</td></tr>
+              <tr><td>Date of Purchase</td><td>Yes</td><td class="num-col">2024-01-15</td></tr>
+              <tr><td>Purchase Quantity</td><td>Yes</td><td class="num-col">50</td></tr>
+              <tr><td>Purchase Price</td><td>Yes</td><td class="num-col">2450.00</td></tr>
+              <tr><td>Lower/Upper Mid Ranges</td><td>No</td><td class="num-col">2400 / 2200 / 2800 / 2950</td></tr>
+              <tr><td>Base Level / Top Level</td><td>No</td><td class="num-col">2000 / 3100</td></tr>
+              <tr><td>Sale Quantity / Price / Date</td><td>No</td><td class="num-col">10 / 2700 / 2024-06-20</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <h4>Upload</h4>
+        <ol>
+          <li>Go to <strong>Import</strong> in the sidebar and choose the <strong>portfolio</strong> to import into.</li>
+          <li><strong>Drag and drop</strong> your file (or click to browse). It's parsed and imported in one step.</li>
+          <li>A summary shows how many rows were parsed and how many holdings/transactions were created. Current prices are fetched automatically.</li>
+        </ol>
+        <p><strong>Re-importing</strong> an updated file will update existing holdings with new transactions, add new stocks, and recalculate quantities and averages.</p>
+
+        <h3>16.2 Other imports</h3>
+        <p>From the <strong>Import</strong> page you can also bring in <strong>CSV</strong> files for <strong>holdings, dividends, mutual funds,</strong> and <strong>tax records</strong> (each has a downloadable template), and restore a <strong>JSON portfolio backup</strong>.</p>
+
+        <h3>16.3 Reports &amp; exports</h3>
+        <p>Open <strong>Reports</strong> in the sidebar:</p>
+        <ul>
+          <li><strong>HTML report</strong> — a shareable, formatted portfolio summary.</li>
+          <li><strong>Holdings CSV</strong> and <strong>Transactions CSV</strong>.</li>
+          <li><strong>JSON backup</strong> — a full portfolio snapshot you can re-import later.</li>
+          <li><strong>PDF export</strong> of your portfolio.</li>
+          <li><strong>Google Sheets export</strong> — a CSV structured for Google Sheets, in three sections.</li>
+          <li><strong>Capital Gains Tax Report</strong> (CSV/HTML) — see <a href="#taxes">8.4</a>.</li>
+          <li><strong>SQLite backup</strong> — a copy of the whole database (desktop).</li>
+        </ul>
+
+        <h3>16.4 Shareable snapshot</h3>
+        <p>Open <strong>Snapshot</strong> in the sidebar to generate a shareable view of your portfolio, with an <strong>anonymise toggle</strong> (hide amounts/names) and copy-to-clipboard — perfect for asking for a second opinion without revealing your balances.</p>
+
+        <h3>16.5 Account Aggregator (India)</h3>
+        <p>The Import page includes a framework for India's <strong>Account Aggregator</strong> network (Finvu, OneMoney, CAMS) to fetch data with consent. This is a <strong>stub/preview</strong> — the plumbing is in place but it's not a fully live integration yet.</p>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <!-- ============ 17 ============ -->
+      <section id="settings">
+        <h2><span class="h2num">17</span><span>Settings</span></h2>
+        <p>Open <strong>Settings</strong> in the sidebar. Everything about how the app looks, behaves, and reaches you lives here.</p>
+
+        <h3>17.1 Display</h3>
+        <ul>
+          <li><strong>Theme</strong> — Dark, Light, or <strong>System</strong> (follows your operating system). You can also toggle theme from the sun/moon in the top bar.</li>
+          <li><strong>Currency</strong> — INR, EUR, or USD — your account's <strong>base</strong> currency. (For quick viewing in another currency, use the top-bar <strong>display-currency</strong> dropdown instead — it doesn't change this base.)</li>
+          <li><strong>Table density</strong> — Compact, Comfortable, or Spacious (remembered between visits).</li>
+          <li><strong>Default chart period</strong> — 7d, 30d, 90d, or 1Y.</li>
+          <li><strong>Customize columns</strong> — see <a href="#holdings-transactions">5.7</a>.</li>
+        </ul>
+
+        <h3>17.2 Notifications</h3>
+        <p>Set up each channel once, then use its <strong>Test</strong> button to confirm it works:</p>
+        <ul>
+          <li><strong>Email</strong> — enter your <strong>SendGrid API key</strong> and a <strong>From</strong> address; <strong>Test</strong> sends a sample email; toggle email alerts on/off.</li>
+          <li><strong>WhatsApp</strong> — enter your <strong>Twilio</strong> Account SID, Auth Token, and WhatsApp number; <strong>Test</strong> sends a message.</li>
+          <li><strong>Telegram</strong> — enter your <strong>Bot Token</strong> (create one via <strong>@BotFather</strong> on Telegram). Message your bot once and the app detects your <strong>Chat ID</strong> automatically; <strong>Test</strong> confirms it.</li>
+          <li><strong>SMS</strong> — via Twilio; toggle on/off.</li>
+          <li><strong>Desktop push</strong> — works in both the browser and the desktop app, with <strong>no external service</strong>.</li>
+        </ul>
+        <p>Your <strong>phone number</strong> and <strong>Telegram chat ID</strong> here are the personal destinations used for your alerts (see <a href="#watchlist-alerts">6.3</a>).</p>
+
+        <h3>17.3 AI Assistant</h3>
+        <p>Choose your AI provider and (if using a cloud one) paste your <strong>API key</strong> for OpenAI, Claude, or Gemini. Leave it on the default local <strong>Ollama</strong> to keep everything offline and private. A <strong>Test</strong> button checks the connection.</p>
+
+        <h3>17.4 Security</h3>
+        <ul>
+          <li><strong>Change Password</strong> — enter your current password and a new one.</li>
+          <li><strong>Two-Factor Authentication</strong> — set up or disable 2FA (see <a href="#getting-started">2.3</a>).</li>
+        </ul>
+
+        <h3>17.5 Data backup</h3>
+        <ul>
+          <li><strong>Export</strong> from the <strong>Reports</strong> page (CSV, JSON, HTML, PDF, Google Sheets, SQLite backup).</li>
+          <li><strong>Import/restore</strong> from the <strong>Import</strong> page.</li>
+        </ul>
+        <div class="callout tip">
+          <span class="co-ico">→</span>
+          <div><span class="co-label">Tip</span><p>Take a <strong>JSON backup</strong> every so often, especially before a big cleanup or a desktop-app upgrade. It's your safety net.</p></div>
+        </div>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <hr class="part-rule">
+
+      <!-- ============ 18 ============ -->
+      <section id="desktop-app">
+        <p class="sec-eyebrow">Desktop &amp; help</p>
+        <h2><span class="h2num">18</span><span>The Desktop App</span></h2>
+        <p>FinanceTracker ships as a <strong>native desktop app</strong> (built with Tauri) for <strong>macOS, Windows, and Linux</strong>. It's the most private way to run the app — everything, including your database, stays on your own computer.</p>
+
+        <h3>18.1 Install</h3>
+        <ol>
+          <li>Download the installer for your system:
+            <ul>
+              <li><strong>macOS</strong> — a <code>.dmg</code>; open it and drag FinanceTracker to <strong>Applications</strong>.</li>
+              <li><strong>Windows</strong> — an <code>.msi</code> or <code>.exe</code>; run it and follow the prompts.</li>
+              <li><strong>Linux</strong> — an <code>.AppImage</code> (make it executable and run) or a <code>.deb</code> package.</li>
+            </ul>
+          </li>
+          <li>Launch the app like any other program.</li>
+        </ol>
+
+        <h3>18.2 First launch takes 1–2 minutes — this is normal</h3>
+        <p>The very first time you open the desktop app, you'll see a <strong>"Starting local server… First launch can take a minute or two"</strong> screen. Please be patient:</p>
+        <ul>
+          <li>The app is unpacking its built-in server and (on macOS/Windows) your system may be scanning it for the first time. A cold start can take roughly <strong>40–120 seconds</strong>.</li>
+          <li>The window is <strong>never blank</strong> — the loading screen is shown on purpose.</li>
+          <li>If it takes longer than usual, a <strong>recovery page</strong> appears with a <strong>Retry now</strong> button; it keeps checking in the background and opens the app automatically as soon as the server is ready.</li>
+          <li><strong>Subsequent launches are much faster.</strong></li>
+        </ul>
+
+        <h3>18.3 Where your data lives (and staying safe)</h3>
+        <p>Your database is a single SQLite file in your operating system's app-data folder:</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Platform</th><th>Location</th></tr></thead>
+            <tbody>
+              <tr><td><strong>macOS</strong></td><td><code>~/Library/Application Support/com.financetracker.app/finance.db</code></td></tr>
+              <tr><td><strong>Windows</strong></td><td><code>C:\Users\&lt;you&gt;\AppData\Local\com.financetracker.app\finance.db</code></td></tr>
+              <tr><td><strong>Linux</strong></td><td><code>~/.local/share/com.financetracker.app/finance.db</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <ul>
+          <li>Your data <strong>never leaves your machine</strong> unless you export it. The built-in server listens only on your own computer (<code>127.0.0.1</code>) and isn't reachable over the network.</li>
+          <li><strong>Upgrades are safe:</strong> when you install a newer version, the app updates the database structure <strong>additively</strong> — it adds anything new but never drops or rewrites your existing data, so an older database keeps working after an upgrade.</li>
+          <li><strong>Back up</strong> by copying that <code>finance.db</code> file, or by using the <strong>JSON / SQLite backup</strong> exports on the Reports page.</li>
+        </ul>
+        <div class="callout tip">
+          <span class="co-ico">→</span>
+          <div><span class="co-label">Tip</span><p>Closing the app fully shuts down its background server. If prices or the AI ever seem stuck, quitting and reopening the app is a clean, safe reset.</p></div>
+        </div>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <!-- ============ 19 ============ -->
+      <section id="troubleshooting-faq">
+        <h2><span class="h2num">19</span><span>Troubleshooting &amp; FAQ</span></h2>
+        <p>Quick answers to the things that trip people up. For more, see the linked docs at the end.</p>
+
+        <h4>Prices aren't updating.</h4>
+        <p>Click the <strong>Refresh</strong> button in the top bar. Market data is public and can be delayed or briefly unavailable; the <strong>freshness badge</strong> (Live / Recent / Stale) tells you how current the numbers are. Prices also only move during each exchange's market hours.</p>
+
+        <h4>A stock shows no price / "not found".</h4>
+        <p>Make sure you picked the right <strong>exchange</strong> when adding it — the same company can trade on NSE, BSE, and XETRA. Try re-selecting the stock from the search dropdown so the correct market symbol is used.</p>
+
+        <h4>The AI assistant says it's offline.</h4>
+        <p>That only affects the AI features. Either start your local <strong>Ollama</strong> model or add a cloud provider's API key in <strong>Settings → AI Assistant</strong>. Everything else in the app works regardless.</p>
+
+        <h4>I didn't get an email/WhatsApp/Telegram alert.</h4>
+        <p>Open <strong>Settings → Notifications</strong> and press the channel's <strong>Test</strong> button. Check your API keys/tokens and, for Telegram, that you've messaged the bot at least once so it can detect your Chat ID. The <strong>in-app</strong> bell always works even when other channels don't.</p>
+
+        <h4>My tax numbers look off.</h4>
+        <p>Tax figures depend on complete, accurate <strong>transactions</strong> — especially your <strong>sells</strong>. Make sure every buy and sell is recorded with the right date, quantity, and price, then re-open the Tax page. Remember the figures are <strong>estimates</strong>; confirm with a professional.</p>
+
+        <h4>The desktop app is stuck on the loading screen.</h4>
+        <p>First launch can take <strong>1–2 minutes</strong> (see <a href="#desktop-app">18.2</a>). Give it time, use <strong>Retry now</strong> if offered, or quit and reopen. Your data is safe on disk throughout.</p>
+
+        <h4>I forgot my password.</h4>
+        <p>Use <strong>Forgot password?</strong> on the login screen (see <a href="#getting-started">2.4</a>).</p>
+
+        <h4>Can I track Indian and German holdings together?</h4>
+        <p>Yes — keep them in <strong>separate portfolios</strong> with their own currencies, and use the top-bar <strong>display-currency</strong> dropdown to view combined figures in INR, EUR, or USD.</p>
+
+        <h4>Where do I find more help?</h4>
+        <ul>
+          <li>The <strong>?</strong> button in the top-right of any page gives contextual help for that screen.</li>
+          <li>The <strong>Help</strong> section in the sidebar has searchable articles.</li>
+          <li>Hover over any column header, icon, or underlined financial term for a plain-language tooltip.</li>
+        </ul>
+        <p>For deeper reading, see the companion docs: <strong>User Guide</strong> (a feature reference organised by page), <strong>FAQ</strong>, <strong>Troubleshooting</strong>, <strong>Tax Guide</strong>, <strong>Broker Integration</strong>, and <strong>Desktop App</strong> (building and running the desktop build).</p>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+
+      <!-- ============ 20 ============ -->
+      <section id="shortcuts-tips">
+        <h2><span class="h2num">20</span><span>Keyboard Shortcuts &amp; Handy Tips</span></h2>
+
+        <h3>The app at a glance</h3>
+        <div class="diagram">
+          <div class="mermaid-svg"><svg id="my-svg" width="100%" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" class="flowchart" style="max-width: 5502.92px; background-color: transparent;" viewBox="0 0 5502.921875 278" role="graphics-document document" aria-roledescription="flowchart-v2"><style>#my-svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;fill:#000000;}@keyframes edge-animation-frame{from{stroke-dashoffset:0;}}@keyframes dash{to{stroke-dashoffset:0;}}#my-svg .edge-animation-slow{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 50s linear infinite;stroke-linecap:round;}#my-svg .edge-animation-fast{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 20s linear infinite;stroke-linecap:round;}#my-svg .error-icon{fill:#552222;}#my-svg .error-text{fill:#552222;stroke:#552222;}#my-svg .edge-thickness-normal{stroke-width:1px;}#my-svg .edge-thickness-thick{stroke-width:3.5px;}#my-svg .edge-pattern-solid{stroke-dasharray:0;}#my-svg .edge-thickness-invisible{stroke-width:0;fill:none;}#my-svg .edge-pattern-dashed{stroke-dasharray:3;}#my-svg .edge-pattern-dotted{stroke-dasharray:2;}#my-svg .marker{fill:#666;stroke:#666;}#my-svg .marker.cross{stroke:#666;}#my-svg svg{font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:16px;}#my-svg p{margin:0;}#my-svg .label{font-family:"trebuchet ms",verdana,arial,sans-serif;color:#000000;}#my-svg .cluster-label text{fill:#333;}#my-svg .cluster-label span{color:#333;}#my-svg .cluster-label span p{background-color:transparent;}#my-svg .label text,#my-svg span{fill:#000000;color:#000000;}#my-svg .node rect,#my-svg .node circle,#my-svg .node ellipse,#my-svg .node polygon,#my-svg .node path{fill:#eee;stroke:#999;stroke-width:1px;}#my-svg .rough-node .label text,#my-svg .node .label text,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-anchor:middle;}#my-svg .node .katex path{fill:#000;stroke:#000;stroke-width:1px;}#my-svg .rough-node .label,#my-svg .node .label,#my-svg .image-shape .label,#my-svg .icon-shape .label{text-align:center;}#my-svg .node.clickable{cursor:pointer;}#my-svg .root .anchor path{fill:#666!important;stroke-width:0;stroke:#666;}#my-svg .arrowheadPath{fill:#333333;}#my-svg .edgePath .path{stroke:#666;stroke-width:2.0px;}#my-svg .flowchart-link{stroke:#666;fill:none;}#my-svg .edgeLabel{background-color:white;text-align:center;}#my-svg .edgeLabel p{background-color:white;}#my-svg .edgeLabel rect{opacity:0.5;background-color:white;fill:white;}#my-svg .labelBkg{background-color:rgba(255, 255, 255, 0.5);}#my-svg .cluster rect{fill:hsl(0, 0%, 98.9215686275%);stroke:#707070;stroke-width:1px;}#my-svg .cluster text{fill:#333;}#my-svg .cluster span{color:#333;}#my-svg div.mermaidTooltip{position:absolute;text-align:center;max-width:200px;padding:2px;font-family:"trebuchet ms",verdana,arial,sans-serif;font-size:12px;background:hsl(-160, 0%, 93.3333333333%);border:1px solid #707070;border-radius:2px;pointer-events:none;z-index:100;}#my-svg .flowchartTitleText{text-anchor:middle;font-size:18px;fill:#000000;}#my-svg rect.text{fill:none;stroke-width:0;}#my-svg .icon-shape,#my-svg .image-shape{background-color:white;text-align:center;}#my-svg .icon-shape p,#my-svg .image-shape p{background-color:white;padding:2px;}#my-svg .icon-shape rect,#my-svg .image-shape rect{opacity:0.5;background-color:white;fill:white;}#my-svg .label-icon{display:inline-block;height:1em;overflow:visible;vertical-align:-0.125em;}#my-svg .node .label-icon path{fill:currentColor;stroke:revert;stroke-width:revert;}#my-svg :root{--mermaid-font-family:"trebuchet ms",verdana,arial,sans-serif;}</style><g><marker id="my-svg_flowchart-v2-pointEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-pointStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="4.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 5 L 10 10 L 10 0 z" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleEnd" class="marker flowchart-v2" viewBox="0 0 10 10" refX="11" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-circleStart" class="marker flowchart-v2" viewBox="0 0 10 10" refX="-1" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><circle cx="5" cy="5" r="5" class="arrowMarkerPath" style="stroke-width: 1; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossEnd" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="12" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><marker id="my-svg_flowchart-v2-crossStart" class="marker cross flowchart-v2" viewBox="0 0 11 11" refX="-1" refY="5.2" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto"><path d="M 1,1 l 9,9 M 10,1 l -9,9" class="arrowMarkerPath" style="stroke-width: 2; stroke-dasharray: 1, 0;"/></marker><g class="root"><g class="clusters"/><g class="edgePaths"><path d="M3110.66,36.632L2677.071,45.027C2243.482,53.421,1376.303,70.211,942.714,82.772C509.125,95.333,509.125,103.667,509.125,107.833L509.125,112" id="L_HOME_P_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_HOME_P_0" data-points="W3sieCI6MzExMC42NjAxNTYyNSwieSI6MzYuNjMyMDU5NDMyMjM0ODN9LHsieCI6NTA5LjEyNSwieSI6ODd9LHsieCI6NTA5LjEyNSwieSI6MTEyfV0="/><path d="M3110.66,37.848L2868.182,46.04C2625.703,54.232,2140.746,70.616,1898.268,82.975C1655.789,95.333,1655.789,103.667,1655.789,107.833L1655.789,112" id="L_HOME_AN_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_HOME_AN_0" data-points="W3sieCI6MzExMC42NjAxNTYyNSwieSI6MzcuODQ3OTI2NjY0OTIzOTc1fSx7IngiOjE2NTUuNzg5MDYyNSwieSI6ODd9LHsieCI6MTY1NS43ODkwNjI1LCJ5IjoxMTJ9XQ=="/><path d="M3194.957,62L3194.957,66.167C3194.957,70.333,3194.957,78.667,3194.957,87C3194.957,95.333,3194.957,103.667,3194.957,107.833L3194.957,112" id="L_HOME_PL_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_HOME_PL_0" data-points="W3sieCI6MzE5NC45NTcwMzEyNSwieSI6NjJ9LHsieCI6MzE5NC45NTcwMzEyNSwieSI6ODd9LHsieCI6MzE5NC45NTcwMzEyNSwieSI6MTEyfV0="/><path d="M3279.254,38.048L3504.88,46.207C3730.505,54.365,4181.757,70.683,4407.382,83.008C4633.008,95.333,4633.008,103.667,4633.008,107.833L4633.008,112" id="L_HOME_TO_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_HOME_TO_0" data-points="W3sieCI6MzI3OS4yNTM5MDYyNSwieSI6MzguMDQ4MTc5OTA5MzI4MjJ9LHsieCI6NDYzMy4wMDc4MTI1LCJ5Ijo4N30seyJ4Ijo0NjMzLjAwNzgxMjUsInkiOjExMn1d"/><path d="M3279.254,37.014L3627.89,45.345C3976.526,53.676,4673.798,70.338,5022.434,82.836C5371.07,95.333,5371.07,103.667,5371.07,107.833L5371.07,112" id="L_HOME_SY_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_HOME_SY_0" data-points="W3sieCI6MzI3OS4yNTM5MDYyNSwieSI6MzcuMDE0MzQyNTE1MDU2MDV9LHsieCI6NTM3MS4wNzAzMTI1LCJ5Ijo4N30seyJ4Ijo1MzcxLjA3MDMxMjUsInkiOjExMn1d"/><path d="M448.281,146.292L386.108,153.743C323.935,161.195,199.589,176.097,137.415,187.715C75.242,199.333,75.242,207.667,75.242,211.833L75.242,216" id="L_P_P1_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_P_P1_0" data-points="W3sieCI6NDQ4LjI4MTI1LCJ5IjoxNDYuMjkyMDAzNTI5MTc4NzR9LHsieCI6NzUuMjQyMTg3NSwieSI6MTkxfSx7IngiOjc1LjI0MjE4NzUsInkiOjIxNn1d"/><path d="M448.281,151.34L415.69,157.95C383.099,164.56,317.917,177.78,285.326,188.557C252.734,199.333,252.734,207.667,252.734,211.833L252.734,216" id="L_P_P2_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_P_P2_0" data-points="W3sieCI6NDQ4LjI4MTI1LCJ5IjoxNTEuMzQwMDU3Mjg1NjM1OTR9LHsieCI6MjUyLjczNDM3NSwieSI6MTkxfSx7IngiOjI1Mi43MzQzNzUsInkiOjIxNn1d"/><path d="M466.025,166L459.374,170.167C452.722,174.333,439.42,182.667,432.768,191C426.117,199.333,426.117,207.667,426.117,211.833L426.117,216" id="L_P_P3_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_P_P3_0" data-points="W3sieCI6NDY2LjAyNDc4OTY2MzQ2MTU1LCJ5IjoxNjZ9LHsieCI6NDI2LjExNzE4NzUsInkiOjE5MX0seyJ4Ijo0MjYuMTE3MTg3NSwieSI6MjE2fV0="/><path d="M552.225,166L558.876,170.167C565.528,174.333,578.83,182.667,585.482,191C592.133,199.333,592.133,207.667,592.133,211.833L592.133,216" id="L_P_P4_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_P_P4_0" data-points="W3sieCI6NTUyLjIyNTIxMDMzNjUzODUsInkiOjE2Nn0seyJ4Ijo1OTIuMTMyODEyNSwieSI6MTkxfSx7IngiOjU5Mi4xMzI4MTI1LCJ5IjoyMTZ9XQ=="/><path d="M569.969,150.312L606.441,157.094C642.914,163.875,715.859,177.437,752.332,188.385C788.805,199.333,788.805,207.667,788.805,211.833L788.805,216" id="L_P_P5_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_P_P5_0" data-points="W3sieCI6NTY5Ljk2ODc1LCJ5IjoxNTAuMzEyNDk0NzYyNDIzNTR9LHsieCI6Nzg4LjgwNDY4NzUsInkiOjE5MX0seyJ4Ijo3ODguODA0Njg3NSwieSI6MjE2fV0="/><path d="M569.969,145.628L639.389,153.19C708.81,160.752,847.651,175.876,917.072,187.605C986.492,199.333,986.492,207.667,986.492,211.833L986.492,216" id="L_P_P6_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_P_P6_0" data-points="W3sieCI6NTY5Ljk2ODc1LCJ5IjoxNDUuNjI3NzU5Njg0NDY3Mn0seyJ4Ijo5ODYuNDkyMTg3NSwieSI6MTkxfSx7IngiOjk4Ni40OTIxODc1LCJ5IjoyMTZ9XQ=="/><path d="M1597.43,145.031L1523.298,152.693C1449.167,160.354,1300.904,175.677,1226.772,187.505C1152.641,199.333,1152.641,207.667,1152.641,211.833L1152.641,216" id="L_AN_A1_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_AN_A1_0" data-points="W3sieCI6MTU5Ny40Mjk2ODc1LCJ5IjoxNDUuMDMxMzk2MDUyOTc4OX0seyJ4IjoxMTUyLjY0MDYyNSwieSI6MTkxfSx7IngiOjExNTIuNjQwNjI1LCJ5IjoyMTZ9XQ=="/><path d="M1597.43,148.223L1552.315,155.352C1507.201,162.482,1416.971,176.741,1371.857,188.037C1326.742,199.333,1326.742,207.667,1326.742,211.833L1326.742,216" id="L_AN_A2_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_AN_A2_0" data-points="W3sieCI6MTU5Ny40Mjk2ODc1LCJ5IjoxNDguMjIyNjYwMTQ1MzA2MDR9LHsieCI6MTMyNi43NDIxODc1LCJ5IjoxOTF9LHsieCI6MTMyNi43NDIxODc1LCJ5IjoyMTZ9XQ=="/><path d="M1597.43,158.49L1581.206,163.909C1564.982,169.327,1532.534,180.163,1516.31,189.748C1500.086,199.333,1500.086,207.667,1500.086,211.833L1500.086,216" id="L_AN_A3_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_AN_A3_0" data-points="W3sieCI6MTU5Ny40Mjk2ODc1LCJ5IjoxNTguNDkwMjE1NzU1MTQzfSx7IngiOjE1MDAuMDg1OTM3NSwieSI6MTkxfSx7IngiOjE1MDAuMDg1OTM3NSwieSI6MjE2fV0="/><path d="M1655.789,166L1655.789,170.167C1655.789,174.333,1655.789,182.667,1655.789,191C1655.789,199.333,1655.789,207.667,1655.789,211.833L1655.789,216" id="L_AN_A4_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_AN_A4_0" data-points="W3sieCI6MTY1NS43ODkwNjI1LCJ5IjoxNjZ9LHsieCI6MTY1NS43ODkwNjI1LCJ5IjoxOTF9LHsieCI6MTY1NS43ODkwNjI1LCJ5IjoyMTZ9XQ=="/><path d="M1714.148,157.335L1732.008,162.946C1749.867,168.556,1785.586,179.778,1803.445,189.556C1821.305,199.333,1821.305,207.667,1821.305,211.833L1821.305,216" id="L_AN_A5_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_AN_A5_0" data-points="W3sieCI6MTcxNC4xNDg0Mzc1LCJ5IjoxNTcuMzM0NzQ5MzYyNzg2NzR9LHsieCI6MTgyMS4zMDQ2ODc1LCJ5IjoxOTF9LHsieCI6MTgyMS4zMDQ2ODc1LCJ5IjoyMTZ9XQ=="/><path d="M1714.148,147.753L1762.204,154.961C1810.26,162.169,1906.372,176.584,1954.428,187.959C2002.484,199.333,2002.484,207.667,2002.484,211.833L2002.484,216" id="L_AN_A6_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_AN_A6_0" data-points="W3sieCI6MTcxNC4xNDg0Mzc1LCJ5IjoxNDcuNzUzMTgyOTU1MTM0NH0seyJ4IjoyMDAyLjQ4NDM3NSwieSI6MTkxfSx7IngiOjIwMDIuNDg0Mzc1LCJ5IjoyMTZ9XQ=="/><path d="M1714.148,144.469L1796.909,152.224C1879.669,159.979,2045.19,175.49,2127.951,187.411C2210.711,199.333,2210.711,207.667,2210.711,211.833L2210.711,216" id="L_AN_A7_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_AN_A7_0" data-points="W3sieCI6MTcxNC4xNDg0Mzc1LCJ5IjoxNDQuNDY4Njc1MjA3NjU4NzV9LHsieCI6MjIxMC43MTA5Mzc1LCJ5IjoxOTF9LHsieCI6MjIxMC43MTA5Mzc1LCJ5IjoyMTZ9XQ=="/><path d="M3134.52,142.996L3013.528,150.997C2892.536,158.998,2650.553,174.999,2529.562,187.166C2408.57,199.333,2408.57,207.667,2408.57,211.833L2408.57,216" id="L_PL_L1_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_PL_L1_0" data-points="W3sieCI6MzEzNC41MTk1MzEyNSwieSI6MTQyLjk5NjQ0MzM4NDc0NTN9LHsieCI6MjQwOC41NzAzMTI1LCJ5IjoxOTF9LHsieCI6MjQwOC41NzAzMTI1LCJ5IjoyMTZ9XQ=="/><path d="M3134.52,143.872L3037.089,151.727C2939.659,159.582,2744.798,175.291,2647.368,187.312C2549.938,199.333,2549.938,207.667,2549.938,211.833L2549.938,216" id="L_PL_L2_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_PL_L2_0" data-points="W3sieCI6MzEzNC41MTk1MzEyNSwieSI6MTQzLjg3MjMzMzA4MDk5OTI1fSx7IngiOjI1NDkuOTM3NSwieSI6MTkxfSx7IngiOjI1NDkuOTM3NSwieSI6MjE2fV0="/><path d="M3134.52,145.428L3063.111,153.024C2991.703,160.619,2848.887,175.809,2777.479,187.571C2706.07,199.333,2706.07,207.667,2706.07,211.833L2706.07,216" id="L_PL_L3_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_PL_L3_0" data-points="W3sieCI6MzEzNC41MTk1MzEyNSwieSI6MTQ1LjQyODM4MDgwNzc5ODMzfSx7IngiOjI3MDYuMDcwMzEyNSwieSI6MTkxfSx7IngiOjI3MDYuMDcwMzEyNSwieSI6MjE2fV0="/><path d="M3134.52,149.567L3095.024,156.473C3055.529,163.378,2976.538,177.189,2937.042,188.261C2897.547,199.333,2897.547,207.667,2897.547,211.833L2897.547,216" id="L_PL_L4_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_PL_L4_0" data-points="W3sieCI6MzEzNC41MTk1MzEyNSwieSI6MTQ5LjU2NzA1Njc1Mjk1ODQ4fSx7IngiOjI4OTcuNTQ2ODc1LCJ5IjoxOTF9LHsieCI6Mjg5Ny41NDY4NzUsInkiOjIxNn1d"/><path d="M3145.344,166L3137.688,170.167C3130.032,174.333,3114.719,182.667,3107.063,191C3099.406,199.333,3099.406,207.667,3099.406,211.833L3099.406,216" id="L_PL_L5_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_PL_L5_0" data-points="W3sieCI6MzE0NS4zNDQxMjU2MDA5NjE0LCJ5IjoxNjZ9LHsieCI6MzA5OS40MDYyNSwieSI6MTkxfSx7IngiOjMwOTkuNDA2MjUsInkiOjIxNn1d"/><path d="M3244.57,166L3252.226,170.167C3259.883,174.333,3275.195,182.667,3282.851,191C3290.508,199.333,3290.508,207.667,3290.508,211.833L3290.508,216" id="L_PL_L6_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_PL_L6_0" data-points="W3sieCI6MzI0NC41Njk5MzY4OTkwMzg2LCJ5IjoxNjZ9LHsieCI6MzI5MC41MDc4MTI1LCJ5IjoxOTF9LHsieCI6MzI5MC41MDc4MTI1LCJ5IjoyMTZ9XQ=="/><path d="M3255.395,151.298L3287.912,157.915C3320.43,164.532,3385.465,177.766,3417.982,188.55C3450.5,199.333,3450.5,207.667,3450.5,211.833L3450.5,216" id="L_PL_L7_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_PL_L7_0" data-points="W3sieCI6MzI1NS4zOTQ1MzEyNSwieSI6MTUxLjI5ODMyMzExNzEzNzIyfSx7IngiOjM0NTAuNSwieSI6MTkxfSx7IngiOjM0NTAuNSwieSI6MjE2fV0="/><path d="M3255.395,146.755L3312.863,154.129C3370.331,161.503,3485.267,176.252,3542.735,187.793C3600.203,199.333,3600.203,207.667,3600.203,211.833L3600.203,216" id="L_PL_L8_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_PL_L8_0" data-points="W3sieCI6MzI1NS4zOTQ1MzEyNSwieSI6MTQ2Ljc1NTE2NDIwMzg0OTl9LHsieCI6MzYwMC4yMDMxMjUsInkiOjE5MX0seyJ4IjozNjAwLjIwMzEyNSwieSI6MjE2fV0="/><path d="M3255.395,144.646L3338.096,152.372C3420.797,160.097,3586.199,175.549,3668.9,187.441C3751.602,199.333,3751.602,207.667,3751.602,211.833L3751.602,216" id="L_PL_L9_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_PL_L9_0" data-points="W3sieCI6MzI1NS4zOTQ1MzEyNSwieSI6MTQ0LjY0NTg4MzE4Njc4NDY2fSx7IngiOjM3NTEuNjAxNTYyNSwieSI6MTkxfSx7IngiOjM3NTEuNjAxNTYyNSwieSI6MjE2fV0="/><path d="M3255.395,143.348L3365.785,151.29C3476.174,159.232,3696.954,175.116,3807.344,187.225C3917.734,199.333,3917.734,207.667,3917.734,211.833L3917.734,216" id="L_PL_L10_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_PL_L10_0" data-points="W3sieCI6MzI1NS4zOTQ1MzEyNSwieSI6MTQzLjM0ODE1Nzg3NjI0Nzc3fSx7IngiOjM5MTcuNzM0Mzc1LCJ5IjoxOTF9LHsieCI6MzkxNy43MzQzNzUsInkiOjIxNn1d"/><path d="M4585.172,143.749L4505.839,151.624C4426.505,159.499,4267.839,175.25,4188.505,187.291C4109.172,199.333,4109.172,207.667,4109.172,211.833L4109.172,216" id="L_TO_T1_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_TO_T1_0" data-points="W3sieCI6NDU4NS4xNzE4NzUsInkiOjE0My43NDg1NjQ1MjU1MTA0M30seyJ4Ijo0MTA5LjE3MTg3NSwieSI6MTkxfSx7IngiOjQxMDkuMTcxODc1LCJ5IjoyMTZ9XQ=="/><path d="M4585.172,146.26L4536.042,153.717C4486.911,161.173,4388.651,176.087,4339.521,187.71C4290.391,199.333,4290.391,207.667,4290.391,211.833L4290.391,216" id="L_TO_T2_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_TO_T2_0" data-points="W3sieCI6NDU4NS4xNzE4NzUsInkiOjE0Ni4yNjAxOTgzODEwMjg0fSx7IngiOjQyOTAuMzkwNjI1LCJ5IjoxOTF9LHsieCI6NDI5MC4zOTA2MjUsInkiOjIxNn1d"/><path d="M4585.172,153.944L4565.402,160.12C4545.633,166.296,4506.094,178.648,4486.324,188.991C4466.555,199.333,4466.555,207.667,4466.555,211.833L4466.555,216" id="L_TO_T3_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_TO_T3_0" data-points="W3sieCI6NDU4NS4xNzE4NzUsInkiOjE1My45NDM5NTk0NDgwNDI4fSx7IngiOjQ0NjYuNTU0Njg3NSwieSI6MTkxfSx7IngiOjQ0NjYuNTU0Njg3NSwieSI6MjE2fV0="/><path d="M4633.008,166L4633.008,170.167C4633.008,174.333,4633.008,182.667,4633.008,191C4633.008,199.333,4633.008,207.667,4633.008,211.833L4633.008,216" id="L_TO_T4_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_TO_T4_0" data-points="W3sieCI6NDYzMy4wMDc4MTI1LCJ5IjoxNjZ9LHsieCI6NDYzMy4wMDc4MTI1LCJ5IjoxOTF9LHsieCI6NDYzMy4wMDc4MTI1LCJ5IjoyMTZ9XQ=="/><path d="M4680.844,154.779L4699.145,160.816C4717.445,166.853,4754.047,178.926,4772.348,189.13C4790.648,199.333,4790.648,207.667,4790.648,211.833L4790.648,216" id="L_TO_T5_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_TO_T5_0" data-points="W3sieCI6NDY4MC44NDM3NSwieSI6MTU0Ljc3OTM2MzY2MzM5NTc3fSx7IngiOjQ3OTAuNjQ4NDM3NSwieSI6MTkxfSx7IngiOjQ3OTAuNjQ4NDM3NSwieSI6MjE2fV0="/><path d="M4680.844,146.742L4726.419,154.118C4771.995,161.495,4863.146,176.247,4908.721,187.79C4954.297,199.333,4954.297,207.667,4954.297,211.833L4954.297,216" id="L_TO_T6_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_TO_T6_0" data-points="W3sieCI6NDY4MC44NDM3NSwieSI6MTQ2Ljc0MjE1MTk3NTY4Mzl9LHsieCI6NDk1NC4yOTY4NzUsInkiOjE5MX0seyJ4Ijo0OTU0LjI5Njg3NSwieSI6MjE2fV0="/><path d="M4680.844,144.074L4754.573,151.895C4828.302,159.716,4975.76,175.358,5049.49,187.346C5123.219,199.333,5123.219,207.667,5123.219,211.833L5123.219,216" id="L_TO_T7_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_TO_T7_0" data-points="W3sieCI6NDY4MC44NDM3NSwieSI6MTQ0LjA3NDI4MjQzNTgxMzY3fSx7IngiOjUxMjMuMjE4NzUsInkiOjE5MX0seyJ4Ijo1MTIzLjIxODc1LCJ5IjoyMTZ9XQ=="/><path d="M5330.862,166L5324.657,170.167C5318.453,174.333,5306.043,182.667,5299.838,191C5293.633,199.333,5293.633,207.667,5293.633,211.833L5293.633,216" id="L_SY_S1_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_SY_S1_0" data-points="W3sieCI6NTMzMC44NjIzNzk4MDc2OTIsInkiOjE2Nn0seyJ4Ijo1MjkzLjYzMjgxMjUsInkiOjE5MX0seyJ4Ijo1MjkzLjYzMjgxMjUsInkiOjIxNn1d"/><path d="M5411.278,166L5417.483,170.167C5423.688,174.333,5436.098,182.667,5442.303,191C5448.508,199.333,5448.508,207.667,5448.508,211.833L5448.508,216" id="L_SY_S2_0" class="edge-thickness-normal edge-pattern-solid edge-thickness-normal edge-pattern-solid flowchart-link" style=";" data-edge="true" data-et="edge" data-id="L_SY_S2_0" data-points="W3sieCI6NTQxMS4yNzgyNDUxOTIzMDgsInkiOjE2Nn0seyJ4Ijo1NDQ4LjUwNzgxMjUsInkiOjE5MX0seyJ4Ijo1NDQ4LjUwNzgxMjUsInkiOjIxNn1d"/></g><g class="edgeLabels"><g class="edgeLabel"><g class="label" data-id="L_HOME_P_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_HOME_AN_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_HOME_PL_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_HOME_TO_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_HOME_SY_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_P_P1_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_P_P2_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_P_P3_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_P_P4_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_P_P5_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_P_P6_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_AN_A1_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_AN_A2_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_AN_A3_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_AN_A4_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_AN_A5_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_AN_A6_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_AN_A7_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_PL_L1_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_PL_L2_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_PL_L3_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_PL_L4_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_PL_L5_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_PL_L6_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_PL_L7_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_PL_L8_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_PL_L9_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_PL_L10_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_TO_T1_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_TO_T2_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_TO_T3_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_TO_T4_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_TO_T5_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_TO_T6_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_TO_T7_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_SY_S1_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g><g class="edgeLabel"><g class="label" data-id="L_SY_S2_0" transform="translate(0, 0)"><foreignObject width="0" height="0"><div xmlns="http://www.w3.org/1999/xhtml" class="labelBkg" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="edgeLabel"></span></div></foreignObject></g></g></g><g class="nodes"><g class="node default" id="flowchart-HOME-0" transform="translate(3194.95703125, 35)"><rect class="basic label-container" style="" x="-84.296875" y="-27" width="168.59375" height="54"/><g class="label" style="" transform="translate(-54.296875, -12)"><rect/><foreignObject width="108.59375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>FinanceTracker</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-P-2" transform="translate(509.125, 139)"><rect class="basic label-container" style="" x="-60.84375" y="-27" width="121.6875" height="54"/><g class="label" style="" transform="translate(-30.84375, -12)"><rect/><foreignObject width="61.6875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Portfolio</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-AN-4" transform="translate(1655.7890625, 139)"><rect class="basic label-container" style="" x="-58.359375" y="-27" width="116.71875" height="54"/><g class="label" style="" transform="translate(-28.359375, -12)"><rect/><foreignObject width="56.71875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Analysis</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-PL-6" transform="translate(3194.95703125, 139)"><rect class="basic label-container" style="" x="-60.4375" y="-27" width="120.875" height="54"/><g class="label" style="" transform="translate(-30.4375, -12)"><rect/><foreignObject width="60.875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Planning</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-TO-8" transform="translate(4633.0078125, 139)"><rect class="basic label-container" style="" x="-47.8359375" y="-27" width="95.671875" height="54"/><g class="label" style="" transform="translate(-17.8359375, -12)"><rect/><foreignObject width="35.671875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Tools</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-SY-10" transform="translate(5371.0703125, 139)"><rect class="basic label-container" style="" x="-55.2109375" y="-27" width="110.421875" height="54"/><g class="label" style="" transform="translate(-25.2109375, -12)"><rect/><foreignObject width="50.421875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>System</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-P1-12" transform="translate(75.2421875, 243)"><rect class="basic label-container" style="" x="-67.2421875" y="-27" width="134.484375" height="54"/><g class="label" style="" transform="translate(-37.2421875, -12)"><rect/><foreignObject width="74.484375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Dashboard</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-P2-14" transform="translate(252.734375, 243)"><rect class="basic label-container" style="" x="-60.25" y="-27" width="120.5" height="54"/><g class="label" style="" transform="translate(-30.25, -12)"><rect/><foreignObject width="60.5" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Holdings</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-P3-16" transform="translate(426.1171875, 243)"><rect class="basic label-container" style="" x="-63.1328125" y="-27" width="126.265625" height="54"/><g class="label" style="" transform="translate(-33.1328125, -12)"><rect/><foreignObject width="66.265625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Watchlist</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-P4-18" transform="translate(592.1328125, 243)"><rect class="basic label-container" style="" x="-52.8828125" y="-27" width="105.765625" height="54"/><g class="label" style="" transform="translate(-22.8828125, -12)"><rect/><foreignObject width="45.765625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Charts</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-P5-20" transform="translate(788.8046875, 243)"><rect class="basic label-container" style="" x="-93.7890625" y="-27" width="187.578125" height="54"/><g class="label" style="" transform="translate(-63.7890625, -12)"><rect/><foreignObject width="127.578125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Corporate Actions</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-P6-22" transform="translate(986.4921875, 243)"><rect class="basic label-container" style="" x="-53.8984375" y="-27" width="107.796875" height="54"/><g class="label" style="" transform="translate(-23.8984375, -12)"><rect/><foreignObject width="47.796875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Import</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-A1-24" transform="translate(1152.640625, 243)"><rect class="basic label-container" style="" x="-62.25" y="-27" width="124.5" height="54"/><g class="label" style="" transform="translate(-32.25, -12)"><rect/><foreignObject width="64.5" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Analytics</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-A2-26" transform="translate(1326.7421875, 243)"><rect class="basic label-container" style="" x="-61.8515625" y="-27" width="123.703125" height="54"/><g class="label" style="" transform="translate(-31.8515625, -12)"><rect/><foreignObject width="63.703125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Compare</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-A3-28" transform="translate(1500.0859375, 243)"><rect class="basic label-container" style="" x="-61.4921875" y="-27" width="122.984375" height="54"/><g class="label" style="" transform="translate(-31.4921875, -12)"><rect/><foreignObject width="62.984375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Screener</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-A4-30" transform="translate(1655.7890625, 243)"><rect class="basic label-container" style="" x="-44.2109375" y="-27" width="88.421875" height="54"/><g class="label" style="" transform="translate(-14.2109375, -12)"><rect/><foreignObject width="28.421875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Risk</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-A5-32" transform="translate(1821.3046875, 243)"><rect class="basic label-container" style="" x="-71.3046875" y="-27" width="142.609375" height="54"/><g class="label" style="" transform="translate(-41.3046875, -12)"><rect/><foreignObject width="82.609375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Market Map</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-A6-34" transform="translate(2002.484375, 243)"><rect class="basic label-container" style="" x="-59.875" y="-27" width="119.75" height="54"/><g class="label" style="" transform="translate(-29.875, -12)"><rect/><foreignObject width="59.75" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Earnings</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-A7-36" transform="translate(2210.7109375, 243)"><rect class="basic label-container" style="" x="-98.3515625" y="-27" width="196.703125" height="54"/><g class="label" style="" transform="translate(-68.3515625, -12)"><rect/><foreignObject width="136.703125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Economic Calendar</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-L1-38" transform="translate(2408.5703125, 243)"><rect class="basic label-container" style="" x="-49.5078125" y="-27" width="99.015625" height="54"/><g class="label" style="" transform="translate(-19.5078125, -12)"><rect/><foreignObject width="39.015625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Goals</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-L2-40" transform="translate(2549.9375, 243)"><rect class="basic label-container" style="" x="-41.859375" y="-27" width="83.71875" height="54"/><g class="label" style="" transform="translate(-11.859375, -12)"><rect/><foreignObject width="23.71875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Tax</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-L3-42" transform="translate(2706.0703125, 243)"><rect class="basic label-container" style="" x="-64.2734375" y="-27" width="128.546875" height="54"/><g class="label" style="" transform="translate(-34.2734375, -12)"><rect/><foreignObject width="68.546875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Dividends</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-L4-44" transform="translate(2897.546875, 243)"><rect class="basic label-container" style="" x="-77.203125" y="-27" width="154.40625" height="54"/><g class="label" style="" transform="translate(-47.203125, -12)"><rect/><foreignObject width="94.40625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Mutual Funds</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-L5-46" transform="translate(3099.40625, 243)"><rect class="basic label-container" style="" x="-74.65625" y="-27" width="149.3125" height="54"/><g class="label" style="" transform="translate(-44.65625, -12)"><rect/><foreignObject width="89.3125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>SIP Calendar</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-L6-48" transform="translate(3290.5078125, 243)"><rect class="basic label-container" style="" x="-66.4453125" y="-27" width="132.890625" height="54"/><g class="label" style="" transform="translate(-36.4453125, -12)"><rect/><foreignObject width="72.890625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Net Worth</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-L7-50" transform="translate(3450.5, 243)"><rect class="basic label-container" style="" x="-43.546875" y="-27" width="87.09375" height="54"/><g class="label" style="" transform="translate(-13.546875, -12)"><rect/><foreignObject width="27.09375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>ESG</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-L8-52" transform="translate(3600.203125, 243)"><rect class="basic label-container" style="" x="-56.15625" y="-27" width="112.3125" height="54"/><g class="label" style="" transform="translate(-26.15625, -12)"><rect/><foreignObject width="52.3125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>What If</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-L9-54" transform="translate(3751.6015625, 243)"><rect class="basic label-container" style="" x="-45.2421875" y="-27" width="90.484375" height="54"/><g class="label" style="" transform="translate(-15.2421875, -12)"><rect/><foreignObject width="30.484375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>F&amp;O</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-L10-56" transform="translate(3917.734375, 243)"><rect class="basic label-container" style="" x="-70.890625" y="-27" width="141.78125" height="54"/><g class="label" style="" transform="translate(-40.890625, -12)"><rect/><foreignObject width="81.78125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>IPO Tracker</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-T1-58" transform="translate(4109.171875, 243)"><rect class="basic label-container" style="" x="-70.546875" y="-27" width="141.09375" height="54"/><g class="label" style="" transform="translate(-40.546875, -12)"><rect/><foreignObject width="81.09375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>AI Assistant</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-T2-60" transform="translate(4290.390625, 243)"><rect class="basic label-container" style="" x="-60.671875" y="-27" width="121.34375" height="54"/><g class="label" style="" transform="translate(-30.671875, -12)"><rect/><foreignObject width="61.34375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Backtest</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-T3-62" transform="translate(4466.5546875, 243)"><rect class="basic label-container" style="" x="-65.4921875" y="-27" width="130.984375" height="54"/><g class="label" style="" transform="translate(-35.4921875, -12)"><rect/><foreignObject width="70.984375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Optimizer</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-T4-64" transform="translate(4633.0078125, 243)"><rect class="basic label-container" style="" x="-50.9609375" y="-27" width="101.921875" height="54"/><g class="label" style="" transform="translate(-20.9609375, -12)"><rect/><foreignObject width="41.921875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Alerts</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-T5-66" transform="translate(4790.6484375, 243)"><rect class="basic label-container" style="" x="-56.6796875" y="-27" width="113.359375" height="54"/><g class="label" style="" transform="translate(-26.6796875, -12)"><rect/><foreignObject width="53.359375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Brokers</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-T6-68" transform="translate(4954.296875, 243)"><rect class="basic label-container" style="" x="-56.96875" y="-27" width="113.9375" height="54"/><g class="label" style="" transform="translate(-26.96875, -12)"><rect/><foreignObject width="53.9375" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Reports</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-T7-70" transform="translate(5123.21875, 243)"><rect class="basic label-container" style="" x="-61.953125" y="-27" width="123.90625" height="54"/><g class="label" style="" transform="translate(-31.953125, -12)"><rect/><foreignObject width="63.90625" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Snapshot</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-S1-72" transform="translate(5293.6328125, 243)"><rect class="basic label-container" style="" x="-58.4609375" y="-27" width="116.921875" height="54"/><g class="label" style="" transform="translate(-28.4609375, -12)"><rect/><foreignObject width="56.921875" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Settings</p></span></div></foreignObject></g></g><g class="node default" id="flowchart-S2-74" transform="translate(5448.5078125, 243)"><rect class="basic label-container" style="" x="-46.4140625" y="-27" width="92.828125" height="54"/><g class="label" style="" transform="translate(-16.4140625, -12)"><rect/><foreignObject width="32.828125" height="24"><div xmlns="http://www.w3.org/1999/xhtml" style="display: table-cell; white-space: nowrap; line-height: 1.5; max-width: 200px; text-align: center;"><span class="nodeLabel"><p>Help</p></span></div></foreignObject></g></g></g></g></g></svg></div>
+          <p class="diagram-cap">App map — how the sidebar is organised</p>
+        </div>
+
+        <h3>Keyboard shortcuts</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
+            <tbody>
+              <tr><td><kbd>Cmd/Ctrl</kbd> + <kbd>K</kbd></td><td>Open the command palette</td></tr>
+              <tr><td><kbd>Cmd/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd></td><td>Go to Dashboard</td></tr>
+              <tr><td><kbd>Cmd/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>H</kbd></td><td>Go to Holdings</td></tr>
+              <tr><td><kbd>Cmd/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>W</kbd></td><td>Go to Watchlist</td></tr>
+              <tr><td><kbd>Cmd/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>A</kbd></td><td>Go to Alerts</td></tr>
+              <tr><td><kbd>Cmd/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>I</kbd></td><td>Go to Import</td></tr>
+              <tr><td><kbd>?</kbd></td><td>Open the help dialog</td></tr>
+              <tr><td><kbd>Escape</kbd></td><td>Close any open panel or modal</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>A few tips to get the most out of the app</h3>
+        <ul>
+          <li><strong>Set range levels on your core holdings first.</strong> The colour-coded action system only shines once you've told each stock what your zones are.</li>
+          <li><strong>Record every sell.</strong> Your tax estimates, XIRR, and P&amp;L all depend on complete transaction history.</li>
+          <li><strong>Use Target % + drift alerts</strong> to stay balanced without checking daily.</li>
+          <li><strong>Take a JSON backup</strong> before big changes or a desktop upgrade.</li>
+          <li><strong>Keep markets separate</strong> in their own portfolios; lean on the display-currency dropdown for a combined view.</li>
+          <li><strong>Explore the AI Insights tabs</strong> (Prediction / Anomalies / Sentiment) for a quick second opinion — just remember they're estimates.</li>
+        </ul>
+
+        <footer class="doc-foot">
+          <p>FinanceTracker is a personal tool to help you track and understand your investments. Nothing in the app or this manual is financial, investment, or tax advice. Always do your own research and consult a qualified professional before making decisions.</p>
+        </footer>
+        <p class="backtop"><a href="#top">↑ Back to top</a></p>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script>
+(function () {
+  var root = document.getElementById('ftRoot');
+  var htmlEl = document.documentElement;
+
+  /* ----- Theme toggle ----- */
+  var toggle = document.getElementById('themeToggle');
+  var icon = document.getElementById('themeIcon');
+  function currentTheme() {
+    var t = htmlEl.getAttribute('data-theme');
+    if (t) return t;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  function setIcon() { icon.textContent = currentTheme() === 'dark' ? '☀' : '☾'; }
+  setIcon();
+  toggle.addEventListener('click', function () {
+    var next = currentTheme() === 'dark' ? 'light' : 'dark';
+    htmlEl.setAttribute('data-theme', next);
+    setIcon();
+  });
+  try {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
+      if (!htmlEl.getAttribute('data-theme')) setIcon();
+    });
+  } catch (e) {}
+
+  /* ----- Mobile drawer ----- */
+  var burger = document.getElementById('hamburger');
+  var backdrop = document.getElementById('backdrop');
+  var sidebar = document.getElementById('sidebar');
+  function openNav() { root.classList.add('nav-open'); burger.setAttribute('aria-expanded', 'true'); }
+  function closeNav() { root.classList.remove('nav-open'); burger.setAttribute('aria-expanded', 'false'); }
+  burger.addEventListener('click', function () {
+    root.classList.contains('nav-open') ? closeNav() : openNav();
+  });
+  backdrop.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeNav();
+  });
+  sidebar.addEventListener('click', function (e) {
+    if (e.target.closest('a')) closeNav();
+  });
+
+  /* ----- Scroll-spy ----- */
+  var links = Array.prototype.slice.call(document.querySelectorAll('#toc a'));
+  var map = {};
+  links.forEach(function (a) {
+    var id = a.getAttribute('href').slice(1);
+    map[id] = a;
+  });
+  var sections = Array.prototype.slice.call(document.querySelectorAll('main section[id]'));
+  var visible = {};
+  function setActive(id) {
+    links.forEach(function (a) { a.classList.remove('active'); });
+    if (map[id]) {
+      map[id].classList.add('active');
+      map[id].setAttribute('aria-current', 'true');
+    }
+  }
+  if ('IntersectionObserver' in window) {
+    var obs = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        visible[en.target.id] = en.isIntersecting ? en.intersectionRatio : 0;
+      });
+      var best = null, bestR = 0;
+      Object.keys(visible).forEach(function (id) {
+        if (visible[id] > bestR) { bestR = visible[id]; best = id; }
+      });
+      if (best) setActive(best);
+    }, { rootMargin: '-20% 0px -65% 0px', threshold: [0, 0.25, 0.5, 1] });
+    sections.forEach(function (s) { obs.observe(s); });
+  }
+  if (sections.length) setActive(sections[0].id);
+})();
+</script>
+</body>
+</html>
