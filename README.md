@@ -272,6 +272,8 @@ financeTracking/
 
 | Document | Description |
 |---|---|
+| [**User Manual**](docs/user-manual.md) | Complete step-by-step guide for investors — also as an offline [HTML page](docs/user-manual.html) |
+| [Developer Guide](docs/developer-guide.md) | Setup, project structure, conventions, add-a-feature walkthrough, testing |
 | [Architecture](docs/architecture.md) | System design, diagrams, data flow |
 | [API Reference](docs/api-reference.md) | REST endpoints & WebSocket channels |
 | [Database Schema](docs/database-schema.md) | Tables, relationships, ERD |
@@ -279,7 +281,7 @@ financeTracking/
 | [Broker Integration](docs/broker-integration.md) | How to connect each broker |
 | [ML/AI Models](docs/ml-models.md) | ML features, models, training |
 | [Deployment](docs/deployment.md) | How to deploy to production |
-| [User Guide](docs/user-guide.md) | End-user manual (non-technical) |
+| [User Guide](docs/user-guide.md) | Feature reference organised by page (companion to the User Manual) |
 | [Security](docs/security.md) | Security architecture & compliance |
 | [Tax Guide](docs/tax-guide.md) | Indian & German tax handling |
 | [FAQ](docs/faq.md) | Frequently Asked Questions |
