@@ -12,10 +12,10 @@ test.describe("Navigation", () => {
   });
 
   test("should show help page content", async ({ page }) => {
-    // Help might be accessible without auth depending on routing
+    // /help lives inside the auth-gated dashboard shell, so unauthenticated
+    // visitors are redirected to the login page.
     await page.goto("/help");
-    // Either redirects to login or shows help content
-    const url = page.url();
-    expect(url).toMatch(/\/(help|login)/);
+    await page.waitForURL(/\/login/);
+    await expect(page.getByRole("heading", { name: "FinanceTracker" })).toBeVisible();
   });
 });

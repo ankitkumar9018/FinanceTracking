@@ -1,105 +1,168 @@
 import { test, expect, Page } from "@playwright/test";
 
-// Helper: register + login and return authenticated page
-async function loginAsTestUser(page: Page) {
-  const email = `e2e-${Date.now()}@test.dev`;
-  const password = "TestPass123!";
+// These tests exercise real auth against a rate-limited backend
+// (5 registrations/min, 10 logins/min per IP). To stay well under those
+// limits this file:
+//   - runs its tests in order in a single worker per project, and
+//   - registers ONE user per worker through the real UI, caching the issued
+//     tokens so follow-up tests restore the session without extra API calls.
+test.describe.configure({ mode: "default" });
 
-  // Register
+const PASSWORD = "TestPass123!";
+
+interface CachedSession {
+  email: string;
+  access: string;
+  refresh: string;
+}
+
+let session: CachedSession | null = null;
+
+// The onboarding wizard overlay opens for first-time users and would block
+// clicks — mark it completed before the app boots.
+async function suppressOnboarding(page: Page) {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("ft-onboarding-complete", "true");
+  });
+}
+
+// Register a fresh user through the real UI. On success the app auto-logs-in
+// and redirects to /holdings (the app's post-auth home).
+async function registerViaUi(page: Page): Promise<CachedSession> {
+  // Unique email per run/worker so re-runs against the same DB never collide
+  const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}@test.dev`;
+
   await page.goto("/register");
-  await page.getByPlaceholder(/email/i).fill(email);
-  await page.getByPlaceholder(/password/i).first().fill(password);
-  // Some forms have a "confirm password" field
-  const confirmField = page.getByPlaceholder(/confirm/i);
-  if (await confirmField.isVisible({ timeout: 500 }).catch(() => false)) {
-    await confirmField.fill(password);
-  }
-  // Fill display name if present
-  const nameField = page.getByPlaceholder(/name|display/i);
-  if (await nameField.isVisible({ timeout: 500 }).catch(() => false)) {
-    await nameField.fill("E2E Test User");
-  }
-  await page.getByRole("button", { name: /sign up|register|create/i }).click();
+  await page.getByLabel("Display Name").fill("E2E Test User");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Create account" }).click();
 
-  // Wait for redirect to login or dashboard
-  await page.waitForURL(/\/(login|dashboard|$)/, { timeout: 10000 });
+  await page.waitForURL(/\/holdings/, { timeout: 20000 });
 
-  // If redirected to login, log in
-  if (page.url().includes("/login")) {
-    await page.getByPlaceholder(/email/i).fill(email);
-    await page.getByPlaceholder(/password/i).fill(password);
-    await page.getByRole("button", { name: /sign in|login|submit/i }).click();
-    await page.waitForURL(/\/(dashboard|$)/, { timeout: 10000 });
+  const [access, refresh] = await page.evaluate(() => [
+    localStorage.getItem("ft-access-token"),
+    localStorage.getItem("ft-refresh-token"),
+  ]);
+  if (!access || !refresh) {
+    throw new Error("Registration did not store auth tokens");
   }
+  return { email, access, refresh };
+}
+
+// Ensure the page is authenticated: the first caller registers through the UI;
+// later tests restore the cached tokens (avoiding the login rate limit) and
+// land on /holdings.
+async function loginAsTestUser(page: Page) {
+  await suppressOnboarding(page);
+
+  if (!session) {
+    session = await registerViaUi(page);
+    return;
+  }
+
+  await page.addInitScript(
+    ([access, refresh]) => {
+      window.localStorage.setItem("ft-access-token", access);
+      window.localStorage.setItem("ft-refresh-token", refresh);
+    },
+    [session.access, session.refresh]
+  );
+  await page.goto("/holdings");
+  await expect(
+    page.getByRole("heading", { name: "Holdings", exact: true }).first()
+  ).toBeVisible({ timeout: 20000 });
 }
 
 test.describe("Functional Tests — Authenticated Flows", () => {
   test("register → login → see dashboard", async ({ page }) => {
     await loginAsTestUser(page);
-    // Should be on dashboard — verify key UI elements
-    await expect(page.locator("body")).not.toHaveText(/404|not found/i);
-    // Dashboard should have some structure (sidebar, main content)
-    const body = await page.textContent("body");
-    expect(body).toBeTruthy();
+    // Registration auto-logs-in and lands on the holdings page
+    expect(page.url()).toContain("/holdings");
+    await expect(page.locator("body")).not.toContainText(/404|not found/i);
+    await expect(
+      page.getByRole("heading", { name: "Holdings", exact: true }).first()
+    ).toBeVisible();
   });
 
   test("dashboard shows portfolio content or empty state", async ({ page }) => {
     await loginAsTestUser(page);
-    // Either a holdings table, portfolio cards, or an empty state message
-    const hasContent = await page
-      .locator("table, [class*='card'], [class*='empty']")
-      .first()
-      .isVisible({ timeout: 5000 })
-      .catch(() => false);
-    // At minimum, the page should render without errors
-    expect(await page.title()).toBeTruthy();
+    // "/" is the portfolio overview (dashboard) page
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: "Portfolio Overview" })).toBeVisible({
+      timeout: 20000,
+    });
+    // A brand-new account shows the empty state; accounts with data render the table
+    await expect(
+      page.getByText("No holdings yet").or(page.locator("table")).first()
+    ).toBeVisible({ timeout: 15000 });
   });
 
-  test("sidebar navigation works", async ({ page }) => {
+  test("sidebar navigation works", async ({ page, isMobile }) => {
     await loginAsTestUser(page);
+    await page.goto("/");
 
-    // Navigate to a few pages via sidebar links
+    // Navigate to a few pages via the sidebar (desktop) or the drawer (mobile)
     const navItems = [
-      { text: /holdings/i, url: "/holdings" },
-      { text: /watchlist/i, url: "/watchlist" },
-      { text: /alerts/i, url: "/alerts" },
-      { text: /settings/i, url: "/settings" },
+      { text: "Holdings", url: "/holdings" },
+      { text: "Watchlist", url: "/watchlist" },
+      { text: "Alerts", url: "/alerts" },
+      { text: "Settings", url: "/settings" },
     ];
 
+    const drawer = page.getByRole("dialog", { name: "Navigation menu" });
+
     for (const item of navItems) {
-      const link = page.getByRole("link", { name: item.text }).first();
-      if (await link.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await link.click();
-        await page.waitForURL(new RegExp(item.url), { timeout: 5000 });
-        expect(page.url()).toContain(item.url);
+      if (isMobile) {
+        // Mobile viewport: the sidebar is hidden — open the drawer first
+        await page.getByRole("button", { name: "Open navigation menu" }).click();
+        await expect(drawer).toBeVisible();
+        await drawer.getByRole("link", { name: item.text, exact: true }).click();
+        await page.waitForURL(new RegExp(item.url), { timeout: 15000 });
+        // The drawer closes on route change — wait for its exit animation to
+        // finish so the next iteration never clicks into a detaching element
+        await expect(drawer).toBeHidden();
+      } else {
+        await page
+          .getByRole("link", { name: item.text, exact: true })
+          .first()
+          .click();
+        await page.waitForURL(new RegExp(item.url), { timeout: 15000 });
       }
+      expect(page.url()).toContain(item.url);
     }
   });
 
   test("help page renders topic content", async ({ page }) => {
+    // /help requires auth (it lives in the dashboard shell)
+    await loginAsTestUser(page);
     await page.goto("/help");
-    // Help page should have headings and topic sections
-    const headings = page.locator("h1, h2, h3");
-    expect(await headings.count()).toBeGreaterThan(0);
-    // Should have FAQ or topic links
-    const body = await page.textContent("body");
-    expect(body?.length).toBeGreaterThan(100);
+    await expect(page.getByRole("heading", { name: "Help Center" })).toBeVisible({
+      timeout: 20000,
+    });
+    await expect(
+      page.getByRole("heading", { name: /frequently asked questions/i })
+    ).toBeVisible();
   });
 
   test("login page rejects invalid credentials", async ({ page }) => {
     await page.goto("/login");
-    await page.getByPlaceholder(/email/i).fill("nonexistent@test.dev");
-    await page.getByPlaceholder(/password/i).fill("wrongpassword");
-    await page.getByRole("button", { name: /sign in|login|submit/i }).click();
+    await page.getByLabel("Email").fill("nonexistent@test.dev");
+    await page.getByLabel("Password").fill("wrongpassword");
+    await page.getByRole("button", { name: "Sign in" }).click();
 
-    // Should stay on login page (not redirect to dashboard)
-    await page.waitForTimeout(2000);
+    // The button reads "Signing in..." while pending; once the API rejects the
+    // credentials it returns to "Sign in" and we must still be on /login.
+    await expect(page.getByRole("button", { name: "Sign in" })).toBeEnabled({
+      timeout: 10000,
+    });
     expect(page.url()).toContain("/login");
   });
 });
 
 test.describe("Functional Tests — Page Content Verification", () => {
-  const publicPages = ["/login", "/register", "/help"];
+  // /help is auth-gated, so the truly public pages are the auth screens
+  const publicPages = ["/login", "/register", "/forgot-password"];
 
   for (const path of publicPages) {
     test(`${path} has meaningful content`, async ({ page }) => {

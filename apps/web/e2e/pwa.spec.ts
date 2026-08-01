@@ -6,7 +6,8 @@ test.describe("PWA", () => {
     expect(response?.status()).toBe(200);
     const json = await response?.json();
     expect(json?.name).toBe("FinanceTracker");
-    expect(json?.start_url).toBe("/dashboard");
+    // The app's post-auth home is the holdings page
+    expect(json?.start_url).toBe("/holdings");
   });
 
   test("should serve service worker", async ({ page }) => {

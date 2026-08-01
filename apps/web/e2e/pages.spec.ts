@@ -58,9 +58,10 @@ test.describe("Page Content — Basic Assertions", () => {
   });
 
   test("help page has content", async ({ page }) => {
+    // /help is auth-gated: unauthenticated visitors get redirected to /login,
+    // which renders the brand heading. Either way a heading must appear.
     await page.goto("/help");
-    // Help page should have searchable content and topic sections
-    await expect(page.locator("h1, h2").first()).toBeVisible();
+    await expect(page.locator("h1, h2").first()).toBeVisible({ timeout: 15000 });
   });
 
   test("no JavaScript errors on public pages", async ({ page }) => {
