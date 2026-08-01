@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { api } from "@/lib/api-client";
 import { X, Check, Loader2 } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import toast from "react-hot-toast";
 
 type BulkField =

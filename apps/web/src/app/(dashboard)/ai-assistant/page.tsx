@@ -7,11 +7,9 @@ import {
   Plus,
   MessageSquare,
   Loader2,
-  Wifi,
   WifiOff,
   ChevronLeft,
   ChevronRight,
-  Trash2,
   Sparkles,
   X,
 } from "lucide-react";

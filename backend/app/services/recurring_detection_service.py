@@ -4,7 +4,9 @@ Analyses transaction history per holding and detects Systematic Investment Plan
 (SIP) patterns by looking for:
 - Same stock (same holding_id)
 - Similar amounts (within 10% tolerance)
-- Regular intervals (monthly +/- 5 days)
+- Regular intervals clustered around the median gap, so weekly (~7d),
+  bi-weekly (~14d), monthly (~30d) and quarterly (~91d) cadences are all
+  recognised (not just monthly).
 
 Results include the detected frequency, average amount, and the projected next
 expected transaction date.
@@ -27,8 +29,8 @@ logger = logging.getLogger(__name__)
 
 # Detection parameters
 _AMOUNT_TOLERANCE_PCT: float = 0.10  # 10 %
-_MONTHLY_INTERVAL_DAYS: int = 30
-_INTERVAL_TOLERANCE_DAYS: int = 5
+_INTERVAL_TOLERANCE_DAYS: int = 5  # absolute floor for the interval tolerance
+_INTERVAL_REL_TOLERANCE: float = 0.25  # 25 % of the median gap
 _MIN_OCCURRENCES: int = 3  # need at least 3 transactions to call it recurring
 
 
@@ -47,7 +49,13 @@ def _amounts_similar(amounts: list[float]) -> bool:
 
 
 def _intervals_regular(dates: list[date]) -> tuple[bool, float]:
-    """Check if the intervals between sorted dates are roughly monthly.
+    """Check whether the gaps between sorted dates follow one regular cadence.
+
+    The dominant cadence is taken from the MEDIAN gap (robust to a single
+    outlier), and the series is "regular" when every gap lies within a relative
+    tolerance of that median — 25 %, but never tighter than 5 days. This lets
+    weekly (~7d), bi-weekly (~14d), monthly (~30d) and quarterly (~91d) SIPs all
+    qualify, whereas the old fixed 30±5-day rule only ever matched monthly.
 
     Returns ``(is_regular, avg_interval_days)``.
     """
@@ -58,15 +66,14 @@ def _intervals_regular(dates: list[date]) -> tuple[bool, float]:
         (dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)
     ]
 
-    avg_interval = mean(intervals)
+    med = median(intervals)
+    if med <= 0:
+        return False, 0.0
 
-    # All intervals should be close to a monthly cadence (30 +/- 5 days)
-    regular = all(
-        abs(iv - _MONTHLY_INTERVAL_DAYS) <= _INTERVAL_TOLERANCE_DAYS
-        for iv in intervals
-    )
+    tolerance = max(float(_INTERVAL_TOLERANCE_DAYS), med * _INTERVAL_REL_TOLERANCE)
+    regular = all(abs(iv - med) <= tolerance for iv in intervals)
 
-    return regular, round(avg_interval, 1)
+    return regular, round(mean(intervals), 1)
 
 
 def _classify_frequency(avg_interval: float) -> str:

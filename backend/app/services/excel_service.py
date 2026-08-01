@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 from datetime import date, datetime
+from typing import Any
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -86,8 +87,11 @@ def parse_excel(file_bytes: bytes) -> list[dict]:
         exchange = row_dict.get("exchange")
         tx_type = row_dict.get("transaction_type")
         tx_date = row_dict.get("date")
-        qty = row_dict.get("quantity")
-        price = row_dict.get("price")
+        # Raw spreadsheet cell values (numeric, str, or None). Typed as Any so the
+        # float() coercion below reads cleanly; the None/non-numeric cases are
+        # filtered by the _missing() guard and caught by the try/except.
+        qty: Any = row_dict.get("quantity")
+        price: Any = row_dict.get("price")
 
         # A field is "missing" only when it is None or a blank string. Do NOT
         # treat a legitimate numeric 0 (e.g. a bonus/IPO allotment at price 0)

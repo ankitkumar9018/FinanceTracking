@@ -14,11 +14,16 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
+from app.schemas.dividend import DividendCreate
+from app.schemas.forex import ConversionRequest
+from app.schemas.mutual_fund import MutualFundCreate, MutualFundUpdate
+from app.schemas.tax import TaxRecordCreate, TaxSummary
+from app.services.forex_service import _infer_currency_from_exchange
 from app.services.tax_service import (
+    GERMANY_CHURCH_RATE,
     GERMANY_DEFAULT_FREIBETRAG,
     GERMANY_KAP_RATE,
     GERMANY_SOLI_RATE,
-    GERMANY_CHURCH_RATE,
     INDIA_LTCG_EXEMPTION,
     INDIA_LTCG_RATE,
     INDIA_STCG_RATE,
@@ -27,12 +32,6 @@ from app.services.tax_service import (
     classify_gain_type,
     get_financial_year,
 )
-from app.services.forex_service import _infer_currency_from_exchange
-from app.schemas.dividend import DividendCreate, DividendResponse
-from app.schemas.mutual_fund import MutualFundCreate, MutualFundUpdate, MutualFundResponse
-from app.schemas.tax import TaxRecordCreate, TaxSummary
-from app.schemas.forex import ConversionRequest
-
 
 # ============================================================================
 # Tax Service — Financial Year
@@ -294,40 +293,54 @@ class TestCalculateGermanTax:
         assert result["freibetrag_used"] == 1000.0
 
     def test_calculate_german_tax_with_church_tax(self):
-        """Church tax adds 8% of the base KAP tax."""
+        """Church tax is deductible (Sonderausgabenabzug): KapESt is charged on the
+        REDUCED base gain*0.25/(1 + 0.25*KiSt), then Soli + church on that."""
         gain = 5_000.0
         result = calculate_german_tax(gain, freibetrag_remaining=0.0, church_tax=True)
 
-        expected_kap = round(gain * GERMANY_KAP_RATE, 2)  # 1250.0
-        expected_soli = round(expected_kap * GERMANY_SOLI_RATE, 2)  # 68.75
-        expected_kirchen = round(expected_kap * GERMANY_CHURCH_RATE, 2)  # 100.0
-        expected_total = round(expected_kap + expected_soli + expected_kirchen, 2)  # 1418.75
+        # Reduced KapESt: 1250 / 1.02 = 1225.49 (below the naive 1250)
+        expected_kap = round(
+            gain * GERMANY_KAP_RATE / (1 + GERMANY_KAP_RATE * GERMANY_CHURCH_RATE), 2
+        )
+        expected_soli = round(expected_kap * GERMANY_SOLI_RATE, 2)
+        expected_kirchen = round(expected_kap * GERMANY_CHURCH_RATE, 2)
+        expected_total = round(expected_kap + expected_soli + expected_kirchen, 2)
 
-        assert result["breakdown"]["kapitalertragsteuer"] == expected_kap
-        assert result["breakdown"]["solidaritaetszuschlag"] == expected_soli
-        assert result["breakdown"]["kirchensteuer"] == expected_kirchen
-        assert result["tax_amount"] == expected_total
+        assert expected_kap < gain * GERMANY_KAP_RATE  # deductibility lowers it
+        bd = result["breakdown"]
+        assert bd["kapitalertragsteuer"] == pytest.approx(expected_kap, abs=0.01)
+        assert bd["solidaritaetszuschlag"] == pytest.approx(expected_soli, abs=0.01)
+        assert bd["kirchensteuer"] == pytest.approx(expected_kirchen, abs=0.01)
+        assert result["tax_amount"] == pytest.approx(expected_total, abs=0.01)
 
     def test_calculate_german_tax_church_tax_effective_rate(self):
-        """Effective rate with church tax is 25% * (1 + 5.5% + 8%)."""
+        """Effective rate with church tax = (0.25/(1+0.25*KiSt)) * (1 + Soli + KiSt),
+        which is BELOW the naive 25%*(1+5.5%+8%) because church tax is deductible."""
         result = calculate_german_tax(10_000.0, freibetrag_remaining=0.0, church_tax=True)
-        expected_rate = round(GERMANY_KAP_RATE * (1 + GERMANY_SOLI_RATE + GERMANY_CHURCH_RATE), 5)
-        assert result["rate_applied"] == expected_rate
+        reduced_kap = GERMANY_KAP_RATE / (1 + GERMANY_KAP_RATE * GERMANY_CHURCH_RATE)
+        expected_rate = round(
+            reduced_kap * (1 + GERMANY_SOLI_RATE + GERMANY_CHURCH_RATE), 5
+        )
+        naive_rate = GERMANY_KAP_RATE * (1 + GERMANY_SOLI_RATE + GERMANY_CHURCH_RATE)
+        assert result["rate_applied"] == pytest.approx(expected_rate, abs=1e-5)
+        assert result["rate_applied"] < naive_rate
 
     def test_calculate_german_tax_with_freibetrag_and_church(self):
-        """Freibetrag is applied first, then church tax on the remainder."""
+        """Freibetrag is applied first, then the reduced-rate church tax on the rest."""
         gain = 3_000.0
         result = calculate_german_tax(gain, freibetrag_remaining=1000.0, church_tax=True)
 
         taxable = gain - 1000.0  # 2000
-        expected_kap = round(taxable * GERMANY_KAP_RATE, 2)  # 500.0
-        expected_soli = round(expected_kap * GERMANY_SOLI_RATE, 2)  # 27.5
-        expected_kirchen = round(expected_kap * GERMANY_CHURCH_RATE, 2)  # 40.0
+        expected_kap = round(
+            taxable * GERMANY_KAP_RATE / (1 + GERMANY_KAP_RATE * GERMANY_CHURCH_RATE), 2
+        )
+        expected_soli = round(expected_kap * GERMANY_SOLI_RATE, 2)
+        expected_kirchen = round(expected_kap * GERMANY_CHURCH_RATE, 2)
         expected_total = round(expected_kap + expected_soli + expected_kirchen, 2)
 
         assert result["freibetrag_used"] == 1000.0
-        assert result["tax_amount"] == expected_total
-        assert result["breakdown"]["kirchensteuer"] == expected_kirchen
+        assert result["tax_amount"] == pytest.approx(expected_total, abs=0.01)
+        assert result["breakdown"]["kirchensteuer"] == pytest.approx(expected_kirchen, abs=0.01)
 
     def test_calculate_german_tax_zero_gain(self):
         """Zero gain returns zero tax with empty breakdown."""
@@ -419,7 +432,6 @@ class TestSameCurrencyRate:
                 return 1.0
         We verify this branch by testing the condition itself.
         """
-        from app.services.forex_service import EXCHANGE_CURRENCY_MAP
 
         # Verify the early-return condition that the service uses
         for currency in ("INR", "EUR", "USD"):

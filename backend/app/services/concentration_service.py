@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -272,7 +273,7 @@ async def analyze_concentration(
             if threshold is not None:
                 row["flagged"] = wpct > threshold
             rows.append(row)
-        rows.sort(key=lambda x: x["weight_pct"], reverse=True)
+        rows.sort(key=lambda x: cast(float, x["weight_pct"]), reverse=True)
         return rows
 
     by_sector = _breakdown("sector", sector_values, sector_threshold)

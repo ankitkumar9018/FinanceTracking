@@ -1,4 +1,4 @@
-import { getApiBaseAsync, getApiBaseSync } from "./tauri-port";
+import { getApiBaseAsync } from "./tauri-port";
 
 class ApiError extends Error {
   constructor(public status: number, message: string) {

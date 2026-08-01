@@ -184,32 +184,66 @@ def _generate_efficient_frontier(
     n: int,
     num_points: int = 15,
 ) -> list[dict]:
-    """Generate efficient frontier points via random portfolios."""
-    rng = np.random.default_rng(42)
-    points: list[dict] = []
+    """Approximate the efficient frontier as the UPPER HULL of sampled portfolios.
 
-    for _ in range(max(num_points * 500, 5000)):
+    Sample many random long-only portfolios, bucket them by volatility, and keep
+    the maximum-return portfolio within each volatility bucket. A final left-to-
+    right sweep drops any bucket winner that is dominated by a lower-volatility
+    point, so the returned envelope is monotonically non-decreasing in return as
+    volatility rises. Each returned point is therefore non-dominated: no other
+    returned point has both a higher return AND a lower volatility.
+
+    Deterministic (fixed RNG seed) so the same inputs always yield the same
+    frontier, and dependency-free (numpy only — no scipy required).
+    """
+    rng = np.random.default_rng(42)
+    num_samples = max(num_points * 500, 5000)
+
+    rets = np.empty(num_samples)
+    vols = np.empty(num_samples)
+    sharpes = np.empty(num_samples)
+    for i in range(num_samples):
         w = rng.random(n)
         w = w / w.sum()
+        rets[i] = _portfolio_return(mean_daily, w)
+        vols[i] = _annualized_volatility(cov_daily, w)
+        sharpes[i] = _portfolio_sharpe(mean_daily, cov_daily, w)
 
-        ret = _portfolio_return(mean_daily, w)
-        vol = _annualized_volatility(cov_daily, w)
-        sharpe = _portfolio_sharpe(mean_daily, cov_daily, w)
+    def _point(j: int) -> dict:
+        return {
+            "return": round(float(rets[j]) * 100, 2),
+            "volatility": round(float(vols[j]) * 100, 2),
+            "sharpe": round(float(sharpes[j]), 4),
+        }
 
-        points.append({
-            "return": round(ret * 100, 2),
-            "volatility": round(vol * 100, 2),
-            "sharpe": round(sharpe, 4),
-        })
+    v_min = float(vols.min())
+    v_max = float(vols.max())
+    if v_max <= v_min:
+        # Degenerate cloud (single volatility): the frontier is its max-return
+        # point.
+        return [_point(int(np.argmax(rets)))]
 
-    # Sort by volatility and pick evenly spaced points
-    points.sort(key=lambda p: p["volatility"])
+    # Bucket by volatility; within each bucket keep the highest-return sample.
+    edges = np.linspace(v_min, v_max, num_points + 1)
+    bucket_of = np.clip(np.digitize(vols, edges) - 1, 0, num_points - 1)
 
-    if len(points) <= num_points:
-        return points
+    winners: list[int] = []
+    for b in range(num_points):
+        members = np.nonzero(bucket_of == b)[0]
+        if members.size == 0:
+            continue
+        winners.append(int(members[np.argmax(rets[members])]))
 
-    step = len(points) // num_points
-    frontier = [points[i * step] for i in range(num_points)]
+    # Upper-hull sweep: process by ascending volatility (highest return first on
+    # ties) and keep a point only if it strictly improves on the best return so
+    # far. This guarantees every kept point is non-dominated.
+    winners.sort(key=lambda j: (vols[j], -rets[j]))
+    frontier: list[dict] = []
+    best_ret = float("-inf")
+    for j in winners:
+        if rets[j] > best_ret:
+            frontier.append(_point(j))
+            best_ret = float(rets[j])
     return frontier
 
 

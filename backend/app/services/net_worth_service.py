@@ -64,21 +64,37 @@ class _RateCache:
         self.base = base_currency.upper()
         self.db = db
         self._rates: dict[str, float] = {self.base: 1.0}
+        self._failed: set[str] = set()
 
-    async def to_base(self, amount: float, from_currency: str | None) -> float:
+    async def to_base(
+        self, amount: float, from_currency: str | None
+    ) -> tuple[float, bool]:
+        """Convert *amount* into the base currency.
+
+        Returns ``(value_in_base, converted)``. When no exchange rate is
+        available ``converted`` is ``False`` and the amount is returned
+        UNconverted (still in its native currency) — callers must then mark the
+        item and exclude it from base-currency totals rather than silently
+        mixing currencies (which would count e.g. $10k as ₹10k).
+        """
         cur = (from_currency or self.base).upper()
-        if cur not in self._rates:
+        if cur == self.base:
+            return amount, True
+        if cur not in self._rates and cur not in self._failed:
             try:
                 self._rates[cur] = await forex_service.get_exchange_rate(
                     cur, self.base, None, self.db
                 )
             except Exception:
                 logger.warning(
-                    "No %s->%s rate available; using 1.0 (net worth may mix currencies)",
+                    "No %s->%s rate available; marking value unconverted "
+                    "(excluded from the base-currency total)",
                     cur, self.base,
                 )
-                self._rates[cur] = 1.0
-        return amount * self._rates[cur]
+                self._failed.add(cur)
+        if cur in self._rates:
+            return amount * self._rates[cur], True
+        return amount, False
 
 
 # ---------------------------------------------------------------------------
@@ -141,9 +157,10 @@ async def get_net_worth(
             price = float(h.current_price) if h.current_price is not None else avg
             value = qty * price
             holding_currency = h.currency or portfolio.currency
-            value_base = await rates.to_base(value, holding_currency)
-            stock_value += value_base
-            stock_items.append({
+            value_base, converted = await rates.to_base(value, holding_currency)
+            if converted:
+                stock_value += value_base
+            stock_item: dict = {
                 "id": h.id,
                 "asset_type": "STOCK",
                 "name": h.stock_name,
@@ -157,7 +174,12 @@ async def get_net_worth(
                 "value_in_base": round(value_base, 2),
                 "currency": holding_currency,
                 "portfolio": portfolio.name,
-            })
+            }
+            if not converted:
+                # No rate available: value_in_base is still native — flag it and
+                # keep it out of the base-currency totals above.
+                stock_item["unconverted"] = True
+            stock_items.append(stock_item)
 
     if stock_items:
         breakdown.append({
@@ -197,8 +219,9 @@ async def get_net_worth(
                     value = float(asset.quantity) * live_price
                     value_currency = quote_currency or asset.currency
 
-            value_base = await rates.to_base(value, value_currency)
-            type_value += value_base
+            value_base, converted = await rates.to_base(value, value_currency)
+            if converted:
+                type_value += value_base
             item_data: dict = {
                 "id": asset.id,
                 "asset_type": asset_type,
@@ -210,6 +233,10 @@ async def get_net_worth(
                 "value_in_base": round(value_base, 2),
                 "currency": value_currency,
             }
+            if not converted:
+                # No rate available: value_in_base stays native — flag it and
+                # keep it out of the base-currency totals above.
+                item_data["unconverted"] = True
             if asset.interest_rate is not None:
                 item_data["interest_rate"] = asset.interest_rate
             if asset.maturity_date is not None:

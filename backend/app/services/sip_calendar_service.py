@@ -178,7 +178,7 @@ async def get_calendar_events(
 
         for h, cal in zip(holdings_list, fetch_results):
             try:
-                if isinstance(cal, Exception) or cal is None:
+                if isinstance(cal, BaseException) or cal is None:
                     continue
 
                 # yfinance returns a dict or DataFrame depending on version

@@ -108,7 +108,25 @@ testpaths = ["tests"]
 
 [tool.mypy]
 python_version = "3.12"
-strict = true
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_redundant_casts = true
+# Pragmatic level for a large existing codebase: keep the checks that catch real
+# bugs, but don't demand exhaustive generics/annotations everywhere (that was the
+# bulk of the old strict=true noise).
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+disallow_any_generics = false
+warn_return_any = false
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = "app.models.*"
+# SQLAlchemy Mapped[...] relationships reference related models by forward-ref
+# name (resolved at runtime), which mypy reports as name-defined. Same rationale
+# as the existing ruff F821 per-file ignore for models.
+disable_error_code = ["name-defined"]
 
 [dependency-groups]
 dev = [

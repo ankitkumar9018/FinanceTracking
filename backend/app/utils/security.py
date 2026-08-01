@@ -12,7 +12,9 @@ import bcrypt
 if not hasattr(bcrypt, "__about__"):
     class _About:
         __version__ = getattr(bcrypt, "__version__", "5.0.0")
-    bcrypt.__about__ = _About()
+    # Deliberate shim so passlib can read bcrypt.__about__.__version__ on
+    # bcrypt 5.0; the module has no such attribute in its stubs.
+    bcrypt.__about__ = _About()  # type: ignore[assignment]
 
 import pyotp
 from cryptography.fernet import Fernet
@@ -79,9 +81,8 @@ def _get_fernet() -> Fernet:
                 "Set FERNET_KEY in .env for persistence."
             )
             key = Fernet.generate_key().decode()
-        if isinstance(key, str):
-            key = key.encode()
-        _fernet_instance = Fernet(key)
+        key_bytes = key.encode() if isinstance(key, str) else key
+        _fernet_instance = Fernet(key_bytes)
     return _fernet_instance
 
 

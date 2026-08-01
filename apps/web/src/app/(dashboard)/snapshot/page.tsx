@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { usePortfolioStore } from "@/stores/portfolio-store";
-import { formatCurrency, formatPercent } from "@/lib/utils";
+import { formatCurrency } from "@/lib/utils";
 import { Copy, Check, Share2, Eye, EyeOff } from "lucide-react";
 import toast from "react-hot-toast";
 

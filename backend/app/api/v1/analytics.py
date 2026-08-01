@@ -555,9 +555,9 @@ async def get_monthly_returns(
 
         returns = []
         for i in range(11, -1, -1):
-            d = today.replace(day=1) - timedelta(days=i * 30)
-            month_key = d.strftime("%Y-%m")
-            month_label = month_names[d.month - 1]
+            month_dt = today.replace(day=1) - timedelta(days=i * 30)
+            month_key = month_dt.strftime("%Y-%m")
+            month_label = month_names[month_dt.month - 1]
             ret_pct = months_data.get(month_key, 0) * 100
             returns.append({"month": month_label, "return_pct": round(ret_pct, 2)})
 

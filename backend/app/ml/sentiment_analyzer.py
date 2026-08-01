@@ -156,7 +156,10 @@ def _get_sentiment_pipeline():
     global _sentiment_pipeline
     if _sentiment_pipeline is None and TRANSFORMERS_AVAILABLE:
         try:
-            _sentiment_pipeline = pipeline(
+            # "sentiment-analysis" is a valid runtime task alias for
+            # text-classification, but the transformers stubs only type the
+            # canonical task literals, so the overload check needs suppressing.
+            _sentiment_pipeline = pipeline(  # type: ignore[call-overload]
                 "sentiment-analysis",
                 model="ProsusAI/finbert",
                 top_k=None,

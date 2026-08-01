@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +12,8 @@ from app.models.forex_rates import ForexRate
 
 logger = logging.getLogger(__name__)
 
-# How many hours before a cached rate is considered stale
+# How many hours before a cached (same-day) rate is considered stale and worth
+# refetching. Historical closes are immutable and never expire.
 RATE_CACHE_STALE_HOURS = 24
 
 # Exchange -> currency mapping
@@ -101,6 +102,23 @@ async def _fetch_rate_yfinance(
 
 
 # ---------------------------------------------------------------------------
+# Staleness helper
+# ---------------------------------------------------------------------------
+
+def _is_stale(rate_row: ForexRate) -> bool:
+    """Return True if a cached rate is older than ``RATE_CACHE_STALE_HOURS``.
+
+    A missing/unknown timestamp is treated as stale so it gets refreshed.
+    """
+    ts = getattr(rate_row, "created_at", None)
+    if ts is None:
+        return True
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return datetime.now(UTC) - ts > timedelta(hours=RATE_CACHE_STALE_HOURS)
+
+
+# ---------------------------------------------------------------------------
 # Get exchange rate (with DB cache)
 # ---------------------------------------------------------------------------
 
@@ -149,7 +167,37 @@ async def get_exchange_rate(
     cached = result.scalar_one_or_none()
 
     if cached is not None:
-        return float(cached.rate)
+        # Historical closes are immutable — always serve them from cache. Only
+        # today's rate can go stale intraday: refetch it once it is older than
+        # RATE_CACHE_STALE_HOURS, otherwise keep serving the cached value.
+        if lookup_date < date.today() or not _is_stale(cached):
+            return float(cached.rate)
+
+        try:
+            fresh_rate = await _fetch_rate_yfinance(
+                from_currency, to_currency, lookup_date
+            )
+        except Exception as exc:
+            # Graceful fallback: keep serving the stale cache on refetch failure.
+            logger.warning(
+                "Refetch of stale %s/%s rate failed (%s); serving cached value",
+                from_currency,
+                to_currency,
+                exc,
+            )
+            return float(cached.rate)
+
+        cached.rate = fresh_rate
+        cached.created_at = datetime.now(UTC).replace(tzinfo=None)
+        await db.flush()
+        logger.info(
+            "Refreshed stale forex rate %s/%s = %.6f for %s",
+            from_currency,
+            to_currency,
+            fresh_rate,
+            lookup_date,
+        )
+        return fresh_rate
 
     # Not cached — fetch from yfinance (historical close for past dates)
     rate = await _fetch_rate_yfinance(from_currency, to_currency, lookup_date)

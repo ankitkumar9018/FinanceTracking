@@ -105,7 +105,7 @@ async def get_52week_proximity(
         week52_high: float | None = None
         week52_low: float | None = None
 
-        if isinstance(fetch_result, Exception):
+        if isinstance(fetch_result, BaseException):
             logger.warning("yfinance 52-week fetch failed for %s", h.stock_symbol)
         else:
             w_high, w_low, price_fallback = fetch_result

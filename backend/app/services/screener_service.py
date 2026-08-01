@@ -329,7 +329,7 @@ async def screen_stocks(
     scanned = 0
     results: list[dict] = []
     for item in evaluated:
-        if isinstance(item, Exception) or item is None:
+        if isinstance(item, BaseException) or item is None:
             continue
         scanned += 1
         if _passes(item, filters):

@@ -51,10 +51,16 @@ class LLMProvider(ABC):
         """Check if this provider is reachable."""
 
     @abstractmethod
-    async def stream(
+    def stream(
         self, messages: list[ChatMessage], system_prompt: str = ""
     ) -> AsyncIterator[str]:
-        """Stream response tokens."""
+        """Stream response tokens.
+
+        Declared as a plain ``def`` (not ``async def``) returning an
+        ``AsyncIterator`` so concrete async-generator implementations override it
+        without a return-type mismatch. Callers consume it with ``async for``.
+        """
+        ...
 
 
 class OllamaProvider(LLMProvider):

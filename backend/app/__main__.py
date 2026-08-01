@@ -124,7 +124,10 @@ def _reconcile_schema(sync_url: str) -> None:
                     ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {col_type}'
                     default = None
                     if column.default is not None and getattr(column.default, "is_scalar", False):
-                        default = column.default.arg
+                        # .arg exists only on scalar ColumnDefault (guarded by
+                        # is_scalar); read via getattr since DefaultGenerator, the
+                        # base type mypy sees, does not declare it.
+                        default = getattr(column.default, "arg", None)
                     if isinstance(default, bool):
                         ddl += f" DEFAULT {int(default)}"
                     elif isinstance(default, int | float):

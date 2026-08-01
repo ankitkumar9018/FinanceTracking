@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useAuthStore } from "@/stores/auth-store";
 import { useTheme } from "@/components/providers/theme-provider";
 import { SecuritySection } from "@/components/settings/security-section";
 import { api } from "@/lib/api-client";
@@ -16,7 +15,6 @@ interface Settings {
 }
 
 export default function SettingsPage() {
-  const { user } = useAuthStore();
   const { setTheme } = useTheme();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [phone, setPhone] = useState("");

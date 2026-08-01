@@ -630,10 +630,10 @@ async def get_expense_analysis(
     for fund, er in zip(funds, ratios, strict=True):
         value = _fund_value(fund)
         available = er is not None
-        annual_fee_cost = round(value * er, 2) if available else None
-        is_high_fee = bool(available and er >= _HIGH_FEE_THRESHOLD)
+        annual_fee_cost = round(value * er, 2) if er is not None else None
+        is_high_fee = bool(er is not None and er >= _HIGH_FEE_THRESHOLD)
 
-        if available:
+        if er is not None:
             covered_count += 1
             weighted_sum += er * value
             covered_value += value
@@ -648,8 +648,8 @@ async def get_expense_analysis(
                 "scheme_code": fund.scheme_code,
                 "scheme_name": fund.scheme_name,
                 "current_value": round(value, 2),
-                "expense_ratio": round(er, 6) if available else None,
-                "expense_ratio_pct": round(er * 100, 3) if available else None,
+                "expense_ratio": round(er, 6) if er is not None else None,
+                "expense_ratio_pct": round(er * 100, 3) if er is not None else None,
                 "expense_ratio_available": available,
                 "annual_fee_cost": annual_fee_cost,
                 "is_high_fee": is_high_fee,

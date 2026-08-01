@@ -38,7 +38,7 @@ export function TopBar({ onMenuClick }: TopBarProps) {
   const { user, logout } = useAuthStore();
   const { portfolios, activePortfolioId, setActivePortfolio, fetchPortfolios, refreshPrices } =
     usePortfolioStore();
-  const { theme, setTheme, resolvedTheme } = useTheme();
+  const { setTheme, resolvedTheme } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);

@@ -77,8 +77,10 @@ _EXCHANGE_YF_SUFFIX: dict[str, str] = {
     "NASDAQ": "",
 }
 # Process-level cache of 31-Jan-2018 closes keyed by "SYMBOL:EXCHANGE".
-# A cached ``None`` means "unavailable" — callers fall back to the actual cost.
-_FMV_2018_CACHE: dict[str, float | None] = {}
+# Only SUCCESSFUL (non-None) lookups are cached. A failed lookup is deliberately
+# NOT cached so a transient failure (network down, rate limit) is retried on the
+# next call rather than permanently disabling grandfathering for that symbol.
+_FMV_2018_CACHE: dict[str, float] = {}
 
 # Exchange -> jurisdiction mapping
 EXCHANGE_JURISDICTION_MAP: dict[str, str] = {
@@ -240,7 +242,10 @@ async def get_fmv_31jan2018(symbol: str, exchange: str) -> float | None:
         )
         fmv = None
 
-    _FMV_2018_CACHE[cache_key] = fmv
+    # Only cache a successful lookup — never a failure, so transient errors are
+    # retried on the next call instead of being memoised for the process life.
+    if fmv is not None:
+        _FMV_2018_CACHE[cache_key] = fmv
     return fmv
 
 
@@ -301,12 +306,22 @@ def calculate_german_tax(
     freibetrag_remaining: float = GERMANY_DEFAULT_FREIBETRAG,
     church_tax: bool = False,
     teilfreistellung_pct: float = 0.0,
+    church_tax_rate: float = GERMANY_CHURCH_RATE,
 ) -> dict:
     """Calculate German capital gains tax (Abgeltungssteuer).
 
     Base: 25 % Kapitalertragsteuer
-    Plus 5.5 % Solidaritaetszuschlag on the base tax = effective 26.375 %
-    Plus optional 8 % Kirchensteuer on the base tax.
+    Plus 5.5 % Solidaritaetszuschlag on the base tax = effective 26.375 %.
+
+    When Kirchensteuer applies it is deductible as a Sonderausgabe, which lowers
+    the Kapitalertragsteuer itself (§ 32d Abs. 1 EStG). The reduced base tax is::
+
+        KapESt = taxable_gain * 0.25 / (1 + 0.25 * KiSt_rate)
+
+    (equivalently ``taxable_gain / (4 + KiSt_rate)``), with KiSt_rate 0.08 or
+    0.09. Soli and church tax are then charged on that reduced KapESt. With
+    ``church_tax=False`` the denominator is 1 and the result is the plain 25 %
+    base — so the default path is numerically unchanged.
 
     Order of operations for a fund gain:
         1. Teilfreistellung (partial exemption) reduces the gross gain.
@@ -320,12 +335,15 @@ def calculate_german_tax(
     freibetrag_remaining : float
         Remaining Sparer-Pauschbetrag (EUR 1000 single, EUR 2000 joint).
     church_tax : bool
-        Whether to apply Kirchensteuer (default 8 % on base tax).
+        Whether to apply Kirchensteuer (via the reduced-rate formula above).
     teilfreistellung_pct : float
         German fund partial-exemption percentage applied to the gross gain
         BEFORE the Freibetrag and Abgeltungssteuer (equity ETF 30, mixed 15,
         real-estate 60, bond/stock 0). Default ``0`` keeps existing
         (non-fund) callers unchanged.
+    church_tax_rate : float
+        Kirchensteuer rate (0.08 in most states, 0.09 in Bavaria and
+        Baden-Wuerttemberg). Only used when ``church_tax`` is True.
 
     Returns
     -------
@@ -369,17 +387,29 @@ def calculate_german_tax(
             },
         }
 
-    # Base tax
-    kap = round(taxable_gain * GERMANY_KAP_RATE, 2)
+    # Base tax. Church tax is deductible (Sonderausgabenabzug), so it reduces
+    # the Kapitalertragsteuer via KapESt = gain * 0.25 / (1 + 0.25 * KiSt_rate).
+    # Without church tax the denominator is 1 -> plain 25 % (unchanged).
+    if church_tax:
+        kist_rate = church_tax_rate
+        kap = round(
+            taxable_gain * GERMANY_KAP_RATE / (1 + GERMANY_KAP_RATE * kist_rate),
+            2,
+        )
+        kirchen = round(kap * kist_rate, 2)
+    else:
+        kap = round(taxable_gain * GERMANY_KAP_RATE, 2)
+        kirchen = 0.0
     soli = round(kap * GERMANY_SOLI_RATE, 2)
-    kirchen = round(kap * GERMANY_CHURCH_RATE, 2) if church_tax else 0.0
 
     total_tax = round(kap + soli + kirchen, 2)
 
-    # Effective rate
-    effective_rate = GERMANY_KAP_RATE * (1 + GERMANY_SOLI_RATE)
+    # Effective rate (share of the taxable gain paid as total tax).
     if church_tax:
-        effective_rate = GERMANY_KAP_RATE * (1 + GERMANY_SOLI_RATE + GERMANY_CHURCH_RATE)
+        kap_rate = GERMANY_KAP_RATE / (1 + GERMANY_KAP_RATE * church_tax_rate)
+        effective_rate = kap_rate * (1 + GERMANY_SOLI_RATE + church_tax_rate)
+    else:
+        effective_rate = GERMANY_KAP_RATE * (1 + GERMANY_SOLI_RATE)
 
     return {
         "tax_amount": total_tax,
@@ -781,7 +811,12 @@ async def compute_tax_for_transaction(
             for r in existing_records:
                 if r.gain_amount is None:
                     continue
-                teil = teilfreistellung_for_fund_type(fund_type_by_txn.get(r.transaction_id))
+                fund_type = (
+                    fund_type_by_txn.get(r.transaction_id)
+                    if r.transaction_id is not None
+                    else None
+                )
+                teil = teilfreistellung_for_fund_type(fund_type)
                 net_gains += float(r.gain_amount) * (1.0 - teil / 100.0)
             freibetrag_used = min(max(net_gains, 0.0), total_freibetrag)
             freibetrag_remaining = max(total_freibetrag - freibetrag_used, 0.0)
@@ -962,7 +997,12 @@ async def compute_german_allowance(
     net_gains = 0.0
     for r in records:
         gain = float(r.gain_amount) if r.gain_amount is not None else 0.0
-        teil = teilfreistellung_for_fund_type(fund_type_by_txn.get(r.transaction_id))
+        fund_type = (
+            fund_type_by_txn.get(r.transaction_id)
+            if r.transaction_id is not None
+            else None
+        )
+        teil = teilfreistellung_for_fund_type(fund_type)
         net_gains += gain * (1.0 - teil / 100.0)
     gains_component = max(net_gains, 0.0)
 

@@ -87,7 +87,9 @@ app = FastAPI(
 
 # ── Rate Limiting ─────────────────────────────────────────────────────────
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# slowapi types its handler for the RateLimitExceeded subclass; Starlette's
+# add_exception_handler expects a base-Exception handler. Runtime-correct.
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
 # ── CORS ─────────────────────────────────────────────────────────────────
 _cors_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
@@ -141,6 +143,9 @@ for candidate in [
         break
 
 if _static_dir:
+    # Narrowed to a non-None Path for use inside the closure below (mypy does
+    # not carry the outer truthiness check into the nested function).
+    _static_root: Path = _static_dir
     logger.info("Serving static frontend from %s", _static_dir)
 
     # Serve static files using middleware instead of app.mount("/").
@@ -158,11 +163,11 @@ if _static_dir:
 
         # Try to serve a static file
         # 1. Exact file match (e.g., /favicon.svg, /_next/static/...)
-        file_path = (_static_dir / path.lstrip("/")).resolve()
+        file_path = (_static_root / path.lstrip("/")).resolve()
         # Guard against path traversal (e.g., /../../../etc/passwd).
         # is_relative_to (not str.startswith) so a sibling dir sharing the
         # prefix (static-backup next to static) can't be escaped into.
-        if not file_path.is_relative_to(_static_dir.resolve()):
+        if not file_path.is_relative_to(_static_root.resolve()):
             return await call_next(request)
         if file_path.is_file():
             return _FileResponse(str(file_path))
@@ -173,7 +178,7 @@ if _static_dir:
             return _FileResponse(str(index_path))
 
         # 3. Root index.html for SPA routing (client-side navigation)
-        root_index = _static_dir / "index.html"
+        root_index = _static_root / "index.html"
         if root_index.is_file() and not path.startswith("/_next/"):
             return _FileResponse(str(root_index))
 

@@ -15,13 +15,19 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-def _get(obj: object, key: str) -> object:
+def _get(obj: object, key: str) -> Any:
     """Read ``key`` from a dict or an attribute from an object (casparser
-    returns dicts with ``output='dict'`` but objects otherwise)."""
+    returns dicts with ``output='dict'`` but objects otherwise).
+
+    Returns ``Any`` because casparser's parsed structure is dynamic (nested
+    dicts/objects of folios, schemes and valuations) — callers narrow via the
+    ``or []`` / ``_num`` coercions below.
+    """
     if obj is None:
         return None
     if isinstance(obj, dict):

@@ -639,7 +639,7 @@ export default function HoldingsPage() {
         await fetchStopLosses(activePortfolioId);
       }
       toast.success(`Updated ${result.updated} stocks${result.failed > 0 ? `, ${result.failed} failed` : ""}`);
-    } catch (err) {
+    } catch {
       toast.error("Failed to refresh prices");
     } finally {
       setRefreshing(false);

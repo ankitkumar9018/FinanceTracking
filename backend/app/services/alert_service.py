@@ -264,7 +264,11 @@ async def check_all_alerts_for_user(
         now = datetime.now(UTC)
 
         for alert in wl_alerts:
-            wl_item = wl_items.get(alert.watchlist_item_id)
+            wl_item = (
+                wl_items.get(alert.watchlist_item_id)
+                if alert.watchlist_item_id is not None
+                else None
+            )
             if not wl_item or wl_item.current_price is None:
                 continue
 

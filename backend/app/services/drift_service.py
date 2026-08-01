@@ -108,7 +108,7 @@ async def check_drift(
         drift_pct: float | None = None
         over_threshold = False
         if target_pct is not None:
-            drift_pct = round(actual_pct - target_pct, 2)
+            drift_pct = round(actual_pct - float(target_pct), 2)
             over_threshold = abs(drift_pct) > threshold
 
         drift_report.append(

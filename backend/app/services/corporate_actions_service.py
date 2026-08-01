@@ -176,7 +176,7 @@ async def detect_corporate_actions(user_id: int, db: AsyncSession) -> dict:
     # ── Sequential DB writes ────────────────────────────────────────────
     newly_detected = 0
     for holding, res in zip(holdings, fetch_results):
-        if isinstance(res, Exception) or not res:
+        if isinstance(res, BaseException) or not res:
             continue
         for ex_date, ratio in res:
             key = (holding.id, ex_date, "SPLIT")
