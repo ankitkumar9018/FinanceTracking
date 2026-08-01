@@ -29,10 +29,10 @@ def _run_migrations() -> None:
     3. **Legacy DB** – DB created by create_all() with no alembic_version table.
        Stamp it at ``head`` so future upgrades apply correctly.
     """
+    from alembic.config import Config
     from sqlalchemy import create_engine, inspect
 
     from alembic import command
-    from alembic.config import Config
 
     db_url = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./finance.db")
     # Alembic needs a synchronous driver

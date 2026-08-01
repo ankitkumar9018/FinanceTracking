@@ -97,7 +97,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "RUF"]
-ignore = ["B008", "B904", "B905", "RUF002", "RUF022", "SIM102"]
+# UP042: `class X(str, Enum)` is intentional (StrEnum changes str(member) output
+# and JSON/Pydantic serialization); keep the explicit str+Enum pattern.
+ignore = ["B008", "B904", "B905", "RUF002", "RUF022", "SIM102", "UP042"]
 
 [tool.ruff.lint.per-file-ignores]
 "app/models/*.py" = ["F821"]  # SQLAlchemy deferred type annotations

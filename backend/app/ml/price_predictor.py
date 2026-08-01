@@ -171,7 +171,7 @@ async def predict_prices(
 
     current_price = df["close"].iloc[-1]
 
-    x, y, mins, maxs, ranges, split = _prepare_features(df, lookback)
+    x, y, mins, _maxs, ranges, split = _prepare_features(df, lookback)
 
     if len(x) < 50:
         return PredictionResult(
