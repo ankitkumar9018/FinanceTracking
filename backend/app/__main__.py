@@ -29,9 +29,10 @@ def _run_migrations() -> None:
     3. **Legacy DB** – DB created by create_all() with no alembic_version table.
        Stamp it at ``head`` so future upgrades apply correctly.
     """
-    from alembic.config import Config
-    from alembic import command
     from sqlalchemy import create_engine, inspect
+
+    from alembic import command
+    from alembic.config import Config
 
     db_url = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./finance.db")
     # Alembic needs a synchronous driver
@@ -126,7 +127,7 @@ def _reconcile_schema(sync_url: str) -> None:
                         default = column.default.arg
                     if isinstance(default, bool):
                         ddl += f" DEFAULT {int(default)}"
-                    elif isinstance(default, (int, float)):
+                    elif isinstance(default, int | float):
                         ddl += f" DEFAULT {default}"
                     elif isinstance(default, str):
                         ddl += " DEFAULT '{}'".format(default.replace("'", "''"))
@@ -146,9 +147,9 @@ def _run_seed() -> None:
     from sqlalchemy import select
 
     from app.database import async_session_factory
+    from app.models.portfolio import Portfolio
     from app.models.user import User
     from app.utils.security import hash_password
-    from app.models.portfolio import Portfolio
 
     async def seed() -> None:
         async with async_session_factory() as db:
@@ -209,11 +210,20 @@ def _find_free_port(host: str, preferred: int, span: int = 10) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="FinanceTracker Backend")
-    parser.add_argument("--port", type=int, default=8420, help="Preferred port (auto-advances to a free one if taken)")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8420,
+        help="Preferred port (auto-advances to a free one if taken)",
+    )
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind to")
     parser.add_argument("--db-path", type=str, default="", help="Path to SQLite database file")
     parser.add_argument("--seed", action="store_true", help="Seed demo user on first run")
-    parser.add_argument("--strict-port", action="store_true", help="Fail if the requested port is busy instead of auto-picking a free one")
+    parser.add_argument(
+        "--strict-port",
+        action="store_true",
+        help="Fail if the requested port is busy instead of auto-picking a free one",
+    )
     args = parser.parse_args()
 
     if args.db_path:

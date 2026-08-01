@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 
 import numpy as np
@@ -220,8 +220,8 @@ async def get_all_indicators(
     days: int = 90,
 ) -> dict:
     """Fetch price history and compute all indicators."""
-    from datetime import timedelta
     from datetime import date as date_type
+    from datetime import timedelta
 
     from sqlalchemy import select
 

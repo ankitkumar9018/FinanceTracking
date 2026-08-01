@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,7 +68,9 @@ async def create_custom_column(
     # Check name doesn't conflict with built-in
     built_in_names = {c["name"] for c in BUILT_IN_COLUMNS}
     if body.name in built_in_names:
-        raise HTTPException(400, detail=f"Column name '{body.name}' conflicts with a built-in column")
+        raise HTTPException(
+            400, detail=f"Column name '{body.name}' conflicts with a built-in column"
+        )
 
     prefs = await _get_or_create_prefs(user.id, db)
     custom = list(prefs.custom_columns or [])

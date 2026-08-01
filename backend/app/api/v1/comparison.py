@@ -21,7 +21,6 @@ from app.services.stop_loss_service import (
     remove_stop_loss,
     set_stop_loss,
 )
-from app.services.xirr_service import CashFlow, xirr
 
 router = APIRouter()
 

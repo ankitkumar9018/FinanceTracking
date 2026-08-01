@@ -145,7 +145,7 @@ async def detect_anomalies(
 
     # Normalize features
     scaler = StandardScaler()
-    X = scaler.fit_transform(features.values)
+    x = scaler.fit_transform(features.values)
 
     # Fit Isolation Forest
     iso_forest = IsolationForest(
@@ -153,8 +153,8 @@ async def detect_anomalies(
         random_state=42,
         n_estimators=100,
     )
-    predictions = iso_forest.fit_predict(X)
-    scores = iso_forest.score_samples(X)
+    predictions = iso_forest.fit_predict(x)
+    scores = iso_forest.score_samples(x)
 
     # Extract anomalies (only from requested date range)
     target_cutoff = date.today() - timedelta(days=days)

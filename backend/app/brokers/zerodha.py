@@ -7,6 +7,7 @@ clear error telling the user to install it.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import datetime
 
@@ -200,10 +201,8 @@ class ZerodhaBroker(BrokerAdapter):
             ts_str = o.get("order_timestamp")
             ts = None
             if ts_str:
-                try:
+                with contextlib.suppress(ValueError, TypeError):
                     ts = datetime.fromisoformat(str(ts_str))
-                except (ValueError, TypeError):
-                    pass
 
             # Client-side date filtering
             if ts:

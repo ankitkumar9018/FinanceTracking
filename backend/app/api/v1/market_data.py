@@ -13,7 +13,6 @@ from app.database import get_db
 from app.models.user import User
 from app.schemas.market_data import HistoryResponse, QuoteResponse
 from app.services.market_data_service import (
-    _EXCHANGE_SUFFIX,
     _ticker_symbol,
     fetch_current_price,
     fetch_historical_data,
@@ -213,8 +212,12 @@ async def run_screener(
     sector: str | None = Query(None, max_length=50, description="Sector substring match"),
     rsi_min: float | None = Query(None, ge=0, le=100),
     rsi_max: float | None = Query(None, ge=0, le=100),
-    week52_min: float | None = Query(None, ge=0, le=100, description="Min 52-week range position (%)"),
-    week52_max: float | None = Query(None, ge=0, le=100, description="Max 52-week range position (%)"),
+    week52_min: float | None = Query(
+        None, ge=0, le=100, description="Min 52-week range position (%)"
+    ),
+    week52_max: float | None = Query(
+        None, ge=0, le=100, description="Max 52-week range position (%)"
+    ),
     day_change_min: float | None = Query(None),
     day_change_max: float | None = Query(None),
     user: User = Depends(get_current_user),

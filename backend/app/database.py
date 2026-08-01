@@ -38,7 +38,7 @@ engine = create_async_engine(
 if settings.is_sqlite:
 
     @event.listens_for(engine.sync_engine, "connect")
-    def _set_sqlite_pragma(dbapi_conn, connection_record):  # noqa: ARG001
+    def _set_sqlite_pragma(dbapi_conn, connection_record):
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()

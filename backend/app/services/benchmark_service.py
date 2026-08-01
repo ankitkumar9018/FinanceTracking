@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from datetime import date, timedelta
 from dataclasses import dataclass
+from datetime import date, timedelta
 
 import yfinance as yf
 
@@ -41,7 +41,8 @@ async def compare_with_benchmark(
 ) -> BenchmarkComparison | None:
     """Compare portfolio performance against a benchmark index.
 
-    portfolio_daily_values: list of {date: "YYYY-MM-DD", value: float} dicts (portfolio total value per day)
+    portfolio_daily_values: list of {date: "YYYY-MM-DD", value: float} dicts
+    (portfolio total value per day)
     """
     symbol = BENCHMARKS.get(benchmark_name)
     if not symbol:
@@ -58,7 +59,7 @@ async def compare_with_benchmark(
         hist = await asyncio.wait_for(asyncio.to_thread(_fetch_sync), timeout=15.0)
         if hist.empty:
             return None
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("yfinance timeout fetching benchmark %s", benchmark_name)
         return None
     except Exception:

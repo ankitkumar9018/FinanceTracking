@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -217,7 +217,7 @@ async def sync_holdings(
                 existing_holding.average_price = bh.average_price
                 if bh.last_price is not None:
                     existing_holding.current_price = bh.last_price
-                    existing_holding.last_price_update = datetime.now(timezone.utc)
+                    existing_holding.last_price_update = datetime.now(UTC)
                 updated_count += 1
             else:
                 # Create new holding
@@ -230,7 +230,7 @@ async def sync_holdings(
                     average_price=bh.average_price,
                     current_price=bh.last_price,
                     last_price_update=(
-                        datetime.now(timezone.utc) if bh.last_price else None
+                        datetime.now(UTC) if bh.last_price else None
                     ),
                 )
                 db.add(new_holding)
@@ -241,7 +241,7 @@ async def sync_holdings(
             logger.warning(error_msg, exc_info=True)
 
     # Update last_synced timestamp
-    connection.last_synced = datetime.now(timezone.utc)
+    connection.last_synced = datetime.now(UTC)
     await db.flush()
 
     total_synced = new_count + updated_count

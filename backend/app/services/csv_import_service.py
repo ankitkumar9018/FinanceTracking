@@ -272,7 +272,9 @@ def parse_csv_dividends(file_bytes: bytes) -> list[dict]:
         amount_per_share = _safe_float(row.get("amount_per_share"))
         total_amount = _safe_float(row.get("total_amount"))
 
-        if not all([symbol, exchange, ex_date, amount_per_share is not None, total_amount is not None]):
+        if not all(
+            [symbol, exchange, ex_date, amount_per_share is not None, total_amount is not None]
+        ):
             logger.warning("Skipping dividend CSV row with missing fields: %s", row)
             continue
 
@@ -357,7 +359,9 @@ def parse_csv_mutual_funds(file_bytes: bytes) -> list[dict]:
         nav = _safe_float(row.get("nav"))
         invested = _safe_float(row.get("invested_amount"))
 
-        if not all([scheme_code, scheme_name, units is not None, nav is not None, invested is not None]):
+        if not all(
+            [scheme_code, scheme_name, units is not None, nav is not None, invested is not None]
+        ):
             logger.warning("Skipping MF CSV row with missing fields: %s", row)
             continue
 
@@ -445,7 +449,9 @@ def parse_csv_tax_records(file_bytes: bytes) -> list[dict]:
         purchase_price = _safe_float(row.get("purchase_price"))
         currency = row.get("currency")
 
-        if not all([fy, jurisdiction, gain_type, purchase_date, purchase_price is not None, currency]):
+        if not all(
+            [fy, jurisdiction, gain_type, purchase_date, purchase_price is not None, currency]
+        ):
             logger.warning("Skipping tax record CSV row with missing fields: %s", row)
             continue
 

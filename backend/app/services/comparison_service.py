@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, timedelta
-from dataclasses import dataclass
-
 import math
+from dataclasses import dataclass
+from datetime import date, timedelta
 
 import yfinance as yf
 
@@ -88,9 +87,17 @@ async def compare_stocks(
                 timeout=10.0,
             )
 
-            current = _safe_float_val(info.get("currentPrice") or info.get("regularMarketPrice"))
-            prev_close = _safe_float_val(info.get("previousClose") or info.get("regularMarketPreviousClose"))
-            day_change = ((current - prev_close) / prev_close * 100) if current and prev_close else None
+            current = _safe_float_val(
+                info.get("currentPrice") or info.get("regularMarketPrice")
+            )
+            prev_close = _safe_float_val(
+                info.get("previousClose") or info.get("regularMarketPreviousClose")
+            )
+            day_change = (
+                ((current - prev_close) / prev_close * 100)
+                if current and prev_close
+                else None
+            )
 
             metrics = StockMetrics(
                 symbol=symbol,

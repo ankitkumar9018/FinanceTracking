@@ -79,7 +79,9 @@ async def set_stop_loss(
     await db.flush()
 
 
-async def remove_stop_loss(holding_id: int, db: AsyncSession, *, user_id: int | None = None) -> None:
+async def remove_stop_loss(
+    holding_id: int, db: AsyncSession, *, user_id: int | None = None
+) -> None:
     """Remove stop-loss for a holding."""
     query = select(Holding).where(Holding.id == holding_id)
     if user_id is not None:

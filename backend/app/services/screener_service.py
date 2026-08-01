@@ -164,9 +164,7 @@ def _in_range(
         return False
     if lo is not None and value < lo:
         return False
-    if hi is not None and value > hi:
-        return False
-    return True
+    return not (hi is not None and value > hi)
 
 
 def _passes(metrics: dict, f: ScreenerFilters) -> bool:

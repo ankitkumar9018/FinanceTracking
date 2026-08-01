@@ -6,9 +6,8 @@ measure true portfolio returns for SIP and partial sale scenarios.
 
 from __future__ import annotations
 
-import math
-from datetime import date
 from dataclasses import dataclass
+from datetime import date
 
 
 @dataclass
@@ -18,7 +17,12 @@ class CashFlow:
     amount: float
 
 
-def xirr(cash_flows: list[CashFlow], guess: float = 0.1, max_iter: int = 200, tol: float = 1e-7) -> float | None:
+def xirr(
+    cash_flows: list[CashFlow],
+    guess: float = 0.1,
+    max_iter: int = 200,
+    tol: float = 1e-7,
+) -> float | None:
     """Calculate XIRR using Newton-Raphson method.
 
     Returns annualized return as a decimal (e.g. 0.12 for 12%).

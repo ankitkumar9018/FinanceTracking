@@ -79,7 +79,7 @@ async def _fetch_rate_yfinance(
 
     try:
         return await asyncio.wait_for(asyncio.to_thread(_sync_fetch), timeout=10.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error(
             "Timeout fetching forex rate %s/%s from yfinance",
             from_currency,

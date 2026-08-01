@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import date, datetime
 from decimal import Decimal
@@ -35,7 +34,7 @@ def _ser(val: object) -> object:
         return None
     if isinstance(val, Decimal):
         return float(val)
-    if isinstance(val, (datetime, date)):
+    if isinstance(val, datetime | date):
         return val.isoformat()
     if isinstance(val, dict):
         return val

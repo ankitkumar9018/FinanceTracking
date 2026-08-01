@@ -8,6 +8,7 @@ from typing import Any
 
 # Monkey-patch for passlib + bcrypt 5.0 compatibility (must be before passlib import)
 import bcrypt
+
 if not hasattr(bcrypt, "__about__"):
     class _About:
         __version__ = getattr(bcrypt, "__version__", "5.0.0")

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Date, DateTime, ForeignKey, Float, String, func
+from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -38,4 +38,7 @@ class CorporateAction(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<CorporateAction {self.action_type} holding={self.holding_id} ratio={self.ratio} status={self.status}>"
+        return (
+            f"<CorporateAction {self.action_type} holding={self.holding_id} "
+            f"ratio={self.ratio} status={self.status}>"
+        )

@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.fno_position import FnoPosition
-from app.models.portfolio import Portfolio
 
 logger = logging.getLogger(__name__)
 
@@ -120,10 +118,9 @@ def _calculate_position_pnl(position: FnoPosition) -> dict:
 
     if position.status == "CLOSED" and position.exit_price is not None:
         exit_p = float(position.exit_price)
-        if is_long:
-            realized_pnl = (exit_p - entry) * total_lots
-        else:
-            realized_pnl = (entry - exit_p) * total_lots
+        realized_pnl = (
+            (exit_p - entry) * total_lots if is_long else (entry - exit_p) * total_lots
+        )
     elif position.status == "OPEN" and position.current_price is not None:
         current = float(position.current_price)
         if is_long:
@@ -133,10 +130,7 @@ def _calculate_position_pnl(position: FnoPosition) -> dict:
     elif position.status == "EXPIRED":
         if position.instrument_type in ("CE", "PE"):
             # Expired options: premium lost (buyer) or kept (seller)
-            if is_long:
-                realized_pnl = -entry * total_lots  # premium lost
-            else:
-                realized_pnl = entry * total_lots  # premium kept
+            realized_pnl = -entry * total_lots if is_long else entry * total_lots
         else:
             # Expired futures: use exit_price (settlement price) if available
             if position.exit_price is not None:

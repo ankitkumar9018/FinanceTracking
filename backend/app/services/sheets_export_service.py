@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.dividend import Dividend
-from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.transaction import Transaction
 from app.services.export_service import _sanitize_csv_cell

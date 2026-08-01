@@ -11,7 +11,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.services.market_data_service import _ticker_symbol
 

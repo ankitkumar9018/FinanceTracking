@@ -8,7 +8,7 @@ import io
 import json
 import logging
 import zipfile
-from datetime import date, datetime
+from datetime import datetime
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -18,8 +18,8 @@ from sqlalchemy.orm import selectinload
 
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
-from app.models.transaction import Transaction
 from app.models.tax_record import TaxRecord
+from app.models.transaction import Transaction
 from app.services.backup_service import export_portfolio_json
 from app.services.tax_service import generate_tax_summary
 
@@ -180,6 +180,7 @@ async def generate_portfolio_report_html(
     rows_html = ""
     for h in holdings_data:
         pnl_color = "#16a34a" if h["pnl"] >= 0 else "#dc2626"
+        pnl_str = f"{h['pnl']:+,.2f} ({h['pnl_pct']:+.1f}%)"
         rows_html += f"""
         <tr>
             <td>{_esc(str(h['symbol']))}</td>
@@ -189,12 +190,13 @@ async def generate_portfolio_report_html(
             <td style="text-align:right">{h['current']:.2f}</td>
             <td style="text-align:right">{h['invested']:,.2f}</td>
             <td style="text-align:right">{h['value']:,.2f}</td>
-            <td style="text-align:right;color:{pnl_color}">{h['pnl']:+,.2f} ({h['pnl_pct']:+.1f}%)</td>
+            <td style="text-align:right;color:{pnl_color}">{pnl_str}</td>
             <td style="text-align:center">{_esc(str(h['action']))}</td>
             <td style="text-align:right">{f"{h['rsi']:.1f}" if h['rsi'] else '--'}</td>
         </tr>"""
 
     total_pnl_color = "#16a34a" if total_pnl >= 0 else "#dc2626"
+    total_pnl_str = f"{total_pnl:+,.2f} ({total_pnl_pct:+.1f}%)"
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -214,7 +216,8 @@ async def generate_portfolio_report_html(
     .footer {{ margin-top: 32px; font-size: 11px; color: #999; text-align: center; }}
 </style></head><body>
 <h1>{_esc(portfolio.name)} — Portfolio Report</h1>
-<p class="subtitle">Generated on {now} for {_esc(user_name)} | Currency: {_esc(portfolio.currency)}</p>
+<p class="subtitle">Generated on {now} for {_esc(user_name)}
+| Currency: {_esc(portfolio.currency)}</p>
 <div class="summary">
     <div class="summary-card">
         <div class="label">Total Invested</div>
@@ -226,7 +229,7 @@ async def generate_portfolio_report_html(
     </div>
     <div class="summary-card">
         <div class="label">Total P&L</div>
-        <div class="value" style="color:{total_pnl_color}">{total_pnl:+,.2f} ({total_pnl_pct:+.1f}%)</div>
+        <div class="value" style="color:{total_pnl_color}">{total_pnl_str}</div>
     </div>
     <div class="summary-card">
         <div class="label">Holdings</div>
@@ -243,7 +246,8 @@ async def generate_portfolio_report_html(
 </tr></thead>
 <tbody>{rows_html}</tbody>
 </table>
-<div class="footer">FinanceTracker — Personal Investment Portfolio Tracking | Generated automatically</div>
+<div class="footer">FinanceTracker — Personal Investment Portfolio Tracking
+| Generated automatically</div>
 </body></html>"""
 
     return html
@@ -417,17 +421,19 @@ async def generate_tax_report_html(
             gain = _num(r.gain_amount)
             gain_color = "#16a34a" if (gain is None or gain >= 0) else "#dc2626"
             qty = _record_quantity(r)
+            days_held = r.holding_period_days if r.holding_period_days is not None else "--"
+            gain_str = f"{gain:+,.2f}" if gain is not None else "--"
             rows_html += f"""
         <tr>
             <td>{_esc(_record_symbol(r) or '--')}</td>
             <td>{_esc(str(r.gain_type))}</td>
             <td>{r.purchase_date.isoformat() if r.purchase_date else '--'}</td>
             <td>{r.sale_date.isoformat() if r.sale_date else '--'}</td>
-            <td style="text-align:right">{r.holding_period_days if r.holding_period_days is not None else '--'}</td>
+            <td style="text-align:right">{days_held}</td>
             <td style="text-align:right">{f'{qty:,.4f}' if qty is not None else '--'}</td>
             <td style="text-align:right">{_fmt(r.purchase_price)}</td>
             <td style="text-align:right">{_fmt(r.sale_price)}</td>
-            <td style="text-align:right;color:{gain_color}">{f'{gain:+,.2f}' if gain is not None else '--'}</td>
+            <td style="text-align:right;color:{gain_color}">{gain_str}</td>
             <td style="text-align:right">{_fmt(r.tax_amount)}</td>
             <td style="text-align:center">{_esc(str(r.currency))}</td>
         </tr>"""
@@ -458,7 +464,9 @@ async def generate_tax_report_html(
     h1 {{ color: #1e3a5f; margin-bottom: 4px; }}
     .subtitle {{ color: #666; margin-bottom: 24px; }}
     .summary {{ display: flex; gap: 24px; margin-bottom: 32px; flex-wrap: wrap; }}
-    .summary-card {{ background: #f8f9fa; border-radius: 8px; padding: 16px 24px; flex: 1; min-width: 160px; }}
+    .summary-card {{
+        background: #f8f9fa; border-radius: 8px; padding: 16px 24px; flex: 1; min-width: 160px;
+    }}
     .summary-card .label {{ font-size: 12px; color: #666; text-transform: uppercase; }}
     .summary-card .value {{ font-size: 24px; font-weight: 700; margin-top: 4px; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
@@ -469,7 +477,8 @@ async def generate_tax_report_html(
     .footer {{ margin-top: 32px; font-size: 11px; color: #999; text-align: center; }}
 </style></head><body>
 <h1>Capital Gains Statement</h1>
-<p class="subtitle">Financial Year {_esc(financial_year)} · Jurisdiction {_esc(jurisdiction)} · Generated on {now} for {_esc(user_name)}</p>
+<p class="subtitle">Financial Year {_esc(financial_year)} · Jurisdiction {_esc(jurisdiction)}
+· Generated on {now} for {_esc(user_name)}</p>
 <div class="summary">
     <div class="summary-card">
         <div class="label">Total STCG</div>
@@ -493,7 +502,8 @@ async def generate_tax_report_html(
     </div>
 </div>
 {table_html}
-<div class="footer">FinanceTracker — Capital Gains Statement | Generated automatically. Verify figures against broker statements before filing.</div>
+<div class="footer">FinanceTracker — Capital Gains Statement
+| Generated automatically. Verify figures against broker statements before filing.</div>
 </body></html>"""
 
     return html
@@ -511,7 +521,7 @@ async def generate_portfolio_pdf(
 
     Requires the ``xhtml2pdf`` package. Raises ImportError if not installed.
     """
-    from xhtml2pdf import pisa  # noqa: F811
+    from xhtml2pdf import pisa
 
     html_content = await generate_portfolio_report_html(portfolio_id, user_name, db)
     output = io.BytesIO()

@@ -1,4 +1,7 @@
-"""Multi-Asset Net Worth Service — aggregate net worth across stocks, crypto, gold, FD, bonds, real estate."""
+"""Multi-Asset Net Worth Service.
+
+Aggregate net worth across stocks, crypto, gold, FD, bonds, and real estate.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.asset import Asset
-from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.user import User
 from app.services import forex_service

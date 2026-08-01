@@ -14,7 +14,6 @@ from app.models.transaction import Transaction
 from app.services import forex_service
 from app.services.alert_service import determine_action_needed
 
-
 # ---------------------------------------------------------------------------
 # Cumulative holding recalculation
 # ---------------------------------------------------------------------------

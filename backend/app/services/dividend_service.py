@@ -460,7 +460,10 @@ async def get_dividend_forecast(user_id: int, db: AsyncSession) -> dict:
         )
 
     monthly = [
-        {"month": f"{y:04d}-{m:02d}", "amount": round(monthly_totals.get(f"{y:04d}-{m:02d}", 0.0), 2)}
+        {
+            "month": f"{y:04d}-{m:02d}",
+            "amount": round(monthly_totals.get(f"{y:04d}-{m:02d}", 0.0), 2),
+        }
         for (y, m) in forward_months
     ]
 

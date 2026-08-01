@@ -206,7 +206,11 @@ async def export_xlsx_workbook(
     return Response(
         content=workbook_bytes,
         media_type=_EXCEL_CONTENT_TYPE,
-        headers={"Content-Disposition": f"attachment; filename=portfolio_{portfolio_id}_workbook.xlsx"},
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=portfolio_{portfolio_id}_workbook.xlsx"
+            )
+        },
     )
 
 
@@ -227,7 +231,11 @@ async def export_bundle(
     return Response(
         content=zip_bytes,
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename=portfolio_{portfolio_id}_export.zip"},
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=portfolio_{portfolio_id}_export.zip"
+            )
+        },
     )
 
 
@@ -535,7 +543,11 @@ async def export_json(
     return Response(
         content=content,
         media_type="application/json",
-        headers={"Content-Disposition": f"attachment; filename=portfolio_{portfolio_id}_backup.json"},
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=portfolio_{portfolio_id}_backup.json"
+            )
+        },
     )
 
 
@@ -593,7 +605,11 @@ async def export_pdf(
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=portfolio_{portfolio_id}_report.pdf"},
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=portfolio_{portfolio_id}_report.pdf"
+            )
+        },
     )
 
 

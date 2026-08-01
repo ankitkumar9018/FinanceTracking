@@ -57,7 +57,11 @@ class GoalResponse(BaseModel):
             target_date=goal.target_date,  # type: ignore[union-attr]
             category=goal.category,  # type: ignore[union-attr]
             linked_portfolio_id=goal.linked_portfolio_id,  # type: ignore[union-attr]
-            monthly_sip_needed=float(goal.monthly_sip_needed) if goal.monthly_sip_needed is not None else None,  # type: ignore[union-attr]
+            monthly_sip_needed=(
+                float(goal.monthly_sip_needed)  # type: ignore[union-attr]
+                if goal.monthly_sip_needed is not None
+                else None
+            ),
             is_achieved=goal.is_achieved,  # type: ignore[union-attr]
             created_at=goal.created_at,  # type: ignore[union-attr]
             updated_at=goal.updated_at,  # type: ignore[union-attr]

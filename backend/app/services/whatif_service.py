@@ -72,7 +72,7 @@ async def simulate(
 
     try:
         hist = await asyncio.wait_for(asyncio.to_thread(_fetch_sync), timeout=15.0)
-    except asyncio.TimeoutError as e:
+    except TimeoutError as e:
         raise ValueError(f"Timeout fetching data for {symbol}") from e
     except Exception as e:
         raise ValueError(f"Failed to fetch data for {symbol}: {e}") from e

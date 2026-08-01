@@ -22,8 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dividend import Dividend
 from app.models.holding import Holding
-from app.models.portfolio import Portfolio
-from app.models.transaction import Transaction
 from app.services.market_data_service import _ticker_symbol
 from app.services.recurring_detection_service import detect_recurring
 
@@ -140,7 +138,11 @@ async def get_calendar_events(
                 events.append(
                     {
                         "type": EVENT_DIVIDEND,
-                        "date": div.payment_date.isoformat() if div.payment_date else div.ex_date.isoformat(),
+                        "date": (
+                            div.payment_date.isoformat()
+                            if div.payment_date
+                            else div.ex_date.isoformat()
+                        ),
                         "stock_symbol": holding.stock_symbol if holding else "N/A",
                         "stock_name": holding.stock_name if holding else "N/A",
                         "exchange": holding.exchange if holding else "",

@@ -11,10 +11,10 @@ from app.models.fno_position import FnoPosition
 from app.models.portfolio import Portfolio
 from app.models.user import User
 from app.schemas.fno import (
+    FnoPnlSummary,
     FnoPositionCreate,
     FnoPositionResponse,
     FnoPositionUpdate,
-    FnoPnlSummary,
 )
 from app.services.fno_service import (
     create_position,
@@ -211,7 +211,9 @@ async def modify_position(
         "quantity": position.quantity,
         "entry_price": float(position.entry_price),
         "exit_price": float(position.exit_price) if position.exit_price is not None else None,
-        "current_price": float(position.current_price) if position.current_price is not None else None,
+        "current_price": (
+            float(position.current_price) if position.current_price is not None else None
+        ),
         "side": position.side,
         "status": position.status,
         "notes": position.notes,

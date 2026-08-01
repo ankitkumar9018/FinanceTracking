@@ -15,7 +15,6 @@ from app.api.deps import get_current_user
 from app.database import get_db
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
-from app.models.transaction import Transaction
 from app.models.user import User
 from app.schemas.portfolio import (
     PortfolioCreate,
@@ -23,9 +22,9 @@ from app.schemas.portfolio import (
     PortfolioSummaryResponse,
     PortfolioUpdate,
 )
+from app.services.benchmark_service import compare_with_benchmark
 from app.services.portfolio_service import get_portfolio_summary
 from app.services.xirr_service import CashFlow, xirr
-from app.services.benchmark_service import compare_with_benchmark
 
 router = APIRouter()
 
@@ -290,7 +289,7 @@ async def compare_benchmark(
 ):
     """Compare portfolio performance against a benchmark index."""
     # Verify ownership
-    portfolio = await _get_user_portfolio(portfolio_id, user, db)
+    await _get_user_portfolio(portfolio_id, user, db)
 
     # Get all holdings for this portfolio
     result = await db.execute(

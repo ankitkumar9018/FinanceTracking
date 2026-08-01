@@ -10,7 +10,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.services.market_data_service import _ticker_symbol
 
@@ -71,7 +70,11 @@ async def get_esg_scores(symbols: list[str], exchange: str = "NSE") -> list[dict
                 # sustainability is a DataFrame with index like
                 # 'totalEsg', 'environmentScore', 'socialScore', 'governanceScore', etc.
                 # Values are in the first (and usually only) column
-                data = sustainability.iloc[:, 0] if len(sustainability.columns) > 0 else sustainability
+                data = (
+                    sustainability.iloc[:, 0]
+                    if len(sustainability.columns) > 0
+                    else sustainability
+                )
 
                 total = _safe_float(data, "totalEsg")
                 env = _safe_float(data, "environmentScore")

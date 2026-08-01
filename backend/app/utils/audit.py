@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,7 +26,7 @@ async def audit_log(
     and to the notification_log table (reusing existing infrastructure).
     A dedicated audit_log table can be added via migration if needed.
     """
-    timestamp = datetime.now(timezone.utc).isoformat()
+    timestamp = datetime.now(UTC).isoformat()
     log_entry = (
         f"[AUDIT] user={user_id} action={action} "
         f"resource={resource_type}:{resource_id} "

@@ -145,7 +145,7 @@ async def get_hedge_estimate(
         metrics = await compute_portfolio_risk(user.id, portfolio_id, db)
         if metrics.beta is not None:
             beta = metrics.beta
-    except Exception:  # noqa: BLE001 - beta is best-effort; never block the estimate
+    except Exception:
         beta = 1.0
 
     resolved_index_price = index_price if index_price > 0 else DEFAULT_INDEX_PRICE

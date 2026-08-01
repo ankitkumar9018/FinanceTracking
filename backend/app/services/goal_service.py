@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from datetime import date
 
 from sqlalchemy import select
@@ -262,7 +261,9 @@ async def sync_goal_from_portfolio(
 ) -> Goal:
     """Update current_amount from the linked portfolio's total value.
 
-    Total value = sum(holding.cumulative_quantity * (holding.current_price or holding.average_price))
+    Total value = sum(
+        holding.cumulative_quantity * (holding.current_price or holding.average_price)
+    )
     for all holdings in the linked portfolio.
     """
     goal = await _get_goal_or_raise(goal_id, user_id, db)

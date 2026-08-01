@@ -96,23 +96,32 @@ def _region_for_exchange(exchange: str | None) -> str:
 # Last reviewed: 2026-07 (covers ~2026-07 through 2026-10).
 CURATED_MACRO_EVENTS: list[dict] = [
     # ── Central-bank rate decisions ──────────────────────────────────
-    {"date": "2026-07-23", "region": "Eurozone", "event": "ECB rate decision", "importance": "high"},
+    {"date": "2026-07-23", "region": "Eurozone",
+     "event": "ECB rate decision", "importance": "high"},
     {"date": "2026-07-29", "region": "US", "event": "US FOMC rate decision", "importance": "high"},
-    {"date": "2026-08-06", "region": "India", "event": "RBI MPC rate decision", "importance": "high"},
-    {"date": "2026-09-10", "region": "Eurozone", "event": "ECB rate decision", "importance": "high"},
+    {"date": "2026-08-06", "region": "India",
+     "event": "RBI MPC rate decision", "importance": "high"},
+    {"date": "2026-09-10", "region": "Eurozone",
+     "event": "ECB rate decision", "importance": "high"},
     {"date": "2026-09-16", "region": "US", "event": "US FOMC rate decision", "importance": "high"},
-    {"date": "2026-10-01", "region": "India", "event": "RBI MPC rate decision", "importance": "high"},
+    {"date": "2026-10-01", "region": "India",
+     "event": "RBI MPC rate decision", "importance": "high"},
     # ── Inflation (CPI) prints ───────────────────────────────────────
     {"date": "2026-08-12", "region": "US", "event": "US CPI (July)", "importance": "high"},
     {"date": "2026-08-12", "region": "India", "event": "India CPI (July)", "importance": "medium"},
     {"date": "2026-09-11", "region": "US", "event": "US CPI (August)", "importance": "high"},
-    {"date": "2026-09-14", "region": "India", "event": "India CPI (August)", "importance": "medium"},
-    {"date": "2026-10-13", "region": "India", "event": "India CPI (September)", "importance": "medium"},
+    {"date": "2026-09-14", "region": "India",
+     "event": "India CPI (August)", "importance": "medium"},
+    {"date": "2026-10-13", "region": "India",
+     "event": "India CPI (September)", "importance": "medium"},
     {"date": "2026-10-15", "region": "US", "event": "US CPI (September)", "importance": "high"},
     # ── US jobs report (Nonfarm Payrolls, first Friday) ──────────────
-    {"date": "2026-08-07", "region": "US", "event": "US jobs report (July NFP)", "importance": "high"},
-    {"date": "2026-09-04", "region": "US", "event": "US jobs report (August NFP)", "importance": "high"},
-    {"date": "2026-10-02", "region": "US", "event": "US jobs report (September NFP)", "importance": "high"},
+    {"date": "2026-08-07", "region": "US",
+     "event": "US jobs report (July NFP)", "importance": "high"},
+    {"date": "2026-09-04", "region": "US",
+     "event": "US jobs report (August NFP)", "importance": "high"},
+    {"date": "2026-10-02", "region": "US",
+     "event": "US jobs report (September NFP)", "importance": "high"},
 ]
 
 
@@ -135,7 +144,7 @@ def _parse_date(value) -> date | None:
             return value
         if hasattr(value, "date"):
             return value.date()
-        if isinstance(value, (int, float)):
+        if isinstance(value, int | float):
             # yfinance .info exposes some dates as unix epoch seconds.
             if value != value:  # NaN
                 return None
@@ -160,7 +169,7 @@ def _calendar_values(calendar, key: str) -> list:
         raw = calendar.get(key)
         if raw is None:
             return []
-        if isinstance(raw, (list, tuple)):
+        if isinstance(raw, list | tuple):
             return list(raw)
         return [raw]
     # DataFrame form.

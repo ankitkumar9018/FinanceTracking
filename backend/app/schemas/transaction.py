@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,7 +21,7 @@ class TransactionCreate(BaseModel):
 
 class TransactionPatch(BaseModel):
     transaction_type: Literal["BUY", "SELL"] | None = None
-    date: Optional[_dt.date] = None
+    date: _dt.date | None = None
     quantity: float | None = Field(default=None, gt=0)
     price: float | None = Field(default=None, gt=0)
     brokerage: float | None = Field(default=None, ge=0)

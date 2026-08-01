@@ -148,7 +148,7 @@ async def detect_recurring(
 
         holding = holdings[holding_id]
         last_date = dates[-1]
-        next_expected = last_date + timedelta(days=int(round(avg_interval)))
+        next_expected = last_date + timedelta(days=round(avg_interval))
 
         detected.append(
             {

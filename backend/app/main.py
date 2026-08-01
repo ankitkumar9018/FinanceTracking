@@ -146,7 +146,7 @@ if _static_dir:
     # Serve static files using middleware instead of app.mount("/").
     # app.mount("/") would swallow ALL requests including /api/v1/*.
     # This middleware only serves static files for non-API paths.
-    from starlette.responses import FileResponse as _FileResponse, Response as _Response
+    from starlette.responses import FileResponse as _FileResponse
 
     @app.middleware("http")
     async def serve_static_frontend(request, call_next):

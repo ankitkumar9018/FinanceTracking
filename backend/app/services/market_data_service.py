@@ -91,7 +91,7 @@ async def fetch_current_price(symbol: str, exchange: str = "NSE") -> dict:
 
     try:
         data = await asyncio.wait_for(asyncio.to_thread(_fetch_sync), timeout=15.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("yfinance timeout fetching %s", ticker_str)
         return {
             "symbol": symbol, "exchange": exchange, "current_price": None,
@@ -163,7 +163,7 @@ async def fetch_historical_data(
         hist: pd.DataFrame = await asyncio.wait_for(
             asyncio.to_thread(_fetch_hist_sync), timeout=15.0
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("yfinance timeout fetching history for %s", ticker_str)
         return []
 
@@ -356,7 +356,11 @@ async def refresh_all_prices(
     today = datetime.now(UTC).date()
 
     for holding, fetch_result in zip(holdings, fetch_results):
-        if isinstance(fetch_result, Exception) or not isinstance(fetch_result, dict) or not fetch_result.get("ok"):
+        if (
+            isinstance(fetch_result, Exception)
+            or not isinstance(fetch_result, dict)
+            or not fetch_result.get("ok")
+        ):
             failed += 1
             continue
 

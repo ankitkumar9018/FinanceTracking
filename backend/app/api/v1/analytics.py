@@ -28,7 +28,7 @@ from app.services.concentration_service import analyze_concentration
 from app.services.drift_service import check_drift, set_target_allocation
 from app.services.economic_calendar_service import get_economic_calendar
 from app.services.freshness_service import get_data_freshness
-from app.services.market_data_service import _EXCHANGE_SUFFIX, fetch_historical_data
+from app.services.market_data_service import fetch_historical_data
 from app.services.recurring_detection_service import detect_recurring
 from app.services.sector_rotation_service import get_sector_rotation
 from app.services.sheets_export_service import generate_portfolio_csv
@@ -505,7 +505,6 @@ async def get_monthly_returns(
         return {"returns": []}
 
     try:
-        import numpy as np
         from datetime import datetime
 
         # Fetch 13 months of history (to compute 12 monthly returns)
@@ -538,7 +537,11 @@ async def get_monthly_returns(
             w = weights.get(sym, 0)
             prev_close = None
             for d in hist:
-                dt = datetime.strptime(d["date"], "%Y-%m-%d").date() if isinstance(d["date"], str) else d["date"]
+                dt = (
+                    datetime.strptime(d["date"], "%Y-%m-%d").date()
+                    if isinstance(d["date"], str)
+                    else d["date"]
+                )
                 month_key = dt.strftime("%Y-%m")
                 close = d["close"]
                 if prev_close and prev_close != 0:

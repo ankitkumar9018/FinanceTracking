@@ -10,8 +10,8 @@ from __future__ import annotations
 import json
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import AsyncIterator
 
 import httpx
 
@@ -111,8 +111,9 @@ class OllamaProvider(LLMProvider):
         for m in messages:
             formatted.append({"role": m.role, "content": m.content})
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
+        async with (
+            httpx.AsyncClient(timeout=120.0) as client,
+            client.stream(
                 "POST",
                 f"{self.base_url}/api/chat",
                 json={
@@ -120,16 +121,17 @@ class OllamaProvider(LLMProvider):
                     "messages": formatted,
                     "stream": True,
                 },
-            ) as resp:
-                async for line in resp.aiter_lines():
-                    if line:
-                        try:
-                            data = json.loads(line)
-                            content = data.get("message", {}).get("content", "")
-                            if content:
-                                yield content
-                        except json.JSONDecodeError:
-                            continue
+            ) as resp,
+        ):
+            async for line in resp.aiter_lines():
+                if line:
+                    try:
+                        data = json.loads(line)
+                        content = data.get("message", {}).get("content", "")
+                        if content:
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
 
 
 class OpenAIProvider(LLMProvider):
@@ -194,8 +196,9 @@ class OpenAIProvider(LLMProvider):
         for m in messages:
             formatted.append({"role": m.role, "content": m.content})
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            async with client.stream(
+        async with (
+            httpx.AsyncClient(timeout=60.0) as client,
+            client.stream(
                 "POST",
                 "https://api.openai.com/v1/chat/completions",
                 headers={
@@ -207,17 +210,18 @@ class OpenAIProvider(LLMProvider):
                     "messages": formatted,
                     "stream": True,
                 },
-            ) as resp:
-                async for line in resp.aiter_lines():
-                    if line.startswith("data: ") and line != "data: [DONE]":
-                        try:
-                            data = json.loads(line[6:])
-                            delta = data["choices"][0].get("delta", {})
-                            content = delta.get("content", "")
-                            if content:
-                                yield content
-                        except (json.JSONDecodeError, KeyError, IndexError):
-                            continue
+            ) as resp,
+        ):
+            async for line in resp.aiter_lines():
+                if line.startswith("data: ") and line != "data: [DONE]":
+                    try:
+                        data = json.loads(line[6:])
+                        delta = data["choices"][0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            yield content
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
 
 
 class AnthropicProvider(LLMProvider):

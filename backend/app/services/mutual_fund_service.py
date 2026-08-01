@@ -355,7 +355,11 @@ def _sync_fetch_constituents(ticker_str: str) -> list[dict] | None:
 
         cols = list(top.columns)
         pct_col = next(
-            (c for c in cols if str(c).lower().replace(" ", "") in ("holdingpercent", "percent", "weight")),
+            (
+                c
+                for c in cols
+                if str(c).lower().replace(" ", "") in ("holdingpercent", "percent", "weight")
+            ),
             None,
         )
         name_col = next((c for c in cols if str(c).lower() == "name"), None)

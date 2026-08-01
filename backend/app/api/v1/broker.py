@@ -12,8 +12,8 @@ from app.brokers import BROKER_REGISTRY
 from app.database import get_db
 from app.models.user import User
 from app.schemas.broker import (
-    BrokerConnectRequest,
     BrokerConnectionResponse,
+    BrokerConnectRequest,
     BrokerStatusResponse,
     BrokerSyncResponse,
 )
@@ -171,7 +171,7 @@ async def list_available_brokers(
         # Detect stub adapters by checking if connect raises NotImplementedError
         is_stub = False
         try:
-            instance = cls()
+            cls()
             # Check if all abstract methods raise NotImplementedError
             # We look at the class itself — stubs have a simple pattern
             import inspect

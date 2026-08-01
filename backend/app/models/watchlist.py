@@ -65,9 +65,10 @@ class WatchlistItem(Base):
 
     # ── Relationships ──────────────────────────────────────────────
     user: Mapped[User] = relationship(back_populates="watchlist_items")
-    alerts: Mapped[list[Alert]] = relationship(
-        back_populates="watchlist_item", cascade="all, delete-orphan"
-    )
+    # Default cascade (no delete-orphan): an alert is owned by the user, not the
+    # watchlist item. The FK is ondelete="SET NULL", so removing a watchlist item
+    # detaches its alerts rather than deleting the user's alerts.
+    alerts: Mapped[list[Alert]] = relationship(back_populates="watchlist_item")
 
     def __repr__(self) -> str:
         return f"<WatchlistItem id={self.id} symbol={self.stock_symbol!r}>"

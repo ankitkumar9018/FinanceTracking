@@ -35,7 +35,7 @@ from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.transaction import Transaction
 from app.models.user import User
-
+from app.models.watchlist import WatchlistItem
 
 # ---------------------------------------------------------------------------
 # 1. Alert survives holding delete (cascade fix)
@@ -104,6 +104,51 @@ async def test_alert_survives_holding_delete(db: AsyncSession):
     ).scalar_one_or_none()
     assert surviving is not None
     assert surviving.holding_id is None
+
+
+async def test_alert_survives_watchlist_item_delete(db: AsyncSession):
+    """Deleting a watchlist item must leave the user's alert intact (NULL FK)."""
+    user = User(email="wl-alert@example.com", password_hash="x", display_name="WL")
+    db.add(user)
+    await db.flush()
+
+    item = WatchlistItem(
+        user_id=user.id, stock_symbol="TCS", stock_name="TCS", exchange="NSE",
+    )
+    db.add(item)
+    await db.flush()
+
+    alert = Alert(
+        user_id=user.id,
+        watchlist_item_id=item.id,
+        alert_type="PRICE_RANGE",
+        condition={"min": 3000, "max": 4000},
+    )
+    db.add(alert)
+    await db.flush()
+    alert_id = alert.id
+    item_id = item.id
+
+    # Eager-load so the ORM nullifies the FK (test SQLite has FK enforcement off).
+    to_delete = (
+        await db.execute(
+            select(WatchlistItem)
+            .options(selectinload(WatchlistItem.alerts))
+            .where(WatchlistItem.id == item_id)
+        )
+    ).scalar_one()
+    await db.delete(to_delete)
+    await db.flush()
+
+    assert (
+        await db.execute(select(WatchlistItem).where(WatchlistItem.id == item_id))
+    ).scalar_one_or_none() is None
+
+    surviving = (
+        await db.execute(select(Alert).where(Alert.id == alert_id))
+    ).scalar_one_or_none()
+    assert surviving is not None
+    assert surviving.watchlist_item_id is None
 
 
 # ---------------------------------------------------------------------------

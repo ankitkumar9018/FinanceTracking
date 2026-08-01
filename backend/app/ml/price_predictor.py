@@ -82,7 +82,7 @@ def _prepare_features(
     series. Fitting the scaler over the entire series before the split leaks
     test-period range into the model and inflates the reported R²/accuracy.
 
-    Returns ``(X, y, mins, maxs, ranges, split)`` where ``split`` is the
+    Returns ``(x, y, mins, maxs, ranges, split)`` where ``split`` is the
     train/test window boundary the caller must reuse.
     """
     features = df[["open", "high", "low", "close", "volume"]].values
@@ -100,13 +100,13 @@ def _prepare_features(
     ranges[ranges == 0] = 1  # avoid divide by zero
     normalized = (features - mins) / ranges
 
-    X, y = [], []
+    x, y = [], []
     for i in range(lookback, len(normalized)):
-        X.append(normalized[i - lookback : i])
+        x.append(normalized[i - lookback : i])
         # Target: next day's close (normalized)
         y.append(normalized[i, 3])  # close column
 
-    return np.array(X), np.array(y), mins, maxs, ranges, split
+    return np.array(x), np.array(y), mins, maxs, ranges, split
 
 
 async def predict_prices(
@@ -171,9 +171,9 @@ async def predict_prices(
 
     current_price = df["close"].iloc[-1]
 
-    X, y, mins, maxs, ranges, split = _prepare_features(df, lookback)
+    x, y, mins, maxs, ranges, split = _prepare_features(df, lookback)
 
-    if len(X) < 50:
+    if len(x) < 50:
         return PredictionResult(
             symbol=symbol,
             current_price=current_price,
@@ -185,9 +185,9 @@ async def predict_prices(
 
     # Train/test split — boundary already used to fit the scaler above, so no
     # test-period data leaked into normalization.
-    X_train = torch.FloatTensor(X[:split])
+    x_train = torch.FloatTensor(x[:split])
     y_train = torch.FloatTensor(y[:split]).unsqueeze(1)
-    X_test = torch.FloatTensor(X[split:])
+    x_test = torch.FloatTensor(x[split:])
     y_test = torch.FloatTensor(y[split:]).unsqueeze(1)
 
     # Train model
@@ -196,9 +196,9 @@ async def predict_prices(
     loss_fn = nn.MSELoss()
 
     model.train()
-    for epoch in range(50):  # Quick training
+    for _ in range(50):  # Quick training
         optimizer.zero_grad()
-        output = model(X_train)
+        output = model(x_train)
         loss = loss_fn(output, y_train)
         loss.backward()
         optimizer.step()
@@ -206,15 +206,14 @@ async def predict_prices(
     # Evaluate
     model.eval()
     with torch.no_grad():
-        test_pred = model(X_test)
-        test_loss = loss_fn(test_pred, y_test).item()
+        test_pred = model(x_test)
         # Simple R² approximation
         ss_res = ((y_test - test_pred) ** 2).sum().item()
         ss_tot = ((y_test - y_test.mean()) ** 2).sum().item()
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
 
     # Predict future
-    last_sequence = torch.FloatTensor(X[-1:])
+    last_sequence = torch.FloatTensor(x[-1:])
     predictions = []
 
     with torch.no_grad():

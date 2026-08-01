@@ -18,12 +18,16 @@ class DividendCreate(BaseModel):
     reinvest_shares: float | None = None
 
     @model_validator(mode="after")
-    def _validate_drip_fields(self) -> "DividendCreate":
+    def _validate_drip_fields(self) -> DividendCreate:
         if self.is_reinvested:
             if self.reinvest_price is None or self.reinvest_price <= 0:
-                raise ValueError("reinvest_price is required and must be > 0 when is_reinvested is True")
+                raise ValueError(
+                    "reinvest_price is required and must be > 0 when is_reinvested is True"
+                )
             if self.reinvest_shares is None or self.reinvest_shares <= 0:
-                raise ValueError("reinvest_shares is required and must be > 0 when is_reinvested is True")
+                raise ValueError(
+                    "reinvest_shares is required and must be > 0 when is_reinvested is True"
+                )
         return self
 
 

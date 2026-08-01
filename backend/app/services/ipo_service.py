@@ -21,7 +21,9 @@ _cache: dict[str, tuple[float, list[dict]]] = {}
 _CACHE_TTL_SECONDS = 300  # 5 minutes
 
 
-def _classify_status(open_date: str | None, close_date: str | None, listing_date: str | None) -> str:
+def _classify_status(
+    open_date: str | None, close_date: str | None, listing_date: str | None
+) -> str:
     """Classify IPO status based on dates relative to today."""
     today = datetime.now().date()
 
@@ -110,12 +112,20 @@ async def _fetch_from_investorgain() -> list[dict]:
             close_date = _parse_date(item.get("close_date") or item.get("closeDate"))
             listing_date = _parse_date(item.get("listing_date") or item.get("listingDate"))
 
-            price_band = item.get("price_band") or item.get("priceBand") or item.get("price_range", "")
+            price_band = (
+                item.get("price_band") or item.get("priceBand") or item.get("price_range", "")
+            )
             lot_size = _safe_int(item.get("lot_size") or item.get("lotSize"))
             listing_price = _safe_float(item.get("listing_price") or item.get("listingPrice"))
             issue_price = _safe_float(item.get("issue_price") or item.get("issuePrice"))
-            current_price = _safe_float(item.get("current_price") or item.get("cmp") or item.get("ltp"))
-            subscription = _safe_float(item.get("subscription_times") or item.get("subscription") or item.get("total_subscription"))
+            current_price = _safe_float(
+                item.get("current_price") or item.get("cmp") or item.get("ltp")
+            )
+            subscription = _safe_float(
+                item.get("subscription_times")
+                or item.get("subscription")
+                or item.get("total_subscription")
+            )
 
             if not name:
                 continue
@@ -185,10 +195,7 @@ async def get_ipos(status: str | None = None, exchange: str = "NSE") -> list[dic
     now = datetime.now().timestamp()
     if cache_key in _cache:
         cached_time, cached_data = _cache[cache_key]
-        if now - cached_time < _CACHE_TTL_SECONDS:
-            ipos = cached_data
-        else:
-            ipos = []
+        ipos = cached_data if now - cached_time < _CACHE_TTL_SECONDS else []
     else:
         ipos = []
 
@@ -219,6 +226,8 @@ async def get_ipos(status: str | None = None, exchange: str = "NSE") -> list[dic
 
     # Sort: upcoming first by date, then open, then listed
     status_order = {"upcoming": 0, "open": 1, "listed": 2}
-    ipos.sort(key=lambda x: (status_order.get(x.get("status", ""), 9), x.get("open_date", "") or ""))
+    ipos.sort(
+        key=lambda x: (status_order.get(x.get("status", ""), 9), x.get("open_date", "") or "")
+    )
 
     return ipos
