@@ -25,7 +25,10 @@ export default defineConfig({
   webServer: {
     command: "pnpm dev",
     url: "http://localhost:3000",
-    reuseExistingServer: !process.env.CI,
+    // Reuse an already-running server. In CI the workflow starts the frontend
+    // itself (with the correct NEXT_PUBLIC_API_URL for the e2e backend), so
+    // Playwright must reuse it rather than spawn a second `pnpm dev` on :3000.
+    reuseExistingServer: true,
     timeout: 120000,
   },
 });
