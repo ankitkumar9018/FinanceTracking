@@ -19,10 +19,10 @@ class MutualFundCreate(BaseModel):
 
 class MutualFundUpdate(BaseModel):
     scheme_name: str | None = None
-    units: float | None = None
-    nav: float | None = None
-    invested_amount: float | None = None
-    current_value: float | None = None
+    units: float | None = Field(default=None, gt=0)
+    nav: float | None = Field(default=None, gt=0)
+    invested_amount: float | None = Field(default=None, gt=0)
+    current_value: float | None = Field(default=None, ge=0)
 
 
 class MutualFundResponse(BaseModel):

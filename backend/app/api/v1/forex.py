@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -12,6 +13,8 @@ from app.database import get_db
 from app.models.user import User
 from app.schemas.forex import ConversionRequest, ConversionResponse, ForexRateResponse
 from app.services.forex_service import convert_amount, get_exchange_rate, get_rate_history
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -31,11 +34,14 @@ async def current_rate(
     today = date.today()
     try:
         rate = await get_exchange_rate(from_currency, to_currency, today, db)
-    except RuntimeError as exc:
+    except RuntimeError:
+        logger.exception(
+            "Failed to fetch exchange rate for %s/%s", from_currency, to_currency
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(exc),
-        ) from exc
+            detail="Failed to fetch exchange rate",
+        ) from None
 
     return {
         "from_currency": from_currency.upper(),
@@ -60,11 +66,16 @@ async def convert(
             to_currency=body.to_currency,
             db=db,
         )
-    except RuntimeError as exc:
+    except RuntimeError:
+        logger.exception(
+            "Currency conversion failed for %s/%s",
+            body.from_currency,
+            body.to_currency,
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(exc),
-        ) from exc
+            detail="Currency conversion failed",
+        ) from None
     return result
 
 

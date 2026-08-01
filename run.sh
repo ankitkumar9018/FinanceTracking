@@ -266,8 +266,18 @@ EOF
     fi
 
     log_info "Running database migrations..."
-    uv run alembic upgrade head 2>&1 | grep -E "^(Running|INFO)" | head -3 || true
-    log_success "Database ready"
+    # Do NOT hide a failed migration behind the pipe or `|| true`: starting the
+    # backend on a broken/partial schema causes confusing runtime errors. Capture
+    # alembic's output AND its real exit code, and abort startup on failure.
+    if migration_output=$(uv run alembic upgrade head 2>&1); then
+        echo "$migration_output" | grep -E "^(Running|INFO)" | head -3 || true
+        log_success "Database ready"
+    else
+        alembic_status=$?
+        log_error "Database migration failed (alembic exit $alembic_status). Aborting startup."
+        echo "$migration_output" | tail -20
+        exit 1
+    fi
 
     # -------------------------------------------------------------------------
     # Step 5: Start services

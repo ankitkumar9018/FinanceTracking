@@ -69,7 +69,14 @@ export default function DashboardPage() {
           )}`
         );
         if (cancelled) return;
-        if (res && res.display_currency && res.total_current_value_display != null) {
+        // Require BOTH totals — the P&L card subtracts invested from current,
+        // so a missing total_invested_display would otherwise render "₹NaN".
+        if (
+          res &&
+          res.display_currency &&
+          res.total_current_value_display != null &&
+          res.total_invested_display != null
+        ) {
           setConverted(res as ConvertedSummary);
         } else {
           setConverted(null);

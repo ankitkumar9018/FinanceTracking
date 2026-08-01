@@ -146,6 +146,9 @@ async def create_goal(
     db: AsyncSession,
 ) -> Goal:
     """Create a new financial goal and auto-calculate monthly SIP needed."""
+    if data.linked_portfolio_id is not None:
+        await _verify_portfolio_owned(data.linked_portfolio_id, user_id, db)
+
     months = _months_until(data.target_date)
     sip = _calculate_monthly_sip(
         target=data.target_amount,
@@ -185,6 +188,12 @@ async def update_goal(
     update_fields = data.model_dump(exclude_unset=True)
     if "category" in update_fields and update_fields["category"] is not None:
         update_fields["category"] = update_fields["category"].upper()
+
+    # A client-supplied linked_portfolio_id must belong to the same user.
+    if update_fields.get("linked_portfolio_id") is not None:
+        await _verify_portfolio_owned(
+            update_fields["linked_portfolio_id"], user_id, db
+        )
 
     for field, value in update_fields.items():
         setattr(goal, field, value)
@@ -320,3 +329,25 @@ async def _get_goal_or_raise(
     if goal is None:
         raise ValueError("Goal not found or does not belong to the current user")
     return goal
+
+
+async def _verify_portfolio_owned(
+    portfolio_id: int,
+    user_id: int,
+    db: AsyncSession,
+) -> None:
+    """Ensure ``portfolio_id`` exists and belongs to ``user_id``.
+
+    Raises ValueError otherwise so a client can't link a goal to another
+    user's portfolio (the route maps ValueError to a 400/404).
+    """
+    result = await db.execute(
+        select(Portfolio).where(
+            Portfolio.id == portfolio_id,
+            Portfolio.user_id == user_id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise ValueError(
+            "Linked portfolio not found or does not belong to the current user"
+        )

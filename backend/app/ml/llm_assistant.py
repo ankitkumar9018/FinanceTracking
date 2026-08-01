@@ -301,8 +301,11 @@ class GoogleProvider(LLMProvider):
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-pro:generateContent?key={self.api_key}",
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                "gemini-pro:generateContent",
+                # Pass the key as a header, not a ?key= query param, so it can
+                # never leak into request URLs surfaced in exception messages/logs.
+                headers={"x-goog-api-key": self.api_key},
                 json=body,
             )
             resp.raise_for_status()

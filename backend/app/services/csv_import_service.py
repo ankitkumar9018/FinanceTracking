@@ -69,15 +69,68 @@ def _parse_date(value: object) -> date | None:
     return None
 
 
+def _normalize_numeric_str(s: str) -> str:
+    """Normalize a numeric string to a Python-parseable form, handling both
+    US (``1,234.56``) and European (``1.234,56`` / ``1234,56``) conventions.
+
+    Rules:
+    - Both ``.`` and ``,`` present → the *last* one is the decimal separator:
+      ``1.234,56`` (European) → ``1234.56``; ``1,234.56`` (US) → ``1234.56``.
+    - Only ``,`` present → a single trailing group of not-3 digits is treated as
+      a decimal comma (``1234,56`` → ``1234.56``, ``1,5`` → ``1.5``); otherwise
+      commas are thousands separators and dropped (``1,234`` → ``1234``).
+    - Only ``.`` present → multiple dots are thousands separators and dropped
+      (``1.234.567`` → ``1234567``); a single dot stays a US decimal point so
+      existing ``1234.56`` parsing is unaffected.
+    """
+    s = s.strip()
+    has_dot = "." in s
+    has_comma = "," in s
+
+    if has_dot and has_comma:
+        if s.rfind(",") > s.rfind("."):
+            # European: dot = thousands, comma = decimal
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            # US: comma = thousands, dot = decimal
+            s = s.replace(",", "")
+    elif has_comma:
+        parts = s.split(",")
+        # Single comma with a non-3-digit tail → decimal comma; otherwise the
+        # comma(s) are thousands separators and dropped.
+        decimal_comma = len(parts) == 2 and len(parts[1]) != 3
+        s = s.replace(",", ".") if decimal_comma else s.replace(",", "")
+    elif has_dot and s.count(".") > 1:
+        # Multiple dots → thousands separators (European grouping)
+        s = s.replace(".", "")
+
+    return s
+
+
 def _safe_float(value: object) -> float | None:
-    """Convert value to float, return None on failure."""
+    """Convert value to float, return None on failure.
+
+    Strips common currency symbols and understands both US and European
+    number formatting (see ``_normalize_numeric_str``).
+    """
     if value is None:
         return None
+    if isinstance(value, int | float):
+        return float(value)
     try:
-        s = str(value).replace(",", "").replace("₹", "").replace("$", "").replace("€", "").strip()
+        s = (
+            str(value)
+            .replace("₹", "")
+            .replace("$", "")
+            .replace("€", "")
+            .replace("£", "")
+            .replace("\xa0", "")  # non-breaking space (common thousands sep)
+            .replace(" ", "")
+            .strip()
+        )
         if not s:
             return None
-        return float(s)
+        return float(_normalize_numeric_str(s))
     except (ValueError, TypeError):
         return None
 
@@ -90,9 +143,26 @@ def _parse_bool(value: object) -> bool:
     return s in ("yes", "true", "1", "y")
 
 
+def _decode_csv_bytes(file_bytes: bytes) -> str:
+    """Decode raw CSV bytes using a tolerant fallback chain.
+
+    Tries ``utf-8-sig`` first (handles the BOM Excel prepends), then the common
+    Windows/Western-European single-byte encodings ``cp1252`` and ``latin-1``.
+    ``latin-1`` maps every byte, so it never raises — guaranteeing we return a
+    string instead of a 500 UnicodeDecodeError on non-UTF-8 broker exports.
+    """
+    for encoding in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            return file_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    # Should be unreachable (latin-1 accepts all bytes) — last-resort safety net.
+    return file_bytes.decode("utf-8", errors="replace")
+
+
 def _read_csv(file_bytes: bytes) -> list[dict]:
     """Read CSV bytes into a list of row dicts with normalized header names."""
-    text = file_bytes.decode("utf-8-sig")  # Handle BOM from Excel-exported CSVs
+    text = _decode_csv_bytes(file_bytes)
     reader = csv.DictReader(io.StringIO(text))
     rows: list[dict] = []
     for raw_row in reader:
@@ -146,13 +216,16 @@ def parse_csv(file_bytes: bytes) -> list[dict]:
             continue
         row["date"] = parsed_date
 
-        try:
-            row["quantity"] = float(str(qty).replace(",", ""))
-            row["price"] = float(str(price).replace(",", ""))
-            row["brokerage"] = float(str(row.get("brokerage") or "0").replace(",", ""))
-        except (ValueError, TypeError):
+        # Locale-aware parse (handles "1234,56" and "1.234,56" as well as US).
+        qty_val = _safe_float(qty)
+        price_val = _safe_float(price)
+        if qty_val is None or price_val is None:
             logger.warning("Non-numeric quantity/price in CSV row, skipping: %s", row)
             continue
+        row["quantity"] = qty_val
+        row["price"] = price_val
+        brokerage_val = _safe_float(row.get("brokerage"))
+        row["brokerage"] = brokerage_val if brokerage_val is not None else 0.0
 
         # Optional numeric fields
         for field in (

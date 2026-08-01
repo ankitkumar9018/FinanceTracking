@@ -87,8 +87,12 @@ class Holding(Base):
     dividends: Mapped[list[Dividend]] = relationship(
         back_populates="holding", cascade="all, delete-orphan"
     )
+    # Alerts are owned by the USER, not the holding: Alert.holding_id is
+    # nullable with ondelete="SET NULL". Deleting a holding must NOT destroy
+    # the user's alerts — so use the default cascade ("save-update, merge")
+    # and let the FK's SET NULL (ORM-nullify when FKs are off) govern.
     alerts: Mapped[list[Alert]] = relationship(
-        back_populates="holding", cascade="all, delete-orphan"
+        back_populates="holding", cascade="save-update, merge"
     )
 
     def __repr__(self) -> str:

@@ -204,8 +204,18 @@ fi
 
 # Run migrations if alembic is configured
 if [ -f "alembic.ini" ]; then
-    uv run alembic upgrade head 2>&1 | tail -1
-    echo -e "  ${GREEN}✓${NC} Database migrations applied"
+    # Capture alembic's output AND its real exit code — a bare `... | tail -1`
+    # masks a failed migration (the pipe reports tail's success), which would
+    # start the backend on a broken/partial schema. Abort on failure instead.
+    if migration_output=$(uv run alembic upgrade head 2>&1); then
+        echo "$migration_output" | tail -1
+        echo -e "  ${GREEN}✓${NC} Database migrations applied"
+    else
+        alembic_status=$?
+        echo "$migration_output" | tail -20
+        echo -e "  ${RED}✗${NC} Database migration failed (alembic exit $alembic_status) — aborting."
+        exit 1
+    fi
 else
     echo -e "  ${YELLOW}⚠${NC} Alembic not configured yet — tables created on startup"
 fi

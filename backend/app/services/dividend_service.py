@@ -7,7 +7,6 @@ import logging
 import math
 from collections import defaultdict
 from datetime import date, timedelta
-from decimal import Decimal
 
 import yfinance as yf
 from sqlalchemy import select
@@ -17,8 +16,10 @@ from sqlalchemy.orm import joinedload
 from app.models.dividend import Dividend
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
+from app.models.transaction import Transaction
 from app.schemas.dividend import DividendCreate
 from app.services.market_data_service import _ticker_symbol
+from app.services.portfolio_service import calculate_cumulative_holding
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,12 @@ _FORECAST_TIMEOUT_S = 12.0
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _drip_marker(dividend_id: int) -> str:
+    """Stable marker stored in a DRIP BUY transaction's ``notes`` so the
+    transaction can be found and removed when its dividend is deleted."""
+    return f"DRIP dividend #{dividend_id}"
+
 
 async def _get_holding_for_user(
     holding_id: int,
@@ -59,9 +66,15 @@ async def create_dividend(
 ) -> Dividend:
     """Record a dividend payment for a holding.
 
-    If the dividend is reinvested (DRIP) and reinvest_shares is provided,
-    the holding's cumulative_quantity and average_price are updated
-    accordingly.
+    If the dividend is reinvested (DRIP) and ``reinvest_shares`` is provided,
+    the reinvested shares are recorded as a real BUY ``Transaction`` (dated at
+    the payment/ex date) and the holding's cumulative_quantity / average_price
+    are then rebuilt from all transactions via ``calculate_cumulative_holding``.
+
+    Recording a transaction (rather than mutating the holding out-of-band) is
+    essential: ``calculate_cumulative_holding`` derives totals purely from
+    ``Transaction`` rows, so a directly-mutated DRIP would silently vanish on
+    the next recompute.
     """
     holding = await _get_holding_for_user(data.holding_id, user_id, db)
 
@@ -78,27 +91,27 @@ async def create_dividend(
     db.add(dividend)
     await db.flush()
 
-    # DRIP: add reinvested shares to holding
+    # DRIP: represent reinvested shares as a real BUY transaction, then rebuild
+    # the holding's totals from all transactions so the shares survive recompute.
     if data.is_reinvested and data.reinvest_shares is not None:
-        old_qty = Decimal(str(float(holding.cumulative_quantity)))
-        old_avg = Decimal(str(float(holding.average_price)))
-        drip_shares = Decimal(str(data.reinvest_shares))
         drip_price = (
-            Decimal(str(data.reinvest_price))
+            float(data.reinvest_price)
             if data.reinvest_price is not None
-            else old_avg
+            else float(holding.average_price)
         )
-
-        new_qty = old_qty + drip_shares
-        if new_qty > 0:
-            total_cost = (old_qty * old_avg) + (drip_shares * drip_price)
-            new_avg = total_cost / new_qty
-        else:
-            new_avg = Decimal("0")
-
-        holding.cumulative_quantity = float(new_qty)
-        holding.average_price = float(new_avg)
+        drip_tx = Transaction(
+            holding_id=data.holding_id,
+            transaction_type="BUY",
+            date=data.payment_date or data.ex_date,
+            quantity=float(data.reinvest_shares),
+            price=drip_price,
+            brokerage=0,
+            source="MANUAL",
+            notes=_drip_marker(dividend.id),
+        )
+        db.add(drip_tx)
         await db.flush()
+        await calculate_cumulative_holding(data.holding_id, db)
 
     await db.refresh(dividend)
     return dividend
@@ -476,8 +489,11 @@ async def delete_dividend(
 ) -> None:
     """Delete a dividend record.
 
-    If the dividend was reinvested, reverses the DRIP adjustment on the
-    holding's cumulative_quantity and average_price.
+    If the dividend was reinvested (DRIP), the reinvested shares were recorded
+    as a real BUY ``Transaction``. That transaction is deleted and the holding's
+    totals are rebuilt from the remaining transactions via
+    ``calculate_cumulative_holding`` — keeping the holding consistent instead of
+    doing an out-of-band reversal that a later recompute would undo.
     """
     # Fetch the dividend with ownership verification
     stmt = (
@@ -491,30 +507,24 @@ async def delete_dividend(
     if dividend is None:
         raise ValueError("Dividend not found or does not belong to the current user")
 
-    # If it was reinvested, reverse the quantity/avg_price adjustment
+    holding_id = dividend.holding_id
+    recompute_needed = False
+
+    # If it was reinvested, remove the linked DRIP BUY transaction(s).
     if dividend.is_reinvested and dividend.reinvest_shares is not None:
-        holding = await _get_holding_for_user(dividend.holding_id, user_id, db)
-
-        old_qty = Decimal(str(float(holding.cumulative_quantity)))
-        old_avg = Decimal(str(float(holding.average_price)))
-        drip_shares = Decimal(str(float(dividend.reinvest_shares)))
-        drip_price = (
-            Decimal(str(float(dividend.reinvest_price)))
-            if dividend.reinvest_price is not None
-            else old_avg
+        tx_result = await db.execute(
+            select(Transaction).where(
+                Transaction.holding_id == holding_id,
+                Transaction.notes == _drip_marker(dividend.id),
+            )
         )
-
-        new_qty = old_qty - drip_shares
-        if new_qty > 0:
-            # Reverse: total_cost = (old_qty * old_avg) - (drip_shares * drip_price)
-            total_cost = (old_qty * old_avg) - (drip_shares * drip_price)
-            new_avg = total_cost / new_qty
-        else:
-            new_qty = Decimal("0")
-            new_avg = Decimal("0")
-
-        holding.cumulative_quantity = float(new_qty)
-        holding.average_price = float(new_avg)
+        drip_txs = list(tx_result.scalars().all())
+        for tx in drip_txs:
+            await db.delete(tx)
+        recompute_needed = bool(drip_txs)
 
     await db.delete(dividend)
     await db.flush()
+
+    if recompute_needed:
+        await calculate_cumulative_holding(holding_id, db)

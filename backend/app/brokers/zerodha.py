@@ -97,6 +97,24 @@ class ZerodhaBroker(BrokerAdapter):
             "login_url": login_url,
         }
 
+    async def restore_session(
+        self, api_key: str, api_secret: str, access_token: str
+    ) -> bool:
+        """Rebuild the Kite client from a stored access token.
+
+        Re-injects the persisted access token via ``kite.set_access_token`` so
+        ``is_connected()`` becomes ``True`` again without a fresh OAuth
+        round-trip. Returns ``False`` if the SDK is unavailable or no token was
+        supplied, telling the caller to fall back to ``connect()``.
+        """
+        if not _KITE_AVAILABLE or not access_token:
+            return False
+        self._kite = KiteConnect(api_key=api_key)
+        self._kite.set_access_token(access_token)
+        self._access_token = access_token
+        logger.info("Zerodha session restored for api_key=%s", api_key[:6])
+        return True
+
     async def disconnect(self) -> None:
         """Invalidate the Kite session."""
         if self._kite and self._access_token:

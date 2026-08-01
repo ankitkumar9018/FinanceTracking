@@ -144,45 +144,55 @@ export default function RiskPage() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [dropdownOpen]);
 
-  const loadRiskData = useCallback(async (portfolioId: number) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [riskData, holdingsData] = await Promise.all([
-        api.get<RiskMetrics>(`/indicators/risk/${portfolioId}`),
-        api.get<HoldingRisk[]>(`/indicators/risk/${portfolioId}/holdings`),
-      ]);
-      setMetrics(riskData);
-      setHoldingRisks(holdingsData);
-    } catch (err) {
-      setMetrics(null);
-      setHoldingRisks([]);
-      setError(err instanceof Error ? err.message : "Failed to load risk metrics");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const loadRiskData = useCallback(
+    async (portfolioId: number, isActive: () => boolean = () => true) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [riskData, holdingsData] = await Promise.all([
+          api.get<RiskMetrics>(`/indicators/risk/${portfolioId}`),
+          api.get<HoldingRisk[]>(`/indicators/risk/${portfolioId}/holdings`),
+        ]);
+        if (!isActive()) return;
+        setMetrics(riskData);
+        setHoldingRisks(holdingsData);
+      } catch (err) {
+        if (!isActive()) return;
+        setMetrics(null);
+        setHoldingRisks([]);
+        setError(err instanceof Error ? err.message : "Failed to load risk metrics");
+      } finally {
+        if (isActive()) setLoading(false);
+      }
+    },
+    [],
+  );
 
   // Diversification loads independently so a slow/failed call (it may hit
   // yfinance for sector/market-cap) never blocks the core risk metrics.
-  const loadConcentration = useCallback(async (portfolioId: number) => {
-    setConcentrationLoading(true);
-    setConcentrationError(null);
-    try {
-      const data = await api.get<ConcentrationData>(
-        `/analytics/concentration/${portfolioId}?single_name_threshold=15&sector_threshold=40`,
-      );
-      setConcentration(data);
-    } catch (err) {
-      setConcentration(null);
-      setConcentrationError(
-        err instanceof Error ? err.message : "Failed to load diversification data",
-      );
-      toast.error("Couldn't load diversification score");
-    } finally {
-      setConcentrationLoading(false);
-    }
-  }, []);
+  const loadConcentration = useCallback(
+    async (portfolioId: number, isActive: () => boolean = () => true) => {
+      setConcentrationLoading(true);
+      setConcentrationError(null);
+      try {
+        const data = await api.get<ConcentrationData>(
+          `/analytics/concentration/${portfolioId}?single_name_threshold=15&sector_threshold=40`,
+        );
+        if (!isActive()) return;
+        setConcentration(data);
+      } catch (err) {
+        if (!isActive()) return;
+        setConcentration(null);
+        setConcentrationError(
+          err instanceof Error ? err.message : "Failed to load diversification data",
+        );
+        toast.error("Couldn't load diversification score");
+      } finally {
+        if (isActive()) setConcentrationLoading(false);
+      }
+    },
+    [],
+  );
 
   const loadHedge = useCallback(
     async (portfolioId: number) => {
@@ -215,13 +225,17 @@ export default function RiskPage() {
   );
 
   useEffect(() => {
-    if (activePortfolioId) {
-      loadRiskData(activePortfolioId);
-      loadConcentration(activePortfolioId);
-    }
     // Reset any prior hedge estimate when the active portfolio changes.
     setHedge(null);
     setHedgeError(null);
+    if (!activePortfolioId) return;
+    // Guard against a slow earlier response overwriting a newer portfolio's data.
+    let active = true;
+    loadRiskData(activePortfolioId, () => active);
+    loadConcentration(activePortfolioId, () => active);
+    return () => {
+      active = false;
+    };
   }, [activePortfolioId, loadRiskData, loadConcentration]);
 
   function handlePortfolioChange(id: number) {

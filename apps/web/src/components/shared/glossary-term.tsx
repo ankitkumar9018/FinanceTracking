@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 const GLOSSARY: Record<string, string> = {
   RSI: "Relative Strength Index — a momentum indicator from 0-100. Below 30 is oversold (potential buy), above 70 is overbought (potential sell).",
@@ -41,6 +41,14 @@ export function GlossaryTerm({ term, children }: GlossaryTermProps) {
   const [show, setShow] = useState(false);
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // Clear the pending hover timer if the component unmounts before it fires
+  // (mirrors stock-hover-card.tsx) so setShow doesn't run on an unmounted node.
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
 
   const definition = GLOSSARY[term];
   if (!definition) return <>{children || term}</>;

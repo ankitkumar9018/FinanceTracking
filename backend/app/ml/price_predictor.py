@@ -72,13 +72,30 @@ if TORCH_AVAILABLE:
             return self.fc(out[:, -1, :])
 
 
-def _prepare_features(df: pd.DataFrame, lookback: int = 30) -> tuple:
-    """Prepare OHLCV features with normalization for LSTM input."""
+def _prepare_features(
+    df: pd.DataFrame, lookback: int = 30, train_fraction: float = 0.8
+) -> tuple:
+    """Prepare OHLCV windows for the LSTM.
+
+    Min-max scaling is fit on the TRAINING slice only (the first
+    ``train_fraction`` of the windowed samples) and then applied to the whole
+    series. Fitting the scaler over the entire series before the split leaks
+    test-period range into the model and inflates the reported R²/accuracy.
+
+    Returns ``(X, y, mins, maxs, ranges, split)`` where ``split`` is the
+    train/test window boundary the caller must reuse.
+    """
     features = df[["open", "high", "low", "close", "volume"]].values
 
-    # Min-max normalize per feature
-    mins = features.min(axis=0)
-    maxs = features.max(axis=0)
+    n_windows = len(features) - lookback
+    split = int(n_windows * train_fraction) if n_windows > 0 else 0
+
+    # Fit the scaler only on raw rows visible to the training windows/targets.
+    train_cutoff = lookback + split if split > 0 else len(features)
+    train_features = features[:train_cutoff]
+
+    mins = train_features.min(axis=0)
+    maxs = train_features.max(axis=0)
     ranges = maxs - mins
     ranges[ranges == 0] = 1  # avoid divide by zero
     normalized = (features - mins) / ranges
@@ -89,7 +106,7 @@ def _prepare_features(df: pd.DataFrame, lookback: int = 30) -> tuple:
         # Target: next day's close (normalized)
         y.append(normalized[i, 3])  # close column
 
-    return np.array(X), np.array(y), mins, maxs, ranges
+    return np.array(X), np.array(y), mins, maxs, ranges, split
 
 
 async def predict_prices(
@@ -154,7 +171,7 @@ async def predict_prices(
 
     current_price = df["close"].iloc[-1]
 
-    X, y, mins, maxs, ranges = _prepare_features(df, lookback)
+    X, y, mins, maxs, ranges, split = _prepare_features(df, lookback)
 
     if len(X) < 50:
         return PredictionResult(
@@ -166,8 +183,8 @@ async def predict_prices(
             confidence=0.0,
         )
 
-    # Train/test split
-    split = int(len(X) * 0.8)
+    # Train/test split — boundary already used to fit the scaler above, so no
+    # test-period data leaked into normalization.
     X_train = torch.FloatTensor(X[:split])
     y_train = torch.FloatTensor(y[:split]).unsqueeze(1)
     X_test = torch.FloatTensor(X[split:])

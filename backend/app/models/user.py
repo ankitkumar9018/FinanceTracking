@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Boolean, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -18,6 +18,15 @@ class User(Base):
         String(255), unique=True, index=True, nullable=False
     )
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Timestamp of the last password change/reset. Embedded (as an epoch int,
+    # claim "pcat") in issued JWTs so tokens minted before a password change can
+    # be rejected — see app.api.deps.get_current_user. Populated on insert via a
+    # Python-side default so it works under both create_all and Alembic (the
+    # migration adds the column without a DB default, which SQLite disallows for
+    # CURRENT_TIMESTAMP on ALTER TABLE ADD COLUMN).
+    password_changed_at: Mapped[datetime | None] = mapped_column(
+        default=lambda: datetime.now(UTC), nullable=True
+    )
     totp_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # One-time 2FA backup codes: list of SHA-256 hashes (raw codes shown once
     # at generation). Each is consumed on use so it can't be replayed.

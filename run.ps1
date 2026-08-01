@@ -35,40 +35,39 @@ function Find-FreePort {
     $l.Start(); $port = $l.LocalEndpoint.Port; $l.Stop(); return $port
 }
 
-function Stop-PortProcess {
-    param([int]$Port)
-    $conns = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
-    if ($conns) {
-        $pids = $conns | Select-Object -ExpandProperty OwningProcess -Unique
-        foreach ($pid in $pids) {
-            if ($pid -ne 0) {
-                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
-            }
-        }
-        return $true
-    }
-    return $false
-}
+# NOTE: There is intentionally NO kill-by-port helper here. Terminating whatever
+# process happens to own a TCP port would kill co-running apps (or a second
+# instance of this one), which is a hard safety violation. We only ever stop our
+# OWN recorded PIDs (from the PID files in Do-Stop), never by port or by name.
 
 # -- STOP ---------------------------------------------------------------------
 
 function Do-Stop {
     Write-Host "Stopping FinanceTracker..." -ForegroundColor Yellow
 
-    # Kill by PID files
+    # Kill by PID files. NOTE: use $procId, never $pid — $pid is a read-only
+    # PowerShell automatic variable holding THIS shell's PID, so assigning to it
+    # fails and Stop-Process -Id $pid would kill our own host, leaving the real
+    # service orphaned. Also kill the recorded process's children first: the
+    # backend PID is the `uv` wrapper and its uvicorn child would otherwise be
+    # orphaned and keep holding the port. Strictly OUR PID — never by port/name.
     $backendPid = Join-Path $LogsDir "backend.pid"
     if (Test-Path $backendPid) {
-        $pid = Get-Content $backendPid
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
-        Write-Ok "Backend stopped (PID: $pid)"
+        $procId = Get-Content $backendPid
+        Get-CimInstance Win32_Process -Filter "ParentProcessId=$procId" -ErrorAction SilentlyContinue |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+        Write-Ok "Backend stopped (PID: $procId)"
         Remove-Item $backendPid -Force
     }
 
     $frontendPid = Join-Path $LogsDir "frontend.pid"
     if (Test-Path $frontendPid) {
-        $pid = Get-Content $frontendPid
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
-        Write-Ok "Frontend stopped (PID: $pid)"
+        $procId = Get-Content $frontendPid
+        Get-CimInstance Win32_Process -Filter "ParentProcessId=$procId" -ErrorAction SilentlyContinue |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+        Write-Ok "Frontend stopped (PID: $procId)"
         Remove-Item $frontendPid -Force
     }
 
@@ -187,7 +186,13 @@ function Do-Start {
     foreach ($svc in @("backend", "frontend")) {
         $pf = Join-Path $LogsDir "$svc.pid"
         if (Test-Path $pf) {
-            Stop-Process -Id (Get-Content $pf) -Force -ErrorAction SilentlyContinue
+            $procId = Get-Content $pf
+            # Kill the uvicorn child of the `uv` wrapper too, else it is orphaned
+            # and keeps holding the port. Strictly OUR recorded PID — never by
+            # port or by process name, so co-running apps are untouched.
+            Get-CimInstance Win32_Process -Filter "ParentProcessId=$procId" -ErrorAction SilentlyContinue |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
             Remove-Item $pf -Force -ErrorAction SilentlyContinue
         }
     }

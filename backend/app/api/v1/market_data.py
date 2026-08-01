@@ -35,11 +35,12 @@ async def get_quote(
     """Get the current quote for a stock symbol."""
     try:
         quote = await fetch_current_price(symbol.upper().strip(), exchange.upper().strip())
-    except Exception as exc:
+    except Exception:
+        logger.exception("Failed to fetch quote for %s on %s", symbol, exchange)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch quote for {symbol}: {exc}",
-        )
+            detail="Failed to fetch quote",
+        ) from None
 
     if not quote.get("current_price"):
         raise HTTPException(
@@ -64,11 +65,12 @@ async def get_history(
             exchange.upper().strip(),
             days,
         )
-    except Exception as exc:
+    except Exception:
+        logger.exception("Failed to fetch history for %s on %s", symbol, exchange)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch history for {symbol}: {exc}",
-        )
+            detail="Failed to fetch history",
+        ) from None
 
     if not data:
         raise HTTPException(
@@ -96,11 +98,12 @@ async def refresh_prices(
     """
     try:
         summary = await refresh_all_prices(db, user_id=user.id)
-    except Exception as exc:
+    except Exception:
+        logger.exception("Price refresh failed for user_id=%s", user.id)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Price refresh failed: {exc}",
-        )
+            detail="Price refresh failed",
+        ) from None
 
     return {
         "status": "completed",
@@ -247,9 +250,9 @@ async def run_screener(
         return await screen_stocks(
             filters, exchange=exchange.upper().strip(), symbols=symbol_list
         )
-    except Exception as exc:
+    except Exception:
         logger.exception("Screener failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Screener failed: {exc}",
-        )
+            detail="Screener failed",
+        ) from None

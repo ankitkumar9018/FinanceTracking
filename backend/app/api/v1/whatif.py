@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.deps import get_current_user
 from app.models.user import User
 from app.schemas.whatif import WhatIfRequest, WhatIfResponse
 from app.services.whatif_service import simulate
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -44,8 +48,11 @@ async def run_simulation(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         ) from e
-    except Exception as e:
+    except Exception:
+        logger.exception(
+            "What-if simulation failed for %s on %s", body.symbol, body.exchange
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Simulation failed: {e}",
-        ) from e
+            detail="Simulation failed",
+        ) from None

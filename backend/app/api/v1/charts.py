@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +16,8 @@ from app.models.price_history import PriceHistory
 from app.models.user import User
 from app.schemas.market_data import HistoryResponse, RSIResponse
 from app.services.market_data_service import fetch_historical_data, fetch_rsi_series
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -32,11 +36,14 @@ async def chart_price(
             exchange.upper().strip(),
             days,
         )
-    except Exception as exc:
+    except Exception:
+        logger.exception(
+            "Failed to fetch chart data for %s on %s", symbol, exchange
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch chart data for {symbol}: {exc}",
-        )
+            detail="Failed to load chart data",
+        ) from None
 
     if not data:
         raise HTTPException(
@@ -67,11 +74,12 @@ async def chart_rsi(
             days,
             period,
         )
-    except Exception as exc:
+    except Exception:
+        logger.exception("Failed to compute RSI for %s on %s", symbol, exchange)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to compute RSI for {symbol}: {exc}",
-        )
+            detail="Failed to load RSI data",
+        ) from None
 
     if not data:
         raise HTTPException(

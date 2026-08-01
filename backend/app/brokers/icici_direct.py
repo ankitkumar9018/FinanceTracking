@@ -101,6 +101,27 @@ class ICICIDirectBroker(BrokerAdapter):
             "login_url": login_url,
         }
 
+    async def restore_session(
+        self, api_key: str, api_secret: str, access_token: str
+    ) -> bool:
+        """Rebuild the Breeze client from a stored session token.
+
+        Re-generates the Breeze session using the persisted ``session_token``
+        so ``is_connected()`` becomes ``True`` again without another interactive
+        login. Returns ``False`` if the SDK is unavailable or no token was
+        supplied, telling the caller to fall back to ``connect()``.
+        """
+        if not _BREEZE_AVAILABLE or not access_token:
+            return False
+        self._breeze = BreezeConnect(api_key=api_key)
+        self._breeze.generate_session(
+            api_secret=api_secret,
+            session_token=access_token,
+        )
+        self._session_token = access_token
+        logger.info("ICICI Direct session restored for api_key=%s", api_key[:6])
+        return True
+
     async def disconnect(self) -> None:
         """Clean up the Breeze session."""
         self._breeze = None

@@ -220,29 +220,40 @@ export default function EarningsPage() {
   const [error, setError] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
-  const loadEarnings = useCallback(async (portfolioId: number) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.get<PortfolioEarningsData>(`/earnings/${portfolioId}`);
-      // Filter to entries with earnings dates, then sort by nearest date
-      const withDates = (data.upcoming_earnings || []).filter(
-        (e) => e.earnings_date !== null && e.data_available
-      );
-      const sorted = [...withDates].sort(
-        (a, b) => new Date(a.earnings_date!).getTime() - new Date(b.earnings_date!).getTime()
-      );
-      setEntries(sorted);
-    } catch (err) {
-      setEntries([]);
-      setError(err instanceof Error ? err.message : "Failed to load earnings data");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const loadEarnings = useCallback(
+    async (portfolioId: number, isActive: () => boolean = () => true) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await api.get<PortfolioEarningsData>(`/earnings/${portfolioId}`);
+        // Filter to entries with earnings dates, then sort by nearest date
+        const withDates = (data.upcoming_earnings || []).filter(
+          (e) => e.earnings_date !== null && e.data_available
+        );
+        const sorted = [...withDates].sort(
+          (a, b) => new Date(a.earnings_date!).getTime() - new Date(b.earnings_date!).getTime()
+        );
+        if (!isActive()) return;
+        setEntries(sorted);
+      } catch (err) {
+        if (!isActive()) return;
+        setEntries([]);
+        setError(err instanceof Error ? err.message : "Failed to load earnings data");
+      } finally {
+        if (isActive()) setLoading(false);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-    if (activePortfolioId) loadEarnings(activePortfolioId);
+    if (!activePortfolioId) return;
+    // Guard against a slow earlier response overwriting a newer portfolio's data.
+    let active = true;
+    loadEarnings(activePortfolioId, () => active);
+    return () => {
+      active = false;
+    };
   }, [activePortfolioId, loadEarnings]);
 
   function handlePortfolioChange(id: number) {

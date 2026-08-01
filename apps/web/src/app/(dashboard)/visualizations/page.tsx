@@ -134,36 +134,45 @@ export default function VisualizationsPage() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [dropdownOpen]);
 
-  const loadData = useCallback(async (portfolioId: number) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [summaryData, risk, corrData, returnsData, ddData] = await Promise.all([
-        api.get<PortfolioSummary>(`/portfolios/${portfolioId}/summary`),
-        api.get<RiskData>(`/indicators/risk/${portfolioId}`).catch(() => null),
-        api.get<{ symbols: string[]; matrix: number[][] }>(`/analytics/correlation/${portfolioId}`).catch(() => ({ symbols: [], matrix: [] })),
-        api.get<{ returns: { month: string; return_pct: number }[] }>(`/analytics/monthly-returns/${portfolioId}`).catch(() => ({ returns: [] })),
-        api.get<{ drawdown: { date: string; drawdown: number }[] }>(`/analytics/drawdown/${portfolioId}`).catch(() => ({ drawdown: [] })),
-      ]);
-      setSummary(summaryData);
-      setRiskData(risk);
-      setCorrelationSymbols(corrData.symbols || []);
-      setCorrelationMatrix(corrData.matrix || []);
-      setMonthlyReturns(returnsData.returns || []);
-      setDrawdownData(ddData.drawdown || []);
-    } catch (err) {
-      setSummary(null);
-      setRiskData(null);
-      setError(err instanceof Error ? err.message : "Failed to load analytics data");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const loadData = useCallback(
+    async (portfolioId: number, isActive: () => boolean = () => true) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [summaryData, risk, corrData, returnsData, ddData] = await Promise.all([
+          api.get<PortfolioSummary>(`/portfolios/${portfolioId}/summary`),
+          api.get<RiskData>(`/indicators/risk/${portfolioId}`).catch(() => null),
+          api.get<{ symbols: string[]; matrix: number[][] }>(`/analytics/correlation/${portfolioId}`).catch(() => ({ symbols: [], matrix: [] })),
+          api.get<{ returns: { month: string; return_pct: number }[] }>(`/analytics/monthly-returns/${portfolioId}`).catch(() => ({ returns: [] })),
+          api.get<{ drawdown: { date: string; drawdown: number }[] }>(`/analytics/drawdown/${portfolioId}`).catch(() => ({ drawdown: [] })),
+        ]);
+        if (!isActive()) return;
+        setSummary(summaryData);
+        setRiskData(risk);
+        setCorrelationSymbols(corrData.symbols || []);
+        setCorrelationMatrix(corrData.matrix || []);
+        setMonthlyReturns(returnsData.returns || []);
+        setDrawdownData(ddData.drawdown || []);
+      } catch (err) {
+        if (!isActive()) return;
+        setSummary(null);
+        setRiskData(null);
+        setError(err instanceof Error ? err.message : "Failed to load analytics data");
+      } finally {
+        if (isActive()) setLoading(false);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-    if (activePortfolioId) {
-      loadData(activePortfolioId);
-    }
+    if (!activePortfolioId) return;
+    // Guard against a slow earlier response overwriting a newer portfolio's data.
+    let active = true;
+    loadData(activePortfolioId, () => active);
+    return () => {
+      active = false;
+    };
   }, [activePortfolioId, loadData]);
 
   function handlePortfolioChange(id: number) {
@@ -198,7 +207,8 @@ export default function VisualizationsPage() {
   }, [summary]);
 
   const minDrawdown = useMemo(
-    () => Math.min(...drawdownData.map((d) => d.drawdown)),
+    // Math.min() with no args is Infinity — guard the empty case.
+    () => (drawdownData.length ? Math.min(...drawdownData.map((d) => d.drawdown)) : 0),
     [drawdownData]
   );
 
@@ -352,7 +362,8 @@ export default function VisualizationsPage() {
                         {rowSym.length > 8 ? rowSym.slice(0, 8) + ".." : rowSym}
                       </div>
                       {symbols.map((_, ci) => {
-                        const value = correlationMatrix[ri][ci];
+                        // A ragged/short matrix row would throw on [ri][ci] — default missing cells to 0.
+                        const value = correlationMatrix[ri]?.[ci] ?? 0;
                         return (
                           <div
                             key={`cell-${ri}-${ci}`}
@@ -466,60 +477,69 @@ export default function VisualizationsPage() {
                 <span>Positive</span>
               </div>
 
-              {/* Summary stats */}
-              <div className="mt-4 grid grid-cols-3 gap-4">
-                {[
-                  {
-                    label: "Best Month",
-                    value: monthlyReturns.reduce((a, b) =>
-                      a.return_pct > b.return_pct ? a : b
-                    ),
-                    isPositive: true,
-                  },
-                  {
-                    label: "Worst Month",
-                    value: monthlyReturns.reduce((a, b) =>
-                      a.return_pct < b.return_pct ? a : b
-                    ),
-                    isPositive: false,
-                  },
-                  {
-                    label: "Average",
-                    value: {
-                      month: "",
-                      return_pct:
-                        monthlyReturns.reduce((s, m) => s + m.return_pct, 0) /
-                        monthlyReturns.length,
+              {/* Summary stats — only when there's data (reduce() with no
+                  initial value throws on an empty array). */}
+              {monthlyReturns.length > 0 ? (
+                <div className="mt-4 grid grid-cols-3 gap-4">
+                  {[
+                    {
+                      label: "Best Month",
+                      value: monthlyReturns.reduce(
+                        (a, b) => (a.return_pct > b.return_pct ? a : b),
+                        monthlyReturns[0]
+                      ),
+                      isPositive: true,
                     },
-                    isPositive:
-                      monthlyReturns.reduce((s, m) => s + m.return_pct, 0) /
-                        monthlyReturns.length >
-                      0,
-                  },
-                ].map((stat) => (
-                  <div
-                    key={stat.label}
-                    className="rounded-md border border-[hsl(var(--border))] p-3"
-                  >
-                    <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                      {stat.label}
-                    </p>
-                    <p
-                      className={`text-lg font-bold ${
-                        stat.isPositive ? "text-green-600" : "text-red-600"
-                      }`}
+                    {
+                      label: "Worst Month",
+                      value: monthlyReturns.reduce(
+                        (a, b) => (a.return_pct < b.return_pct ? a : b),
+                        monthlyReturns[0]
+                      ),
+                      isPositive: false,
+                    },
+                    {
+                      label: "Average",
+                      value: {
+                        month: "",
+                        return_pct:
+                          monthlyReturns.reduce((s, m) => s + m.return_pct, 0) /
+                          monthlyReturns.length,
+                      },
+                      isPositive:
+                        monthlyReturns.reduce((s, m) => s + m.return_pct, 0) /
+                          monthlyReturns.length >
+                        0,
+                    },
+                  ].map((stat) => (
+                    <div
+                      key={stat.label}
+                      className="rounded-md border border-[hsl(var(--border))] p-3"
                     >
-                      {stat.value.return_pct >= 0 ? "+" : ""}
-                      {stat.value.return_pct.toFixed(2)}%
-                    </p>
-                    {stat.value.month && (
-                      <p className="text-[10px] text-[hsl(var(--muted-foreground))]">
-                        {stat.value.month}
+                      <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                        {stat.label}
                       </p>
-                    )}
-                  </div>
-                ))}
-              </div>
+                      <p
+                        className={`text-lg font-bold ${
+                          stat.isPositive ? "text-green-600" : "text-red-600"
+                        }`}
+                      >
+                        {stat.value.return_pct >= 0 ? "+" : ""}
+                        {stat.value.return_pct.toFixed(2)}%
+                      </p>
+                      {stat.value.month && (
+                        <p className="text-[10px] text-[hsl(var(--muted-foreground))]">
+                          {stat.value.month}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-4 rounded-md border border-dashed border-[hsl(var(--border))] py-8 text-center text-sm text-[hsl(var(--muted-foreground))]">
+                  No monthly return data available yet.
+                </div>
+              )}
             </div>
           )}
 

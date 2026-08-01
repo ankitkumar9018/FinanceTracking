@@ -89,7 +89,16 @@ def parse_excel(file_bytes: bytes) -> list[dict]:
         qty = row_dict.get("quantity")
         price = row_dict.get("price")
 
-        if not all([symbol, name, exchange, tx_type, tx_date, qty, price]):
+        # A field is "missing" only when it is None or a blank string. Do NOT
+        # treat a legitimate numeric 0 (e.g. a bonus/IPO allotment at price 0)
+        # as absent — plain truthiness would drop those valid rows.
+        def _missing(v: object) -> bool:
+            return v is None or (isinstance(v, str) and not v.strip())
+
+        if any(
+            _missing(v)
+            for v in (symbol, name, exchange, tx_type, tx_date, qty, price)
+        ):
             logger.warning("Skipping row with missing required fields: %s", row_dict)
             continue
 
@@ -165,6 +174,7 @@ async def import_to_portfolio(
     """
     holdings_created = 0
     transactions_created = 0
+    transactions_skipped = 0
 
     # Pre-load existing holdings for the portfolio
     result = await db.execute(
@@ -174,6 +184,37 @@ async def import_to_portfolio(
     holding_map: dict[str, Holding] = {
         f"{h.stock_symbol}|{h.exchange}": h for h in existing_holdings
     }
+
+    # Pre-load existing transaction "fingerprints" so re-importing the same
+    # statement (OFX/QIF/CSV/Excel all funnel through here) does not double
+    # count. A transaction is a duplicate when its holding, date, type,
+    # quantity and price all match an existing one. We can't rely on a DB
+    # unique constraint (no migration), so dedup at the application level.
+    def _tx_fingerprint(holding_key: str, tx_date, tx_type, qty, price) -> tuple:
+        return (
+            holding_key,
+            tx_date,
+            str(tx_type).upper(),
+            round(float(qty), 6),
+            round(float(price), 4),
+        )
+
+    seen_fingerprints: set[tuple] = set()
+    if existing_holdings:
+        id_to_key = {h.id: f"{h.stock_symbol}|{h.exchange}" for h in existing_holdings}
+        existing_tx = await db.execute(
+            select(Transaction).where(
+                Transaction.holding_id.in_(id_to_key.keys())
+            )
+        )
+        for tx in existing_tx.scalars().all():
+            hkey = id_to_key.get(tx.holding_id)
+            if hkey is not None:
+                seen_fingerprints.add(
+                    _tx_fingerprint(
+                        hkey, tx.date, tx.transaction_type, tx.quantity, tx.price
+                    )
+                )
 
     for row in parsed_data:
         key = f"{row['stock_symbol']}|{row['exchange']}"
@@ -215,6 +256,19 @@ async def import_to_portfolio(
                 if val is not None:
                     setattr(holding, field, val)
 
+        # Skip duplicates (same holding + date + type + quantity + price).
+        fingerprint = _tx_fingerprint(
+            key,
+            row["date"],
+            row["transaction_type"],
+            row["quantity"],
+            row["price"],
+        )
+        if fingerprint in seen_fingerprints:
+            transactions_skipped += 1
+            continue
+        seen_fingerprints.add(fingerprint)
+
         # Create the transaction
         tx = Transaction(
             holding_id=holding.id,
@@ -243,6 +297,7 @@ async def import_to_portfolio(
     return {
         "holdings_created": holdings_created,
         "transactions_created": transactions_created,
+        "transactions_skipped": transactions_skipped,
         "holdings_updated": len(recalculated) - holdings_created,
     }
 

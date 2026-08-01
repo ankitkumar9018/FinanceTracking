@@ -9,6 +9,14 @@ export class WSConnection {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  // Set true in disconnect() so the onclose handler knows the close was
+  // requested and must NOT schedule a reconnect (a code-less close() reports
+  // 1005, which isn't in noReconnectCodes and would otherwise leak a socket).
+  private intentionalClose = false;
+  // Guards against opening a second socket when connect() is called again while
+  // the async getWsBaseAsync() handshake from a prior connect() is still pending
+  // (the readyState guard can't see a socket that doesn't exist yet).
+  private connecting = false;
 
   constructor(path: string) {
     this.basePath = path;
@@ -24,6 +32,10 @@ export class WSConnection {
     // connect() during the async handshake would open a second socket.
     const state = this.ws?.readyState;
     if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) return;
+    if (this.connecting) return;
+    this.connecting = true;
+    // A fresh connect cancels any prior intentional-close intent.
+    this.intentionalClose = false;
     this._resolveAndConnect();
   }
 
@@ -32,12 +44,17 @@ export class WSConnection {
     getWsBaseAsync()
       .then((wsBase) => this._doConnect(wsBase))
       .catch(() => {
-        // Base resolution failed — degrade silently.
+        // Base resolution failed — degrade silently, but clear the guard so a
+        // later connect() can retry.
+        this.connecting = false;
       });
   }
 
   private _doConnect(wsBase: string): void {
     this.ws = new WebSocket(this.buildUrl(wsBase));
+    // The socket now exists (readyState CONNECTING); from here the readyState
+    // guard in connect() takes over, so release the synchronous guard.
+    this.connecting = false;
 
     this.ws.onopen = () => {
       this.reconnectAttempts = 0;
@@ -57,6 +74,8 @@ export class WSConnection {
     this.ws.onclose = (event) => {
       this.emit("disconnected", { code: event.code, reason: event.reason });
       const noReconnectCodes = [1000, 1001, 4001]; // normal close, going away, auth failure
+      // Never reconnect a socket we closed on purpose (disconnect/unmount).
+      if (this.intentionalClose) return;
       if (!noReconnectCodes.includes(event.code) && this.reconnectAttempts < this.maxReconnectAttempts) {
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
         this.reconnectTimeout = setTimeout(() => {
@@ -89,9 +108,14 @@ export class WSConnection {
   }
 
   disconnect(): void {
+    // Mark the close as intentional first so the onclose handler (which fires
+    // synchronously or shortly after) skips the reconnect path.
+    this.intentionalClose = true;
+    this.connecting = false;
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     this.reconnectAttempts = 0;
-    this.ws?.close();
+    // Close with an explicit 1000 (normal) code rather than a code-less 1005.
+    this.ws?.close(1000);
     this.ws = null;
     // Don't clear handlers — they should persist across reconnections
   }

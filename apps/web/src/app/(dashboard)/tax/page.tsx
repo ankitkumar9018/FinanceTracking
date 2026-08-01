@@ -143,32 +143,41 @@ export default function TaxPage() {
 
   const fyOptions = jurisdiction === "IN" ? INDIA_FYS : GERMANY_FYS;
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [recs, sum, harv] = await Promise.all([
-        api.get<TaxRecord[]>(
-          `/tax?financial_year=${financialYear}&jurisdiction=${jurisdiction}`
-        ),
-        api.get<TaxSummary>(
-          `/tax/summary?financial_year=${financialYear}&jurisdiction=${jurisdiction}`
-        ),
-        api.get<HarvestingSuggestion[]>(
-          `/tax/harvesting?jurisdiction=${jurisdiction}`
-        ),
-      ]);
-      setRecords(recs);
-      setSummary(sum);
-      setHarvesting(harv);
-    } catch {
-      toast.error("Failed to load tax data");
-    } finally {
-      setLoading(false);
-    }
-  }, [financialYear, jurisdiction]);
+  const loadData = useCallback(
+    async (isActive: () => boolean = () => true) => {
+      setLoading(true);
+      try {
+        const [recs, sum, harv] = await Promise.all([
+          api.get<TaxRecord[]>(
+            `/tax?financial_year=${financialYear}&jurisdiction=${jurisdiction}`
+          ),
+          api.get<TaxSummary>(
+            `/tax/summary?financial_year=${financialYear}&jurisdiction=${jurisdiction}`
+          ),
+          api.get<HarvestingSuggestion[]>(
+            `/tax/harvesting?jurisdiction=${jurisdiction}`
+          ),
+        ]);
+        if (!isActive()) return;
+        setRecords(recs);
+        setSummary(sum);
+        setHarvesting(harv);
+      } catch {
+        if (isActive()) toast.error("Failed to load tax data");
+      } finally {
+        if (isActive()) setLoading(false);
+      }
+    },
+    [financialYear, jurisdiction]
+  );
 
   useEffect(() => {
-    loadData();
+    // Guard against a slow earlier response overwriting newer jurisdiction/FY data.
+    let active = true;
+    loadData(() => active);
+    return () => {
+      active = false;
+    };
   }, [loadData]);
 
   /* Ensure the active portfolio is known (needed for the Vorabpauschale estimate) */
@@ -177,54 +186,70 @@ export default function TaxPage() {
   }, [hasLoadedPortfolios, fetchPortfolios]);
 
   /* Load the German advanced-tax data (allowance + Vorabpauschale estimate) */
-  const loadGermanAdvanced = useCallback(async () => {
-    if (jurisdiction !== "DE") return;
-    setAdvLoading(true);
-    try {
-      const [allow, vp] = await Promise.all([
-        api.get<GermanAllowance>(
-          `/tax/allowance?jurisdiction=DE&financial_year=${financialYear}`
-        ),
-        activePortfolioId
-          ? api.get<VorabEstimate>(
-              `/tax/vorabpauschale/${activePortfolioId}?year=${financialYear}`
-            )
-          : Promise.resolve<VorabEstimate | null>(null),
-      ]);
-      setAllowance(allow);
-      setVorab(vp);
-    } catch {
-      toast.error("Failed to load German tax details");
-    } finally {
-      setAdvLoading(false);
-    }
-  }, [jurisdiction, financialYear, activePortfolioId]);
+  const loadGermanAdvanced = useCallback(
+    async (isActive: () => boolean = () => true) => {
+      if (jurisdiction !== "DE") return;
+      setAdvLoading(true);
+      try {
+        const [allow, vp] = await Promise.all([
+          api.get<GermanAllowance>(
+            `/tax/allowance?jurisdiction=DE&financial_year=${financialYear}`
+          ),
+          activePortfolioId
+            ? api.get<VorabEstimate>(
+                `/tax/vorabpauschale/${activePortfolioId}?year=${financialYear}`
+              )
+            : Promise.resolve<VorabEstimate | null>(null),
+        ]);
+        if (!isActive()) return;
+        setAllowance(allow);
+        setVorab(vp);
+      } catch {
+        if (isActive()) toast.error("Failed to load German tax details");
+      } finally {
+        if (isActive()) setAdvLoading(false);
+      }
+    },
+    [jurisdiction, financialYear, activePortfolioId]
+  );
 
   useEffect(() => {
-    loadGermanAdvanced();
+    let active = true;
+    loadGermanAdvanced(() => active);
+    return () => {
+      active = false;
+    };
   }, [loadGermanAdvanced]);
 
   /* Load the India holding-period LTCG timer for the active portfolio */
-  const loadHoldingPeriod = useCallback(async () => {
-    if (jurisdiction !== "IN" || !activePortfolioId) {
-      setHoldingPeriod(null);
-      return;
-    }
-    setHpLoading(true);
-    try {
-      const hp = await api.get<HoldingPeriodTimer>(
-        `/tax/holding-period/${activePortfolioId}`
-      );
-      setHoldingPeriod(hp);
-    } catch {
-      toast.error("Failed to load holding-period timer");
-    } finally {
-      setHpLoading(false);
-    }
-  }, [jurisdiction, activePortfolioId]);
+  const loadHoldingPeriod = useCallback(
+    async (isActive: () => boolean = () => true) => {
+      if (jurisdiction !== "IN" || !activePortfolioId) {
+        setHoldingPeriod(null);
+        return;
+      }
+      setHpLoading(true);
+      try {
+        const hp = await api.get<HoldingPeriodTimer>(
+          `/tax/holding-period/${activePortfolioId}`
+        );
+        if (!isActive()) return;
+        setHoldingPeriod(hp);
+      } catch {
+        if (isActive()) toast.error("Failed to load holding-period timer");
+      } finally {
+        if (isActive()) setHpLoading(false);
+      }
+    },
+    [jurisdiction, activePortfolioId]
+  );
 
   useEffect(() => {
-    loadHoldingPeriod();
+    let active = true;
+    loadHoldingPeriod(() => active);
+    return () => {
+      active = false;
+    };
   }, [loadHoldingPeriod]);
 
   /* Lots sorted soonest-to-become-LTCG first, already-eligible lots last */

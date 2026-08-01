@@ -581,18 +581,29 @@ export default function HoldingsPage() {
   }, [fetchColumns]);
 
   // ---- Stop-loss --------------------------------------------------------
-  const fetchStopLosses = useCallback(async (portfolioId: number) => {
-    try {
-      const data = await api.get<StopLossResponse>(`/comparison/stop-loss/${portfolioId}`);
-      setStopLosses(data.stop_losses || []);
-    } catch {
-      setStopLosses([]);
-    }
-  }, []);
+  const fetchStopLosses = useCallback(
+    async (portfolioId: number, isActive: () => boolean = () => true) => {
+      try {
+        const data = await api.get<StopLossResponse>(`/comparison/stop-loss/${portfolioId}`);
+        if (isActive()) setStopLosses(data.stop_losses || []);
+      } catch {
+        if (isActive()) setStopLosses([]);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
-    if (activePortfolioId) fetchStopLosses(activePortfolioId);
-    else setStopLosses([]);
+    if (!activePortfolioId) {
+      setStopLosses([]);
+      return;
+    }
+    // Guard against a slow earlier response overwriting a newer portfolio's data.
+    let active = true;
+    fetchStopLosses(activePortfolioId, () => active);
+    return () => {
+      active = false;
+    };
   }, [activePortfolioId, fetchStopLosses]);
 
   function toggleSelection(id: number) {

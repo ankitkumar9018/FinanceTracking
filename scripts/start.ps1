@@ -124,7 +124,13 @@ Write-Host "[4/6] Stopping existing services..." -ForegroundColor Yellow
 foreach ($svc in @("uvicorn", "celery", "nextjs", "backend", "frontend")) {
     $pf = Join-Path $LogsDir "$svc.pid"
     if (Test-Path $pf) {
-        Stop-Process -Id (Get-Content $pf) -Force -ErrorAction SilentlyContinue
+        $procId = Get-Content $pf
+        # The backend PID is the `uv` wrapper; kill its uvicorn child too or it is
+        # orphaned and keeps holding the port. Strictly OUR recorded PID — never
+        # by port or by process name, so co-running apps are left untouched.
+        Get-CimInstance Win32_Process -Filter "ParentProcessId=$procId" -ErrorAction SilentlyContinue |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
         Remove-Item $pf -Force -ErrorAction SilentlyContinue
     }
 }

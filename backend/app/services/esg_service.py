@@ -16,6 +16,22 @@ from app.services.market_data_service import _ticker_symbol
 
 logger = logging.getLogger(__name__)
 
+# Bound simultaneous yfinance calls so a large portfolio doesn't fan out into
+# dozens of concurrent outbound requests.
+_MAX_CONCURRENCY = 8
+
+
+def _default_esg(symbol: str) -> dict:
+    """An ``esg_available=False`` record used as a safe fallback."""
+    return {
+        "symbol": symbol,
+        "total_esg": None,
+        "environment_score": None,
+        "social_score": None,
+        "governance_score": None,
+        "esg_available": False,
+    }
+
 
 def _sync_fetch_sustainability(ticker_str: str):
     """Fetch yfinance sustainability data synchronously (runs in a thread)."""
@@ -33,26 +49,23 @@ async def get_esg_scores(symbols: list[str], exchange: str = "NSE") -> list[dict
     Uses yfinance's ``sustainability`` property which returns a DataFrame
     with ESG total, environment, social, and governance scores.
 
-    Returns a list of dicts matching StockESGScore schema.
+    Fetches happen concurrently under a bounded semaphore (each call keeps its
+    own 10s timeout), so a large portfolio no longer blocks for ~10s per symbol.
+    Returns a list of dicts matching StockESGScore schema, in the same order as
+    ``symbols``.
     """
-    results: list[dict] = []
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
 
-    for symbol in symbols:
+    async def _one(symbol: str) -> dict:
         ticker_str = _ticker_symbol(symbol, exchange)
-        score_data: dict = {
-            "symbol": symbol,
-            "total_esg": None,
-            "environment_score": None,
-            "social_score": None,
-            "governance_score": None,
-            "esg_available": False,
-        }
+        score_data: dict = _default_esg(symbol)
 
         try:
-            sustainability = await asyncio.wait_for(
-                asyncio.to_thread(_sync_fetch_sustainability, ticker_str),
-                timeout=10.0,
-            )
+            async with semaphore:
+                sustainability = await asyncio.wait_for(
+                    asyncio.to_thread(_sync_fetch_sustainability, ticker_str),
+                    timeout=10.0,
+                )
 
             if sustainability is not None and not sustainability.empty:
                 # sustainability is a DataFrame with index like
@@ -76,9 +89,15 @@ async def get_esg_scores(symbols: list[str], exchange: str = "NSE") -> list[dict
         except Exception:
             logger.warning("ESG data fetch failed for %s", symbol)
 
-        results.append(score_data)
+        return score_data
 
-    return results
+    gathered = await asyncio.gather(
+        *(_one(s) for s in symbols), return_exceptions=True
+    )
+    return [
+        _default_esg(symbol) if isinstance(res, BaseException) else res
+        for symbol, res in zip(symbols, gathered)
+    ]
 
 
 def _safe_float(data, key: str) -> float | None:

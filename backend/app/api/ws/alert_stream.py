@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.ws.connection_manager import manager
+from app.database import get_db
+from app.models.user import User
 from app.utils.security import decode_token
 
 logger = logging.getLogger(__name__)
@@ -16,23 +20,52 @@ router = APIRouter()
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _authenticate(token: str | None) -> int | None:
-    """Validate a JWT token and return the ``user_id``, or ``None``."""
+async def _authenticate(token: str | None, db: AsyncSession) -> int | None:
+    """Validate a JWT and confirm the user is still valid; return ``user_id``.
+
+    Mirrors ``app.api.deps.get_current_user``: beyond checking the signature,
+    type and ``sub``, it loads the user and rejects tokens for a missing or
+    deactivated account, and honours password-change revocation via the ``pcat``
+    claim (a token minted before the user's most recent password change is no
+    longer accepted). Returns ``None`` on any failure so the caller closes 4001.
+    """
     if not token:
         return None
     payload = decode_token(token)
     if payload is None or payload.get("type") != "access":
         return None
     try:
-        return int(payload["sub"])
+        user_id = int(payload["sub"])
     except (KeyError, ValueError, TypeError):
         return None
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None or not user.is_active:
+        return None
+
+    # Reject tokens minted before the user's most recent password change.
+    token_pcat_raw = payload.get("pcat", 0)
+    try:
+        token_pcat = int(token_pcat_raw)
+    except (TypeError, ValueError):
+        token_pcat = 0
+    if user.password_changed_at is not None:
+        current_pcat = int(user.password_changed_at.timestamp())
+        if token_pcat < current_pcat:
+            return None
+
+    return user_id
 
 
 # ── WebSocket route ───────────────────────────────────────────────────────────
 
 @router.websocket("/ws/alerts")
-async def websocket_alert_stream(websocket: WebSocket, token: str | None = None) -> None:
+async def websocket_alert_stream(
+    websocket: WebSocket,
+    token: str | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> None:
     """Push real-time alert notifications to authenticated clients.
 
     **Query parameters**:
@@ -47,7 +80,7 @@ async def websocket_alert_stream(websocket: WebSocket, token: str | None = None)
         ``{"action": "ack", "alert_id": 1}``  — acknowledge receipt of an alert.
     """
     # ── authenticate ──────────────────────────────────────────────
-    user_id = _authenticate(token)
+    user_id = await _authenticate(token, db)
     if user_id is None:
         await websocket.close(code=4001, reason="Authentication failed")
         return

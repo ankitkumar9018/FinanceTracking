@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
+_UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MB
 _EXCEL_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
@@ -92,21 +93,36 @@ async def _verify_portfolio_ownership(
 
 
 async def _read_upload(file: UploadFile, allowed_exts: tuple[str, ...]) -> bytes:
-    """Read and validate an uploaded file."""
+    """Read and validate an uploaded file.
+
+    Reads the upload in chunks and aborts with 413 as soon as the running total
+    exceeds ``MAX_UPLOAD_SIZE`` — so an oversized upload is never fully buffered
+    into memory before being rejected.
+    """
     if file.filename and not file.filename.lower().endswith(allowed_exts):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Only {', '.join(allowed_exts)} files are supported",
         )
-    file_bytes = await file.read()
+
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE // (1024 * 1024)} MB.",
+            )
+        chunks.append(chunk)
+
+    file_bytes = b"".join(chunks)
     if not file_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty",
-        )
-    if len(file_bytes) > MAX_UPLOAD_SIZE:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE // (1024 * 1024)} MB.",
         )
     return file_bytes
 

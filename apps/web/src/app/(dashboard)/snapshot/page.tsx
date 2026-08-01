@@ -62,10 +62,17 @@ export default function SnapshotPage() {
   })();
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(snapshotText);
-    setCopied(true);
-    toast.success("Copied to clipboard!");
-    setTimeout(() => setCopied(false), 2000);
+    // clipboard.writeText rejects in insecure contexts (non-HTTPS) or when the
+    // permission is denied — catch it so there's no unhandled rejection and the
+    // user gets feedback either way.
+    try {
+      await navigator.clipboard.writeText(snapshotText);
+      setCopied(true);
+      toast.success("Copied to clipboard!");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Couldn't copy — clipboard access is blocked in this browser context");
+    }
   }
 
   return (

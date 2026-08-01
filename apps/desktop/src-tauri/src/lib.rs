@@ -82,23 +82,20 @@ fn kill_sidecar(state: &AppState) {
         }
     }
 
-    // Belt-and-suspenders: sweep any orphaned sidecar the CommandChild lost
-    // track of (e.g. after a prior crash), so no backend is left holding a port.
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/T", "/IM", "financetracker-backend.exe"])
-            .creation_flags(0x08000000)
-            .output();
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = std::process::Command::new("pkill")
-            .args(["-f", "financetracker-backend"])
-            .output();
-    }
+    // Co-running safety (HARD REQUIREMENT): we deliberately do NOT perform any
+    // name-based sweep here (no `taskkill /IM financetracker-backend.exe`, no
+    // `pkill -f financetracker-backend`). Killing by image name or argv
+    // substring would reap EVERY matching process — a second running instance
+    // of this app, or an unrelated process whose command line merely contains
+    // the string (e.g. `tail -f financetracker-backend.log`). The
+    // graceful-then-forced `child.kill()` above already reaps THIS instance's
+    // own sidecar, which is the only process we are entitled to stop.
+    //
+    // Safely reaping a truly-orphaned sidecar left by a PRIOR crash would
+    // require spawning it in its own process group / Windows Job Object and
+    // killing by that group id (so the scope is provably this instance only).
+    // Until that tracking exists we accept a rare orphan rather than ever risk
+    // terminating another process.
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -139,7 +136,10 @@ pub fn run() {
                 .map(|cmd| cmd.args(&sidecar_args))
                 .and_then(|cmd| cmd.spawn().map_err(|e| e.into()));
 
-            let child = match sidecar_result {
+            // On spawn failure we keep the error so we can surface a clear
+            // message in the webview instead of spinning on /health forever
+            // (there is no backend to reach, so the poll would never succeed).
+            let (child, spawn_error): (Option<CommandChild>, Option<String>) = match sidecar_result {
                 Ok((mut rx, child)) => {
                     tauri::async_runtime::spawn(async move {
                         use tauri_plugin_shell::process::CommandEvent;
@@ -159,11 +159,11 @@ pub fn run() {
                             }
                         }
                     });
-                    Some(child)
+                    (Some(child), None)
                 }
                 Err(e) => {
-                    eprintln!("WARNING: Failed to spawn sidecar: {}", e);
-                    None
+                    eprintln!("ERROR: Failed to spawn backend sidecar: {}", e);
+                    (None, Some(e.to_string()))
                 }
             };
 
@@ -200,6 +200,15 @@ pub fn run() {
                 "document.documentElement.innerHTML = '<head><style>body{margin:0;font-family:system-ui;background:#09090b;color:#fafafa;display:flex;align-items:center;justify-content:center;height:100vh}.sp{width:40px;height:40px;border:3px solid #333;border-top-color:#6366f1;border-radius:50%;animation:r 1s linear infinite;margin:0 auto 16px}@keyframes r{to{transform:rotate(360deg)}}p{color:#888;font-size:14px}</style></head><body><div style=\"text-align:center\"><div class=\"sp\"></div><h2 style=\"margin:0 0 8px\">FinanceTracker</h2><p>Starting local server\\u2026<br>First launch can take a minute or two.</p></div></body>';"
             );
 
+            // If the sidecar failed to spawn there is no backend to reach, so
+            // polling /health would spin forever behind the loading screen.
+            // Surface a clear, actionable error instead. (The detailed cause is
+            // already logged to stderr above.)
+            if spawn_error.is_some() {
+                let _ = window.eval(
+                    "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888;background:#09090b\"><div style=\"text-align:center;max-width:460px;padding:24px\"><h2 style=\"color:#fafafa;margin:0 0 12px\">Could not start the local server</h2><p>The FinanceTracker backend failed to launch on this machine. Please reinstall or reopen the app; if it keeps happening, check the application logs.</p></div></div>';"
+                );
+            } else {
             std::thread::spawn(move || {
                 let url = format!("http://localhost:{}/#ftport={}", port, port);
                 // Onefile PyInstaller extracts the whole bundle on every launch;
@@ -230,6 +239,7 @@ pub fn run() {
                     let _ = window.eval(&recovery);
                 }
             });
+            }
 
             Ok(())
         })

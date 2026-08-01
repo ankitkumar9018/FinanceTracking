@@ -11,7 +11,7 @@ class WatchlistCreate(BaseModel):
     stock_symbol: str = Field(min_length=1, max_length=50)
     stock_name: str = Field(min_length=1, max_length=255)
     exchange: str = Field(min_length=1, max_length=20)
-    target_buy_price: float | None = None
+    target_buy_price: float | None = Field(default=None, ge=0)
     lower_mid_range_1: float | None = None
     lower_mid_range_2: float | None = None
     upper_mid_range_1: float | None = None
@@ -23,7 +23,7 @@ class WatchlistCreate(BaseModel):
 
 class WatchlistPatch(BaseModel):
     stock_name: str | None = None
-    target_buy_price: float | None = None
+    target_buy_price: float | None = Field(default=None, ge=0)
     lower_mid_range_1: float | None = None
     lower_mid_range_2: float | None = None
     upper_mid_range_1: float | None = None

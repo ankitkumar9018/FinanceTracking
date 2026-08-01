@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -106,6 +106,29 @@ def _consume_backup_code(user: User, code: str) -> bool:
     return True
 
 
+# ── Token / timing helpers ────────────────────────────────────────────────────
+
+# A precomputed bcrypt hash used to equalize login timing when the email does
+# not exist, so an attacker cannot distinguish "no such user" from "wrong
+# password" by response latency (user enumeration).
+_DUMMY_PASSWORD_HASH = hash_password("timing-equalization-placeholder")
+
+
+def _token_payload(user: User) -> dict:
+    """Base JWT claims for ``user``.
+
+    Includes the ``pcat`` claim (password_changed_at as an epoch int) so that
+    ``get_current_user`` can reject access/refresh tokens that were minted
+    before the user's most recent password change or reset.
+    """
+    pcat = (
+        int(user.password_changed_at.timestamp())
+        if user.password_changed_at
+        else 0
+    )
+    return {"sub": str(user.id), "email": user.email, "pcat": pcat}
+
+
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -160,7 +183,17 @@ async def login(
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
 
-    if not user or not verify_password(body.password, user.password_hash):
+    if user is None:
+        # Run a bcrypt verify against a dummy hash even though no user exists, so
+        # response timing stays constant and does not leak whether the email is
+        # registered (mitigates user enumeration).
+        verify_password(body.password, _DUMMY_PASSWORD_HASH)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+        )
+
+    if not verify_password(body.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
@@ -196,7 +229,7 @@ async def login(
                 ip_address=request.client.host if request.client else None,
             )
 
-    token_data = {"sub": str(user.id), "email": user.email}
+    token_data = _token_payload(user)
 
     await audit_log(
         db,
@@ -236,7 +269,15 @@ async def refresh_token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token",
         )
-    result = await db.execute(select(User).where(User.id == int(user_id)))
+    try:
+        user_pk = int(user_id)
+    except (TypeError, ValueError):
+        # A non-numeric "sub" is a malformed/forged token — 401, not a 500.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
+        ) from None
+    result = await db.execute(select(User).where(User.id == user_pk))
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(
@@ -244,7 +285,7 @@ async def refresh_token(
             detail="User account is deactivated or does not exist",
         )
 
-    token_data = {"sub": str(user.id), "email": user.email}
+    token_data = _token_payload(user)
     return {
         "access_token": create_access_token(token_data),
         "refresh_token": create_refresh_token(token_data),
@@ -276,7 +317,7 @@ async def forgot_password(
     if user:
         raw_token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        expires_at = datetime.now(UTC) + timedelta(hours=1)
 
         db.add(
             PasswordReset(
@@ -288,6 +329,11 @@ async def forgot_password(
         await db.flush()
 
         frontend_base = settings.cors_origins.split(",")[0].strip().rstrip("/")
+        # In desktop/wildcard CORS mode the first origin can be "*" (or empty),
+        # which is not a usable base for a reset link — fall back to the local
+        # web app instead of building a broken "*/reset-password" URL.
+        if not frontend_base or frontend_base == "*":
+            frontend_base = "http://localhost:3000"
         reset_link = f"{frontend_base}/reset-password?token={raw_token}"
         subject = "Reset your FinanceTracker password"
         html_body = (
@@ -326,7 +372,7 @@ async def reset_password(
 ) -> dict:
     """Complete a password reset using a single-use token."""
     token_hash = hashlib.sha256(body.token.encode()).hexdigest()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     result = await db.execute(
         select(PasswordReset).where(
@@ -351,6 +397,9 @@ async def reset_password(
         )
 
     user.password_hash = hash_password(body.new_password)
+    # Bump the password-change stamp so any tokens minted before now (carrying an
+    # older "pcat") are rejected by get_current_user.
+    user.password_changed_at = now
     reset.used_at = now
 
     # Invalidate this user's other outstanding reset tokens.
@@ -392,7 +441,9 @@ async def get_current_user_info(
 # ── 2FA endpoints ────────────────────────────────────────────────────────────
 
 @router.post("/change-password")
+@limiter.limit("10/minute")
 async def change_password(
+    request: Request,
     body: ChangePasswordRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -404,6 +455,9 @@ async def change_password(
             detail="Current password is incorrect",
         )
     user.password_hash = hash_password(body.new_password)
+    # Bump the password-change stamp so tokens minted before now (carrying an
+    # older "pcat") are rejected by get_current_user.
+    user.password_changed_at = datetime.now(UTC)
     await db.flush()
     await audit_log(
         db,
@@ -432,7 +486,9 @@ async def setup_2fa(
 
 
 @router.post("/2fa/verify")
+@limiter.limit("10/minute")
 async def verify_2fa(
+    request: Request,
     body: TwoFactorVerify,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -462,7 +518,9 @@ async def verify_2fa(
 
 
 @router.post("/2fa/disable")
+@limiter.limit("10/minute")
 async def disable_2fa(
+    request: Request,
     body: TwoFactorCode,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

@@ -6,7 +6,8 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatCurrency(value: number | null | undefined, currency = "INR", locale = "en-IN"): string {
-  if (value == null) return "—";
+  // Guard null/undefined AND NaN/Infinity so we never render "₹NaN".
+  if (value == null || !Number.isFinite(value)) return "—";
   return new Intl.NumberFormat(locale, {
     style: "currency",
     currency,
@@ -16,9 +17,10 @@ export function formatCurrency(value: number | null | undefined, currency = "INR
 }
 
 export function formatPercent(value: number | null | undefined, decimals = 2): string {
-  const v = value ?? 0;
-  const sign = v > 0 ? "+" : "";
-  return `${sign}${v.toFixed(decimals)}%`;
+  // Guard null/undefined AND NaN/Infinity so we never render "NaN%".
+  if (value == null || !Number.isFinite(value)) return "—";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(decimals)}%`;
 }
 
 export function formatCompact(value: number): string {

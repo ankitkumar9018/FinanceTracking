@@ -584,23 +584,31 @@ export default function NetWorthPage() {
   const effectiveCurrency = displayCurrency ?? user?.preferred_currency ?? "INR";
   const overrideActive = !!user && effectiveCurrency !== user.preferred_currency;
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      // The override is additive: the endpoint converts totals to this currency
-      // for this response only, leaving the stored preference untouched.
-      const qs = `?display_currency=${encodeURIComponent(effectiveCurrency)}`;
-      const result = await api.get<NetWorthData>(`/net-worth${qs}`);
-      setData(result);
-    } catch {
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [effectiveCurrency]);
+  const loadData = useCallback(
+    async (isActive: () => boolean = () => true) => {
+      setLoading(true);
+      try {
+        // The override is additive: the endpoint converts totals to this currency
+        // for this response only, leaving the stored preference untouched.
+        const qs = `?display_currency=${encodeURIComponent(effectiveCurrency)}`;
+        const result = await api.get<NetWorthData>(`/net-worth${qs}`);
+        if (isActive()) setData(result);
+      } catch {
+        if (isActive()) setData(null);
+      } finally {
+        if (isActive()) setLoading(false);
+      }
+    },
+    [effectiveCurrency]
+  );
 
   useEffect(() => {
-    loadData();
+    // Guard against a slow earlier response overwriting a newer currency's data.
+    let active = true;
+    loadData(() => active);
+    return () => {
+      active = false;
+    };
   }, [loadData]);
 
   async function handleAddAsset(formData: AssetFormData) {

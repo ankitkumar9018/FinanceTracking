@@ -65,6 +65,31 @@ class BrokerAdapter(ABC):
             depending on the broker's OAuth flow.
         """
 
+    async def restore_session(
+        self, api_key: str, api_secret: str, access_token: str
+    ) -> bool:
+        """Re-establish an authenticated session from a stored access token.
+
+        After the initial OAuth round-trip completes, the broker's access /
+        session token is persisted (encrypted). On subsequent calls the token
+        must be re-injected into the underlying SDK client so ``is_connected()``
+        becomes ``True`` again *without* forcing the user through OAuth once
+        more.
+
+        The default implementation is a **no-op returning ``False``** so that
+        stub adapters (and brokers that don't support token-based reconnection)
+        keep working unchanged. Concrete adapters that support it override this
+        to rebuild their client and return ``True``.
+
+        Returns
+        -------
+        bool
+            ``True`` if the session was restored (``is_connected()`` is now
+            ``True``); ``False`` if token restore is unsupported/failed and the
+            caller should fall back to a fresh ``connect()``.
+        """
+        return False
+
     @abstractmethod
     async def disconnect(self) -> None:
         """Clean up the connection / invalidate session."""

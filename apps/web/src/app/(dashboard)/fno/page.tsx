@@ -60,10 +60,16 @@ export default function FnoPage() {
   const formRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (activePortfolioId) loadPositions();
+    if (!activePortfolioId) return;
+    // Guard against a slow earlier response overwriting a newer portfolio's data.
+    let active = true;
+    loadPositions(() => active);
+    return () => {
+      active = false;
+    };
   }, [activePortfolioId]);
 
-  async function loadPositions() {
+  async function loadPositions(isActive: () => boolean = () => true) {
     if (!activePortfolioId) return;
     setLoading(true);
     setError(null);
@@ -71,12 +77,14 @@ export default function FnoPage() {
       const data = await api.get<FnoPosition[]>(
         `/fno/positions/${activePortfolioId}`
       );
+      if (!isActive()) return;
       setPositions(data);
     } catch (err) {
+      if (!isActive()) return;
       setPositions([]);
       setError(err instanceof Error ? err.message : "Failed to load F&O positions");
     } finally {
-      setLoading(false);
+      if (isActive()) setLoading(false);
     }
   }
 

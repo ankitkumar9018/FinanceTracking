@@ -15,7 +15,7 @@ from app.models.alert import Alert
 from app.models.user import User
 from app.services.alert_service import check_all_alerts_for_user
 from app.services.notification_service import dispatch_notification
-from app.tasks.celery_app import celery_app, is_celery_available
+from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -149,10 +149,15 @@ async def check_alerts_task() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Celery task wrapper (only registered when Celery is installed)
+# Celery task wrapper (registered whenever Celery is importable)
 # ---------------------------------------------------------------------------
+# Register the task purely on Celery being importable — NOT on a live Redis
+# ping. celery_app.py's beat_schedule always references this task, so gating
+# registration on a runtime broker ping meant a momentary Redis blip at import
+# time would leave beat pointing at an unregistered task. The APScheduler-vs-
+# Celery runtime decision (which does ping Redis) still lives in scheduler.py.
 
-if is_celery_available() and celery_app is not None:
+if celery_app is not None:
 
     @celery_app.task(name="app.tasks.check_alerts.check_alerts_celery", bind=True)
     def check_alerts_celery(self) -> dict:  # type: ignore[misc]

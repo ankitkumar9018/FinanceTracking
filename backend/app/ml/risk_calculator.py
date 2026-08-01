@@ -153,15 +153,30 @@ def calculate_beta(
 
 
 def calculate_portfolio_returns(
-    holdings_data: list[dict],  # [{symbol, weight, daily_returns: pd.Series}]
+    holdings_data: list[dict],  # [{symbol, exchange?, weight, daily_returns}]
 ) -> pd.Series:
-    """Calculate weighted portfolio returns."""
+    """Calculate weighted portfolio returns.
+
+    Weights are renormalized to sum to 1 over the holdings actually present
+    here: callers drop holdings that lack price history, so the surviving
+    weights would otherwise sum to <1 and understate the metrics.
+    """
     if not holdings_data:
         return pd.Series(dtype=float)
 
-    df = pd.DataFrame(
-        {h["symbol"]: h["daily_returns"] * h["weight"] for h in holdings_data}
-    )
+    total_weight = sum(h["weight"] for h in holdings_data)
+    if total_weight <= 0:
+        return pd.Series(dtype=float)
+
+    # Key each column by (symbol, exchange) so two holdings of the same symbol
+    # on different exchanges don't collide (a plain symbol key would silently
+    # drop one of them).
+    columns = {
+        (h["symbol"], h.get("exchange")): h["daily_returns"]
+        * (h["weight"] / total_weight)
+        for h in holdings_data
+    }
+    df = pd.DataFrame(columns)
     # Only use dates where every holding has data: summing with NaN→0 would
     # fabricate 0%-return days (all-NaN dates) and value shorter-history
     # holdings at 0% without renormalizing weights, biasing vol/VaR/Sharpe.
@@ -289,6 +304,7 @@ async def compute_portfolio_risk(
             holdings_data.append(
                 {
                     "symbol": h.stock_symbol,
+                    "exchange": h.exchange,
                     "weight": weight,
                     "daily_returns": daily_returns,
                 }
@@ -321,30 +337,33 @@ async def compute_portfolio_risk(
         else None
     )
 
+    # Align portfolio and benchmark on their overlapping dates ONCE and reuse
+    # for both alpha and the information ratio — comparing each series' own
+    # full-length mean would mix different date windows.
+    aligned = pd.DataFrame(
+        {"port": port_returns, "bench": bench_returns}
+    ).dropna()
+
     # Alpha = portfolio return - (risk_free + beta * (benchmark_return - risk_free))
     alpha_val = None
-    if beta is not None and len(bench_returns) > 0:
-        ann_port = float(port_returns.mean() * TRADING_DAYS_PER_YEAR)
-        ann_bench = float(bench_returns.mean() * TRADING_DAYS_PER_YEAR)
+    if beta is not None and len(aligned) > 0:
+        ann_port = float(aligned["port"].mean() * TRADING_DAYS_PER_YEAR)
+        ann_bench = float(aligned["bench"].mean() * TRADING_DAYS_PER_YEAR)
         alpha_val = ann_port - (
             RISK_FREE_RATE_ANNUAL + beta * (ann_bench - RISK_FREE_RATE_ANNUAL)
         )
 
     # Information ratio
     info_ratio = None
-    if len(bench_returns) > 0:
-        aligned = pd.DataFrame(
-            {"port": port_returns, "bench": bench_returns}
-        ).dropna()
-        if len(aligned) > 30:
-            tracking_error = (aligned["port"] - aligned["bench"]).std() * np.sqrt(
-                TRADING_DAYS_PER_YEAR
-            )
-            if tracking_error > 0:
-                excess_return = (
-                    aligned["port"].mean() - aligned["bench"].mean()
-                ) * TRADING_DAYS_PER_YEAR
-                info_ratio = float(excess_return / tracking_error)
+    if len(aligned) > 30:
+        tracking_error = (aligned["port"] - aligned["bench"]).std() * np.sqrt(
+            TRADING_DAYS_PER_YEAR
+        )
+        if tracking_error > 0:
+            excess_return = (
+                aligned["port"].mean() - aligned["bench"].mean()
+            ) * TRADING_DAYS_PER_YEAR
+            info_ratio = float(excess_return / tracking_error)
 
     # Calmar ratio
     calmar = None
@@ -409,6 +428,34 @@ async def compute_holding_risks(
     # Benchmark returns
     bench_returns = await _fetch_benchmark_returns(db, benchmark_symbol, cutoff)
 
+    # Batch-fetch every holding's price history in a SINGLE query instead of one
+    # SELECT per holding (this used to be an N+1). Over-fetching across exchanges
+    # is harmless: rows are grouped by the exact (symbol, exchange) key below.
+    symbols = {h.stock_symbol for h in holdings}
+    exchanges = {h.exchange for h in holdings}
+    price_rows = (
+        await db.execute(
+            select(
+                PriceHistory.stock_symbol,
+                PriceHistory.exchange,
+                PriceHistory.date,
+                PriceHistory.close,
+            )
+            .where(
+                PriceHistory.stock_symbol.in_(symbols),
+                PriceHistory.exchange.in_(exchanges),
+                PriceHistory.date >= cutoff,
+            )
+            .order_by(PriceHistory.date.asc())
+        )
+    ).all()
+
+    prices_by_key: dict[tuple[str, str], list] = {}
+    for r in price_rows:
+        prices_by_key.setdefault((r.stock_symbol, r.exchange), []).append(
+            (r.date, r.close)
+        )
+
     results = []
     for h in holdings:
         value = float(h.cumulative_quantity) * float(
@@ -416,16 +463,8 @@ async def compute_holding_risks(
         )
         weight = value / total_value if total_value > 0 else 0
 
-        price_result = await db.execute(
-            select(PriceHistory.date, PriceHistory.close)
-            .where(
-                PriceHistory.stock_symbol == h.stock_symbol,
-                PriceHistory.exchange == h.exchange,
-                PriceHistory.date >= cutoff,
-            )
-            .order_by(PriceHistory.date.asc())
-        )
-        prices = price_result.all()
+        # Already ordered by date asc from the batched query.
+        prices = prices_by_key.get((h.stock_symbol, h.exchange), [])
 
         beta_val = None
         corr_val = None
@@ -434,8 +473,8 @@ async def compute_holding_risks(
 
         if len(prices) >= 2:
             price_series = pd.Series(
-                [float(p.close) for p in prices],
-                index=[p.date for p in prices],
+                [float(close) for _, close in prices],
+                index=[d for d, _ in prices],
             )
             daily_returns = price_series.pct_change().dropna()
             vol_val = float(daily_returns.std() * np.sqrt(TRADING_DAYS_PER_YEAR))

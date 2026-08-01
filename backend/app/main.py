@@ -21,18 +21,40 @@ from app.utils.rate_limiter import limiter
 logger = logging.getLogger(__name__)
 
 
+def _enforce_secret_key(secret_key: str | None = None, debug: bool | None = None) -> None:
+    """Guard against shipping the default JWT secret to production.
+
+    In debug mode we only warn (a local-dev convenience). Outside debug mode a
+    default ``dev-secret`` key is a hard failure: the app raises at startup
+    (fail closed) rather than silently signing tokens with a publicly-known
+    secret. Parameters default to the live settings but can be passed
+    explicitly (used by tests).
+    """
+    secret_key = settings.secret_key if secret_key is None else secret_key
+    debug = settings.debug if debug is None else debug
+    if not secret_key.startswith("dev-secret"):
+        return
+    if debug:
+        logger.warning(
+            "SECRET_KEY is using the default development value. "
+            "Set SECRET_KEY in .env for production use."
+        )
+        return
+    raise RuntimeError(
+        "SECRET_KEY is set to the default development value while debug is "
+        "disabled. Refusing to start (fail closed): set a strong SECRET_KEY "
+        "in .env or the environment before running in production."
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application startup and shutdown events."""
     # ── Startup ──────────────────────────────────────────────────────
     logger.info("Starting %s v%s", settings.app_name, settings.app_version)
 
-    # Security warnings
-    if settings.secret_key.startswith("dev-secret"):
-        logger.warning(
-            "SECRET_KEY is using the default development value. "
-            "Set SECRET_KEY in .env for production use."
-        )
+    # Security: fail closed on the default JWT secret outside debug mode.
+    _enforce_secret_key()
 
     # Create database tables (safe to call if they already exist)
     await create_tables()

@@ -15,11 +15,16 @@ echo -e "${BLUE}  FinanceTracker — Service Health${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
 echo ""
 
-# Resolve the actual backend port chosen at launch (falls back to 8420)
-PID_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.pids"
-LOGS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/logs"
+# Resolve the actual ports chosen at launch (from either the .pids or logs dir,
+# matching start.sh / run.sh respectively). Fall back to the defaults.
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BACKEND_DIR="$PROJECT_ROOT/backend"
+PID_DIR="$PROJECT_ROOT/.pids"
+LOGS_DIR="$PROJECT_ROOT/logs"
 BPORT=$(cat "$PID_DIR/backend.port" "$LOGS_DIR/backend.port" 2>/dev/null | head -1)
 BPORT=${BPORT:-8420}
+FPORT=$(cat "$PID_DIR/frontend.port" "$LOGS_DIR/frontend.port" 2>/dev/null | head -1)
+FPORT=${FPORT:-3000}
 
 # Backend API
 if curl -s "http://localhost:$BPORT/health" | grep -q "healthy" 2>/dev/null; then
@@ -28,9 +33,9 @@ else
     echo -e "  Backend API:     ${RED}Down ✗${NC}"
 fi
 
-# Web App
-if curl -s http://localhost:3000 &>/dev/null; then
-    echo -e "  Web App:         ${GREEN}Running ✓${NC}  http://localhost:3000"
+# Web App (on the actual chosen frontend port, not a hard-coded 3000)
+if curl -s "http://localhost:$FPORT" &>/dev/null; then
+    echo -e "  Web App:         ${GREEN}Running ✓${NC}  http://localhost:$FPORT"
 else
     echo -e "  Web App:         ${RED}Down ✗${NC}"
 fi
@@ -50,11 +55,25 @@ else
     echo -e "  Ollama:          ${YELLOW}Not available ⚠${NC} (AI disabled)"
 fi
 
-# Database
-DB_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/backend/finance.db"
-if [ -f "$DB_FILE" ]; then
+# Database — resolve the real dev DB file from backend/.env (DATABASE_URL)
+# instead of hard-coding a name/path; fall back to the common dev DB names.
+DB_FILE=""
+ENV_FILE="$BACKEND_DIR/.env"
+[ -f "$ENV_FILE" ] || ENV_FILE="$BACKEND_DIR/.env.example"
+if [ -f "$ENV_FILE" ]; then
+    DB_URL=$(grep -E '^DATABASE_URL=' "$ENV_FILE" | head -1 | sed -E 's/^DATABASE_URL=//' | tr -d '\r')
+    case "$DB_URL" in
+        *sqlite*) DB_FILE="$BACKEND_DIR/${DB_URL##*/}" ;;  # trailing filename of the sqlite URL
+    esac
+fi
+if [ -z "$DB_FILE" ] || [ ! -f "$DB_FILE" ]; then
+    for candidate in "$BACKEND_DIR/finance.db" "$BACKEND_DIR/finance_tracker.db"; do
+        [ -f "$candidate" ] && { DB_FILE="$candidate"; break; }
+    done
+fi
+if [ -n "$DB_FILE" ] && [ -f "$DB_FILE" ]; then
     DB_SIZE=$(du -h "$DB_FILE" 2>/dev/null | cut -f1)
-    echo -e "  Database:        ${GREEN}SQLite ✓${NC}  Size: $DB_SIZE"
+    echo -e "  Database:        ${GREEN}SQLite ✓${NC}  $(basename "$DB_FILE") (Size: $DB_SIZE)"
 else
     echo -e "  Database:        ${YELLOW}Not created yet${NC}"
 fi

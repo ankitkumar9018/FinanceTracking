@@ -190,6 +190,8 @@ export function VoiceInput({ onTranscript, className = "" }: VoiceInputProps) {
   const handleToggle = useCallback(() => {
     if (!supported) {
       setShowTooltip(true);
+      // Clear any previous timer so rapid clicks don't leak/overlap timeouts.
+      if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current);
       tooltipTimerRef.current = setTimeout(() => setShowTooltip(false), 2500);
       return;
     }

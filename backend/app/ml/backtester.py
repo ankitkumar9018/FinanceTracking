@@ -218,9 +218,13 @@ def _compute_backtest_metrics(
     drawdown = (equity_series - peak) / peak
     max_drawdown = float(drawdown.min()) * 100 if len(drawdown) > 0 else 0.0
 
-    # Win rate
-    winning_trades = [t for t in trades if t.get("pnl", 0) > 0]
-    total_trades = len(trades)
+    # Win rate — count round-trips, not individual legs. A buy and its
+    # matching sell are ONE trade; only the closing (sell) leg carries pnl, so
+    # total_trades is the number of closing legs and win_rate is the share of
+    # those that closed profitably.
+    closing_trades = [t for t in trades if t.get("type") == "sell"]
+    winning_trades = [t for t in closing_trades if t.get("pnl", 0) > 0]
+    total_trades = len(closing_trades)
     win_rate = (len(winning_trades) / total_trades * 100) if total_trades > 0 else 0.0
 
     return BacktestResult(
@@ -353,6 +357,12 @@ async def run_backtest(
 
     # Generate signals
     signals = strategy_fn(prices_df, **params)
+
+    # Avoid look-ahead bias: a signal computed from close[i] must be acted on
+    # at the NEXT bar's price (close[i+1]), not the same close it was derived
+    # from. Shifting by one bar makes the fill realistic and drops the (now
+    # unusable) first bar's signal.
+    signals = signals.shift(1).fillna(0)
 
     # Simulate trades
     trades, equity_curve = _simulate_trades(prices_df, signals, initial_capital)

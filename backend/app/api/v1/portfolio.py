@@ -304,26 +304,43 @@ async def compare_benchmark(
             detail="No holdings found in this portfolio",
         )
 
-    # Build portfolio daily values (simplified: use current snapshot as single point)
-    # In a full implementation, you'd pull from PriceHistory table
-    total_invested = 0.0
-    total_current = 0.0
-    for h in holdings:
-        qty = float(h.cumulative_quantity)
-        avg = float(h.average_price)
-        total_invested += qty * avg
-        if h.current_price is not None:
-            total_current += qty * float(h.current_price)
-
-    # Build a minimal daily values list with start and end
+    # Build a genuine dated market-value series over the SAME window as the
+    # benchmark from stored PriceHistory: value_on_day = sum over holdings of
+    # (current quantity * that day's close). Comparing this real series against
+    # the benchmark's windowed return yields an honest alpha, unlike the old
+    # two-point [invested, current] series which compared all-time unrealized
+    # P&L against an N-day benchmark return (a fabricated alpha).
     from datetime import timedelta
+
+    from app.models.price_history import PriceHistory
 
     end_date = date.today()
     start_date = end_date - timedelta(days=days)
 
+    # Aggregate quantity per (symbol, exchange) so multiple lots collapse.
+    qty_by_symbol: dict[tuple[str, str], float] = {}
+    for h in holdings:
+        key = (h.stock_symbol, h.exchange)
+        qty_by_symbol[key] = qty_by_symbol.get(key, 0.0) + float(h.cumulative_quantity)
+
+    ph_result = await db.execute(
+        select(PriceHistory).where(
+            PriceHistory.date >= start_date,
+            PriceHistory.date <= end_date,
+        )
+    )
+    price_rows = ph_result.scalars().all()
+
+    daily_totals: dict[date, float] = {}
+    for row in price_rows:
+        qty = qty_by_symbol.get((row.stock_symbol, row.exchange))
+        if qty is None:
+            continue
+        daily_totals[row.date] = daily_totals.get(row.date, 0.0) + qty * float(row.close)
+
     portfolio_daily_values = [
-        {"date": start_date.isoformat(), "value": total_invested},
-        {"date": end_date.isoformat(), "value": total_current},
+        {"date": d.isoformat(), "value": v}
+        for d, v in sorted(daily_totals.items())
     ]
 
     comparison = await compare_with_benchmark(
@@ -345,6 +362,7 @@ async def compare_benchmark(
         "portfolio_return_pct": comparison.portfolio_return_pct,
         "benchmark_return_pct": comparison.benchmark_return_pct,
         "alpha": comparison.alpha,
+        "insufficient_history": comparison.insufficient_history,
         "period_days": comparison.period_days,
         "data_points": comparison.data_points,
     }

@@ -30,7 +30,7 @@ class FnoPositionCreate(BaseModel):
     symbol: str = Field(min_length=1, max_length=50)
     exchange: str = Field(default="NSE", max_length=20)
     instrument_type: InstrumentType
-    strike_price: float | None = None  # required for options, null for futures
+    strike_price: float | None = Field(default=None, gt=0)  # options only; null for futures
     expiry_date: date
     lot_size: int = Field(gt=0)
     quantity: int = Field(gt=0, description="Number of lots")

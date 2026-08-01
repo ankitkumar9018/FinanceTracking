@@ -31,17 +31,23 @@ export function ThemeProvider({ children, defaultTheme = "dark", storageKey = "f
 
   React.useEffect(() => {
     const root = document.documentElement;
-    root.classList.remove("light", "dark");
 
-    let resolved: "dark" | "light";
+    const apply = (resolved: "dark" | "light") => {
+      root.classList.remove("light", "dark");
+      root.classList.add(resolved);
+      setResolvedTheme(resolved);
+    };
+
     if (theme === "system") {
-      resolved = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    } else {
-      resolved = theme;
+      const mql = window.matchMedia("(prefers-color-scheme: dark)");
+      apply(mql.matches ? "dark" : "light");
+      // Follow live OS theme flips while on "system".
+      const onChange = (e: MediaQueryListEvent) => apply(e.matches ? "dark" : "light");
+      mql.addEventListener("change", onChange);
+      return () => mql.removeEventListener("change", onChange);
     }
 
-    root.classList.add(resolved);
-    setResolvedTheme(resolved);
+    apply(theme);
   }, [theme]);
 
   const setTheme = React.useCallback(

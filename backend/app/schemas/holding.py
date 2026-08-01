@@ -14,12 +14,12 @@ class HoldingCreate(BaseModel):
     exchange: str = Field(min_length=1, max_length=20)  # NSE / BSE / XETRA
     cumulative_quantity: float = Field(default=0.0, ge=0)
     average_price: float = Field(default=0.0, ge=0)
-    lower_mid_range_1: float | None = None
-    lower_mid_range_2: float | None = None
-    upper_mid_range_1: float | None = None
-    upper_mid_range_2: float | None = None
-    base_level: float | None = None
-    top_level: float | None = None
+    lower_mid_range_1: float | None = Field(default=None, ge=0)
+    lower_mid_range_2: float | None = Field(default=None, ge=0)
+    upper_mid_range_1: float | None = Field(default=None, ge=0)
+    upper_mid_range_2: float | None = Field(default=None, ge=0)
+    base_level: float | None = Field(default=None, ge=0)
+    top_level: float | None = Field(default=None, ge=0)
     currency: str = Field(default="INR", max_length=10)
     sector: str | None = None
     notes: str | None = None
@@ -34,12 +34,12 @@ class HoldingPatch(BaseModel):
     currency: str | None = None
     cumulative_quantity: float | None = Field(default=None, ge=0)
     average_price: float | None = Field(default=None, ge=0)
-    lower_mid_range_1: float | None = None
-    lower_mid_range_2: float | None = None
-    upper_mid_range_1: float | None = None
-    upper_mid_range_2: float | None = None
-    base_level: float | None = None
-    top_level: float | None = None
+    lower_mid_range_1: float | None = Field(default=None, ge=0)
+    lower_mid_range_2: float | None = Field(default=None, ge=0)
+    upper_mid_range_1: float | None = Field(default=None, ge=0)
+    upper_mid_range_2: float | None = Field(default=None, ge=0)
+    base_level: float | None = Field(default=None, ge=0)
+    top_level: float | None = Field(default=None, ge=0)
     sector: str | None = None
     notes: str | None = None
     custom_fields: dict | None = None

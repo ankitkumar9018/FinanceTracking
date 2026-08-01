@@ -199,24 +199,41 @@ async def alert_history(
     )
     triggered_alerts = result.scalars().all()
 
+    # Batch-resolve associated stock symbols in at most two queries instead of
+    # one SELECT per triggered alert (previously an N+1).
+    holding_ids = {a.holding_id for a in triggered_alerts if a.holding_id is not None}
+    watchlist_ids = {
+        a.watchlist_item_id
+        for a in triggered_alerts
+        if a.watchlist_item_id is not None
+    }
+
+    holding_symbols: dict[int, str] = {}
+    if holding_ids:
+        h_result = await db.execute(
+            select(Holding.id, Holding.stock_symbol).where(
+                Holding.id.in_(holding_ids)
+            )
+        )
+        holding_symbols = {row[0]: row[1] for row in h_result.all()}
+
+    watchlist_symbols: dict[int, str] = {}
+    if watchlist_ids:
+        w_result = await db.execute(
+            select(WatchlistItem.id, WatchlistItem.stock_symbol).where(
+                WatchlistItem.id.in_(watchlist_ids)
+            )
+        )
+        watchlist_symbols = {row[0]: row[1] for row in w_result.all()}
+
     history: list[dict] = []
     for a in triggered_alerts:
-        # Try to get the associated stock symbol
+        # Resolve the associated stock symbol from the batched lookups
         stock_symbol: str | None = None
         if a.holding_id is not None:
-            h_result = await db.execute(
-                select(Holding.stock_symbol).where(Holding.id == a.holding_id)
-            )
-            row = h_result.first()
-            stock_symbol = row[0] if row else None
+            stock_symbol = holding_symbols.get(a.holding_id)
         elif a.watchlist_item_id is not None:
-            w_result = await db.execute(
-                select(WatchlistItem.stock_symbol).where(
-                    WatchlistItem.id == a.watchlist_item_id
-                )
-            )
-            row = w_result.first()
-            stock_symbol = row[0] if row else None
+            stock_symbol = watchlist_symbols.get(a.watchlist_item_id)
 
         history.append(
             {

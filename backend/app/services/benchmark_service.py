@@ -26,11 +26,12 @@ BENCHMARKS = {
 class BenchmarkComparison:
     benchmark_name: str
     benchmark_symbol: str
-    portfolio_return_pct: float
+    portfolio_return_pct: float | None
     benchmark_return_pct: float
-    alpha: float  # portfolio_return - benchmark_return
+    alpha: float | None  # portfolio_return - benchmark_return; None when history insufficient
     period_days: int
     data_points: list[dict]  # [{date, portfolio_value, benchmark_value}]
+    insufficient_history: bool = False
 
 
 async def compare_with_benchmark(
@@ -80,7 +81,12 @@ async def compare_with_benchmark(
 
     # Portfolio return from daily values — clipped to the benchmark's date
     # range so both returns cover the same period (comparing a full-history
-    # portfolio return against a windowed benchmark return fabricates alpha)
+    # portfolio return against a windowed benchmark return fabricates alpha).
+    #
+    # When fewer than two portfolio points fall inside the window there is no
+    # honest period return to compute, so we degrade gracefully: the benchmark
+    # comparison is still returned, but ``portfolio_return_pct`` / ``alpha`` are
+    # ``None`` and ``insufficient_history`` is set — never a fabricated number.
     bench_first_date = benchmark_closes[0][0]
     bench_last_date = benchmark_closes[-1][0]
     aligned_pf = [
@@ -88,32 +94,48 @@ async def compare_with_benchmark(
         if bench_first_date <= p["date"] <= bench_last_date
     ]
     if len(aligned_pf) < 2:
-        aligned_pf = portfolio_daily_values
-    if len(aligned_pf) < 2:
-        return None
-    pf_start = aligned_pf[0]["value"]
-    pf_end = aligned_pf[-1]["value"]
-    portfolio_return = ((pf_end - pf_start) / pf_start) * 100 if pf_start > 0 else 0
+        aligned_pf = list(portfolio_daily_values)
+
+    insufficient = len(aligned_pf) < 2
+    pf_start: float | None = None
+    portfolio_return: float | None = None
+    if not insufficient:
+        pf_start = aligned_pf[0]["value"]
+        pf_end = aligned_pf[-1]["value"]
+        portfolio_return = (
+            ((pf_end - pf_start) / pf_start) * 100 if pf_start and pf_start > 0 else 0.0
+        )
 
     # Build normalized data points (both starting at 100)
     data_points = []
     for d_str, close in benchmark_closes:
         normalized_bench = (close / bench_start) * 100
-        # Find closest portfolio value
+        # Find matching portfolio value for the day (if any)
         pf_val = next((p["value"] for p in portfolio_daily_values if p["date"] == d_str), None)
-        normalized_pf = (pf_val / pf_start) * 100 if pf_val and pf_start > 0 else None
+        normalized_pf = (
+            (pf_val / pf_start) * 100 if (pf_val and pf_start and pf_start > 0) else None
+        )
         data_points.append({
             "date": d_str,
             "benchmark_value": round(normalized_bench, 2),
             "portfolio_value": round(normalized_pf, 2) if normalized_pf else None,
         })
 
+    alpha = (
+        round(portfolio_return - benchmark_return, 2)
+        if portfolio_return is not None
+        else None
+    )
+
     return BenchmarkComparison(
         benchmark_name=benchmark_name,
         benchmark_symbol=symbol,
-        portfolio_return_pct=round(portfolio_return, 2),
+        portfolio_return_pct=(
+            round(portfolio_return, 2) if portfolio_return is not None else None
+        ),
         benchmark_return_pct=round(benchmark_return, 2),
-        alpha=round(portfolio_return - benchmark_return, 2),
+        alpha=alpha,
         period_days=days,
         data_points=data_points,
+        insufficient_history=insufficient,
     )

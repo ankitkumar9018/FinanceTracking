@@ -57,4 +57,18 @@ async def get_current_user(
             detail="Account is deactivated",
         )
 
+    # Reject tokens minted before the user's most recent password change/reset.
+    # The "pcat" claim carries the password_changed_at epoch at mint time; if the
+    # stored stamp is newer, this token predates a credential change and must not
+    # be honoured (defends against stolen tokens surviving a password reset).
+    token_pcat_raw = payload.get("pcat", 0)
+    try:
+        token_pcat = int(token_pcat_raw)
+    except (TypeError, ValueError):
+        token_pcat = 0
+    if user.password_changed_at is not None:
+        current_pcat = int(user.password_changed_at.timestamp())
+        if token_pcat < current_pcat:
+            raise credentials_exception
+
     return user

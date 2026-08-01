@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.brokers import BROKER_REGISTRY, get_broker
+from app.brokers.base import BrokerAdapter
 from app.models.broker_connection import BrokerConnection
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
@@ -148,11 +149,8 @@ async def disconnect_broker(
 
     # Try to gracefully disconnect the adapter
     try:
-        adapter = get_broker(connection.broker_name)
         if connection.access_token_encrypted:
-            api_key = _decrypt(connection.encrypted_api_key)
-            api_secret = _decrypt(connection.encrypted_api_secret)
-            await adapter.connect(api_key, api_secret)
+            adapter = await _establish_adapter(connection)
             await adapter.disconnect()
     except Exception:
         logger.warning(
@@ -187,19 +185,9 @@ async def sync_holdings(
     if not connection.is_active:
         raise ValueError("Broker connection is not active")
 
-    # Decrypt credentials and connect
-    api_key = _decrypt(connection.encrypted_api_key)
-    api_secret = _decrypt(connection.encrypted_api_secret)
-
-    adapter = get_broker(connection.broker_name)
-
-    # Re-establish connection using stored access token if available
-    connect_kwargs: dict = {}
-    if connection.access_token_encrypted:
-        # For reconnection, we pass the stored access token info
-        pass  # Adapter will use api_key/secret to reconnect
-
-    await adapter.connect(api_key, api_secret, **connect_kwargs)
+    # Re-establish the session from the stored access token so the adapter is
+    # actually authenticated (is_connected() == True) before fetching data.
+    adapter = await _establish_adapter(connection)
 
     # Fetch holdings from broker
     broker_holdings = await adapter.get_holdings()
@@ -316,10 +304,7 @@ async def get_connection_status(
     is_connected = False
     if connection.is_active and connection.access_token_encrypted:
         try:
-            api_key = _decrypt(connection.encrypted_api_key)
-            api_secret = _decrypt(connection.encrypted_api_secret)
-            adapter = get_broker(connection.broker_name)
-            await adapter.connect(api_key, api_secret)
+            adapter = await _establish_adapter(connection)
             is_connected = adapter.is_connected()
         except Exception:
             logger.debug(
@@ -338,6 +323,31 @@ async def get_connection_status(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+async def _establish_adapter(connection: BrokerConnection) -> BrokerAdapter:
+    """Return a broker adapter with an authenticated session re-established.
+
+    Decrypts the stored credentials and, when an access token is present,
+    re-injects it via ``adapter.restore_session`` so ``is_connected()`` becomes
+    ``True`` and data calls (``get_holdings`` etc.) work — the previous code
+    only re-ran ``connect()`` without the token, leaving the adapter
+    unauthenticated. Falls back to a plain ``connect()`` when no token is
+    stored or the adapter doesn't support token restore.
+    """
+    api_key = _decrypt(connection.encrypted_api_key)
+    api_secret = _decrypt(connection.encrypted_api_secret)
+    adapter = get_broker(connection.broker_name)
+
+    restored = False
+    if connection.access_token_encrypted:
+        access_token = _decrypt(connection.access_token_encrypted)
+        restored = await adapter.restore_session(api_key, api_secret, access_token)
+
+    if not restored:
+        await adapter.connect(api_key, api_secret)
+
+    return adapter
+
 
 async def _get_user_connection(
     connection_id: int,

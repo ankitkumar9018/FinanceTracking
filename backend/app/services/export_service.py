@@ -515,7 +515,11 @@ async def generate_portfolio_pdf(
 
     html_content = await generate_portfolio_report_html(portfolio_id, user_name, db)
     output = io.BytesIO()
-    pisa.CreatePDF(html_content, dest=output)
+    # xhtml2pdf reports failures on the returned status object (``.err``)
+    # instead of raising, so a broken PDF would otherwise be served as valid.
+    pisa_status = pisa.CreatePDF(html_content, dest=output)
+    if pisa_status.err:
+        raise RuntimeError("PDF generation failed")
     return output.getvalue()
 
 

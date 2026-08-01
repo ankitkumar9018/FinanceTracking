@@ -8,7 +8,7 @@ import logging
 from app.api.ws.connection_manager import manager
 from app.database import async_session_factory
 from app.services.market_data_service import refresh_all_prices
-from app.tasks.celery_app import celery_app, is_celery_available
+from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +59,15 @@ async def fetch_prices_task() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Celery task wrapper (only registered when Celery is installed)
+# Celery task wrapper (registered whenever Celery is importable)
 # ---------------------------------------------------------------------------
+# Register the task purely on Celery being importable — NOT on a live Redis
+# ping. celery_app.py's beat_schedule always references this task, so gating
+# registration on a runtime broker ping meant a momentary Redis blip at import
+# time would leave beat pointing at an unregistered task. The APScheduler-vs-
+# Celery runtime decision (which does ping Redis) still lives in scheduler.py.
 
-if is_celery_available() and celery_app is not None:
+if celery_app is not None:
 
     @celery_app.task(name="app.tasks.fetch_prices.fetch_prices_celery", bind=True)
     def fetch_prices_celery(self) -> dict:  # type: ignore[misc]

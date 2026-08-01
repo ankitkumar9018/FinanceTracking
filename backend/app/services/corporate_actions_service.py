@@ -9,10 +9,12 @@ multiplied by the ratio and average price divided by it, leaving the total
 cost basis unchanged.
 
 Applying an action directly adjusts ``holding.cumulative_quantity`` /
-``average_price`` (authoritative) and, for ratios > 1 (the split/bonus case),
-also writes a zero-cost adjustment ``Transaction`` dated at the ex-date so a
-later ``calculate_cumulative_holding`` recompute reproduces the same numbers.
-Every apply is idempotent — an already-APPLIED action is a no-op.
+``average_price`` (authoritative) and also writes a zero-cost adjustment
+``Transaction`` dated at the ex-date so a later ``calculate_cumulative_holding``
+recompute reproduces the same numbers. The adjustment quantity is positive for
+a forward split/bonus (ratio > 1) and negative for a reverse split (ratio < 1);
+either way the cost basis is preserved. Every apply is idempotent — an
+already-APPLIED action is a no-op.
 """
 
 from __future__ import annotations
@@ -260,12 +262,15 @@ async def apply_corporate_action(
     holding.cumulative_quantity = new_qty
     holding.average_price = new_avg
 
-    # For a split/bonus (ratio > 1) record a zero-cost adjustment BUY dated at
-    # the ex-date so a future calculate_cumulative_holding recompute stays
-    # consistent. Skipped for reverse splits (ratio < 1) to avoid a
-    # negative-quantity transaction — those rely on the direct adjustment only.
+    # Record a zero-cost adjustment BUY dated at the ex-date so a future
+    # calculate_cumulative_holding recompute reproduces the post-split numbers.
+    # The delta ``old_qty * (ratio - 1)`` is positive for a forward split/bonus
+    # (ratio > 1) and negative for a reverse split (ratio < 1); a negative-qty,
+    # zero-price BUY correctly shrinks the quantity while leaving the cost basis
+    # unchanged (so the average price rises), matching the direct adjustment.
+    # Without this, a reverse split would be reverted on the next recompute.
     txn_written = False
-    if ratio > 1 and old_qty > 0:
+    if old_qty > 0 and ratio != 1.0:
         db.add(
             Transaction(
                 holding_id=holding.id,

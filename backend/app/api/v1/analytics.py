@@ -6,6 +6,7 @@ returning data.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict
 from datetime import date, timedelta
@@ -38,10 +39,38 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Bound the number of concurrent yfinance history fetches so a large portfolio
+# doesn't open dozens of simultaneous outbound requests.
+_FETCH_CONCURRENCY = 8
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+async def _gather_histories(
+    specs: list[tuple[str, str]],
+    days: int,
+) -> list[list[dict]]:
+    """Fetch price history for many (symbol, exchange) pairs concurrently.
+
+    Runs the per-holding fetches under a bounded semaphore instead of awaiting
+    them one-by-one, which cuts wall-clock latency for multi-holding
+    portfolios. Results are returned in the same order as ``specs``; any fetch
+    that raises is coalesced to an empty list so one bad symbol can't abort the
+    whole computation.
+    """
+    semaphore = asyncio.Semaphore(_FETCH_CONCURRENCY)
+
+    async def _fetch(symbol: str, exchange: str) -> list[dict]:
+        async with semaphore:
+            return await fetch_historical_data(symbol, exchange, days=days)
+
+    results = await asyncio.gather(
+        *(_fetch(sym, exch) for sym, exch in specs),
+        return_exceptions=True,
+    )
+    return [[] if isinstance(r, BaseException) else r for r in results]
 
 async def _verify_portfolio_ownership(
     portfolio_id: int,
@@ -410,10 +439,10 @@ async def get_correlation_matrix(
     try:
         import numpy as np
 
-        # Fetch price history for each holding
+        # Fetch price history for each holding concurrently (bounded).
         returns_map: dict[str, list[float]] = {}
-        for sym, exch in zip(symbols, exchanges):
-            history = await fetch_historical_data(sym, exch, days=days)
+        histories = await _gather_histories(list(zip(symbols, exchanges)), days=days)
+        for sym, history in zip(symbols, histories):
             if len(history) >= 2:
                 closes = [d["close"] for d in history]
                 daily_returns = [
@@ -484,8 +513,10 @@ async def get_monthly_returns(
         weights: dict[str, float] = {}
         total_value = 0.0
 
-        for h in holdings:
-            hist = await fetch_historical_data(h.stock_symbol, h.exchange, days=400)
+        fetched = await _gather_histories(
+            [(h.stock_symbol, h.exchange) for h in holdings], days=400
+        )
+        for h, hist in zip(holdings, fetched):
             if hist:
                 all_histories[h.stock_symbol] = hist
                 val = float(h.cumulative_quantity) * float(h.average_price)
@@ -566,8 +597,10 @@ async def get_drawdown(
         all_histories: dict[str, list[dict]] = {}
         quantities: dict[str, float] = {}
 
-        for h in holdings:
-            hist = await fetch_historical_data(h.stock_symbol, h.exchange, days=days)
+        fetched = await _gather_histories(
+            [(h.stock_symbol, h.exchange) for h in holdings], days=days
+        )
+        for h, hist in zip(holdings, fetched):
             if hist:
                 all_histories[h.stock_symbol] = hist
                 quantities[h.stock_symbol] = float(h.cumulative_quantity)

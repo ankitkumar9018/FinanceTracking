@@ -498,8 +498,10 @@ class TestBacktester:
         trades = [{"type": "buy", "pnl": 5000}, {"type": "sell", "pnl": 5000}]
         result = _compute_backtest_metrics(trades=trades, equity_curve=equity, days=252)
         assert result.total_return == 15.0  # (115000-100000)/100000*100
-        assert result.total_trades == 2
-        assert result.win_rate == 100.0  # both trades have positive pnl
+        # One round-trip (buy+sell) counts as a single trade — only the
+        # closing (sell) leg is tallied.
+        assert result.total_trades == 1
+        assert result.win_rate == 100.0  # the closing leg is profitable
 
     def test_simulate_trades_no_signals(self):
         """_simulate_trades with all-zero signals should produce no trades and

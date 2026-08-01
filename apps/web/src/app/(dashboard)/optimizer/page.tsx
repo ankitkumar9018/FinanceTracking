@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Layers,
   ChevronDown,
@@ -108,7 +108,19 @@ function formatPercent(value: number): string {
 export default function OptimizerPage() {
   const { portfolios, activePortfolioId, setActivePortfolio } = usePortfolioStore();
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const [riskTolerance, setRiskTolerance] = useState<RiskTolerance>("moderate");
+
+  // Close the portfolio dropdown on an outside click (mirrors risk/visualizations).
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    }
+    if (dropdownOpen) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [dropdownOpen]);
   const [result, setResult] = useState<OptimizationResult | null>(null);
   const [suggestions, setSuggestions] = useState<RebalanceSuggestion[]>([]);
   const [loading, setLoading] = useState(false);
@@ -157,7 +169,7 @@ export default function OptimizerPage() {
         </div>
 
         {/* Portfolio Selector */}
-        <div className="relative">
+        <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => setDropdownOpen(!dropdownOpen)}
             className="inline-flex items-center gap-2 rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-4 py-2 text-sm font-medium hover:bg-[hsl(var(--accent))] transition-colors"

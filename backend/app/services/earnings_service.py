@@ -17,6 +17,22 @@ from app.services.market_data_service import _ticker_symbol
 
 logger = logging.getLogger(__name__)
 
+# Bound simultaneous yfinance calls so a large portfolio doesn't fan out into
+# dozens of concurrent outbound requests.
+_MAX_CONCURRENCY = 8
+
+
+def _default_earnings(symbol: str) -> dict:
+    """A ``data_available=False`` earnings record used as a safe fallback."""
+    return {
+        "symbol": symbol,
+        "earnings_date": None,
+        "earnings_dates": [],
+        "revenue_estimate": None,
+        "earnings_estimate": None,
+        "data_available": False,
+    }
+
 
 def _sync_fetch_calendar(ticker_str: str):
     """Fetch yfinance calendar synchronously (runs in a thread)."""
@@ -174,13 +190,24 @@ async def get_earnings_calendar(
 ) -> list[dict]:
     """Fetch earnings data for multiple symbols.
 
-    Returns a list of dicts, one per symbol.
+    Fetches happen concurrently under a bounded semaphore (each call keeps its
+    own 10s timeout inside ``get_stock_earnings``), so a 30-symbol list no
+    longer blocks for ~300s. Returns a list of dicts, one per symbol, in the
+    same order as ``symbols``.
     """
-    results: list[dict] = []
-    for symbol in symbols:
-        data = await get_stock_earnings(symbol, exchange)
-        results.append(data)
-    return results
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
+
+    async def _one(symbol: str) -> dict:
+        async with semaphore:
+            return await get_stock_earnings(symbol, exchange)
+
+    gathered = await asyncio.gather(
+        *(_one(s) for s in symbols), return_exceptions=True
+    )
+    return [
+        _default_earnings(symbol) if isinstance(res, BaseException) else res
+        for symbol, res in zip(symbols, gathered)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -201,11 +228,22 @@ async def get_portfolio_earnings(portfolio_id: int, db: AsyncSession) -> dict:
     if portfolio is None:
         raise ValueError(f"Portfolio {portfolio_id} not found")
 
+    holdings = list(portfolio.holdings)
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
+
+    async def _one(holding) -> dict:
+        async with semaphore:
+            return await get_stock_earnings(holding.stock_symbol, holding.exchange)
+
+    gathered = await asyncio.gather(
+        *(_one(h) for h in holdings), return_exceptions=True
+    )
+
     all_earnings: list[dict] = []
     holdings_with_data = 0
-
-    for h in portfolio.holdings:
-        earnings = await get_stock_earnings(h.stock_symbol, h.exchange)
+    for h, earnings in zip(holdings, gathered):
+        if isinstance(earnings, BaseException):
+            earnings = _default_earnings(h.stock_symbol)
         all_earnings.append(earnings)
         if earnings["data_available"]:
             holdings_with_data += 1

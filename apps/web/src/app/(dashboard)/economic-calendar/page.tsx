@@ -134,28 +134,39 @@ export default function EconomicCalendarPage() {
   const [error, setError] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<EventType | "ALL">("ALL");
 
-  const loadCalendar = useCallback(async (portfolioId: number) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.get<EconomicCalendarData>(
-        `/analytics/economic-calendar/${portfolioId}`
-      );
-      setEvents(data.events || []);
-      setRange(data.range ?? null);
-    } catch (err) {
-      setEvents([]);
-      const message =
-        err instanceof Error ? err.message : "Failed to load economic calendar";
-      setError(message);
-      toast.error(message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const loadCalendar = useCallback(
+    async (portfolioId: number, isActive: () => boolean = () => true) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await api.get<EconomicCalendarData>(
+          `/analytics/economic-calendar/${portfolioId}`
+        );
+        if (!isActive()) return;
+        setEvents(data.events || []);
+        setRange(data.range ?? null);
+      } catch (err) {
+        if (!isActive()) return;
+        setEvents([]);
+        const message =
+          err instanceof Error ? err.message : "Failed to load economic calendar";
+        setError(message);
+        toast.error(message);
+      } finally {
+        if (isActive()) setLoading(false);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-    if (activePortfolioId) loadCalendar(activePortfolioId);
+    if (!activePortfolioId) return;
+    // Guard against a slow earlier response overwriting a newer portfolio's data.
+    let active = true;
+    loadCalendar(activePortfolioId, () => active);
+    return () => {
+      active = false;
+    };
   }, [activePortfolioId, loadCalendar]);
 
   // Filter, then group events by date (they arrive pre-sorted from the API).
@@ -282,7 +293,9 @@ export default function EconomicCalendarPage() {
               {/* Events for the day */}
               <ul className="space-y-2">
                 {dayEvents.map((ev, i) => {
-                  const cfg = TYPE_CONFIG[ev.type];
+                  // Fall back to the MACRO config for any unexpected event type
+                  // so an unknown type from the API can't crash the render.
+                  const cfg = TYPE_CONFIG[ev.type] ?? TYPE_CONFIG.MACRO;
                   const Icon = cfg.icon;
                   return (
                     <li

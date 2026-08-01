@@ -52,10 +52,16 @@ export default function SipCalendarPage() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   useEffect(() => {
-    if (activePortfolioId) loadCalendar();
+    if (!activePortfolioId) return;
+    // Guard against a slow earlier response overwriting newer month/portfolio data.
+    let active = true;
+    loadCalendar(() => active);
+    return () => {
+      active = false;
+    };
   }, [activePortfolioId, month, year]);
 
-  async function loadCalendar() {
+  async function loadCalendar(isActive: () => boolean = () => true) {
     if (!activePortfolioId) return;
     setLoading(true);
     setError(null);
@@ -63,12 +69,14 @@ export default function SipCalendarPage() {
       const data = await api.get<CalendarData>(
         `/analytics/calendar/${activePortfolioId}?month=${month}&year=${year}`
       );
+      if (!isActive()) return;
       setEvents(data.events || []);
     } catch (err) {
+      if (!isActive()) return;
       setEvents([]);
       setError(err instanceof Error ? err.message : "Failed to load calendar data");
     } finally {
-      setLoading(false);
+      if (isActive()) setLoading(false);
     }
   }
 

@@ -63,7 +63,13 @@ export default function AlertsPage() {
   }, []);
 
   useEffect(() => {
-    if (activePortfolioId) loadDriftAlerts();
+    if (!activePortfolioId) return;
+    // Guard against a slow earlier response overwriting a newer portfolio's data.
+    let active = true;
+    loadDriftAlerts(() => active);
+    return () => {
+      active = false;
+    };
   }, [activePortfolioId]);
 
   async function loadAlerts() {
@@ -80,7 +86,7 @@ export default function AlertsPage() {
     }
   }
 
-  async function loadDriftAlerts() {
+  async function loadDriftAlerts(isActive: () => boolean = () => true) {
     if (!activePortfolioId) return;
     setDriftLoading(true);
     setDriftError(null);
@@ -88,6 +94,7 @@ export default function AlertsPage() {
       const data = await api.get<{ holdings: Array<{ stock_symbol: string; stock_name: string; target_pct: number | null; actual_pct: number; drift_pct: number | null; over_threshold: boolean }> }>(
         `/analytics/drift/${activePortfolioId}`
       );
+      if (!isActive()) return;
       setDriftAlerts(
         (data.holdings ?? [])
           // Only holdings with a target allocation that actually drifted past the threshold
@@ -101,11 +108,12 @@ export default function AlertsPage() {
           }))
       );
     } catch (err) {
+      if (!isActive()) return;
       console.error("Failed to load drift alerts:", err);
       setDriftAlerts([]);
       setDriftError(err instanceof Error ? err.message : "Failed to load drift alerts");
     } finally {
-      setDriftLoading(false);
+      if (isActive()) setDriftLoading(false);
     }
   }
 

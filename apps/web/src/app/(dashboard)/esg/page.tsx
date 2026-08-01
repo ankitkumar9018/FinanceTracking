@@ -165,22 +165,33 @@ export default function EsgPage() {
   const [error, setError] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
-  const loadEsg = useCallback(async (portfolioId: number) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await api.get<EsgData>(`/esg/${portfolioId}`);
-      setData(result);
-    } catch (err) {
-      setData(null);
-      setError(err instanceof Error ? err.message : "Failed to load ESG data");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const loadEsg = useCallback(
+    async (portfolioId: number, isActive: () => boolean = () => true) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await api.get<EsgData>(`/esg/${portfolioId}`);
+        if (!isActive()) return;
+        setData(result);
+      } catch (err) {
+        if (!isActive()) return;
+        setData(null);
+        setError(err instanceof Error ? err.message : "Failed to load ESG data");
+      } finally {
+        if (isActive()) setLoading(false);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-    if (activePortfolioId) loadEsg(activePortfolioId);
+    if (!activePortfolioId) return;
+    // Guard against a slow earlier response overwriting a newer portfolio's data.
+    let active = true;
+    loadEsg(activePortfolioId, () => active);
+    return () => {
+      active = false;
+    };
   }, [activePortfolioId, loadEsg]);
 
   function handlePortfolioChange(id: number) {

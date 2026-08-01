@@ -102,17 +102,26 @@ export default function AIAssistantPage() {
 
   /* ---- Load messages when session changes ---- */
   useEffect(() => {
-    if (activeSessionId !== null) {
-      loadSessionMessages(activeSessionId);
-    }
+    if (activeSessionId === null) return;
+    // Cancellation guard: switching sessions quickly must not let a slow earlier
+    // response paint the previous session's messages over the current one.
+    let cancelled = false;
+    loadSessionMessages(activeSessionId, () => !cancelled);
+    return () => {
+      cancelled = true;
+    };
   }, [activeSessionId]);
 
-  async function loadSessionMessages(sessionId: number) {
+  async function loadSessionMessages(
+    sessionId: number,
+    isActive: () => boolean = () => true
+  ) {
     try {
       const data = await api.get<{ messages: ChatMessage[] }>(`/ai/sessions/${sessionId}`);
+      if (!isActive()) return;
       setMessages(data.messages || []);
     } catch {
-      setMessages([]);
+      if (isActive()) setMessages([]);
     }
   }
 
@@ -439,7 +448,7 @@ export default function AIAssistantPage() {
               <>
                 {messages.map((msg, i) => (
                   <motion.div
-                    key={i}
+                    key={`${msg.timestamp}-${msg.role}-${i}`}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.2 }}

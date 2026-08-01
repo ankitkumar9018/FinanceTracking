@@ -46,7 +46,13 @@ async def create_goal_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> object:
     """Create a new financial goal."""
-    goal = await create_goal(user_id=user.id, data=body, db=db)
+    try:
+        goal = await create_goal(user_id=user.id, data=body, db=db)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
     return GoalResponse.from_goal(goal)
 
 

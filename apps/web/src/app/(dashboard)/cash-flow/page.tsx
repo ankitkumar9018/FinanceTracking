@@ -232,28 +232,39 @@ export default function CashFlowPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadCashFlow = useCallback(async () => {
-    if (!activePortfolioId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await api.get<CashFlowData>(
-        `/analytics/cash-flow/${activePortfolioId}`
-      );
-      setData(res);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to load cash flow data";
-      setData(null);
-      setError(message);
-      toast.error(message);
-    } finally {
-      setLoading(false);
-    }
-  }, [activePortfolioId]);
+  const loadCashFlow = useCallback(
+    async (isActive: () => boolean = () => true) => {
+      if (!activePortfolioId) return;
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await api.get<CashFlowData>(
+          `/analytics/cash-flow/${activePortfolioId}`
+        );
+        if (!isActive()) return;
+        setData(res);
+      } catch (err) {
+        if (!isActive()) return;
+        const message =
+          err instanceof Error ? err.message : "Failed to load cash flow data";
+        setData(null);
+        setError(message);
+        toast.error(message);
+      } finally {
+        if (isActive()) setLoading(false);
+      }
+    },
+    [activePortfolioId]
+  );
 
   useEffect(() => {
-    if (activePortfolioId) loadCashFlow();
+    if (!activePortfolioId) return;
+    // Guard against a slow earlier response overwriting a newer portfolio's data.
+    let active = true;
+    loadCashFlow(() => active);
+    return () => {
+      active = false;
+    };
   }, [activePortfolioId, loadCashFlow]);
 
   const currency = data?.currency || "INR";
