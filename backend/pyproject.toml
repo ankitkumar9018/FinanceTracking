@@ -82,6 +82,7 @@ dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.25.0",
     "pytest-cov>=6.0.0",
+    "pytest-socket>=0.7.0",
     "ruff>=0.8.0",
     "mypy>=1.14.0",
     "pyinstaller>=6.19.0",
@@ -107,6 +108,11 @@ ignore = ["B008", "B904", "B905", "RUF002", "RUF022", "SIM102", "UP042"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Block real network so the suite is deterministic and never hangs on a live
+# yfinance/HTTP call (Yahoo rate-limits CI datacenter IPs → requests retry
+# forever). Services degrade gracefully to empty when a call is blocked.
+# Loopback (test client, aiosqlite) stays allowed.
+addopts = "--disable-socket --allow-hosts=127.0.0.1,::1,localhost"
 
 [tool.mypy]
 python_version = "3.12"
@@ -136,4 +142,5 @@ dev = [
     "pyinstaller>=6.19.0",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
+    "pytest-socket>=0.8.0",
 ]
