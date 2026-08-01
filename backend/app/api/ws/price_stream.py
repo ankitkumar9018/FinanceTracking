@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,13 +58,31 @@ async def _authenticate(token: str | None, db: AsyncSession) -> int | None:
     return user_id
 
 
+async def _authenticate_scoped(websocket: WebSocket, token: str | None) -> int | None:
+    """Authenticate with a SHORT-LIVED DB session that closes before the
+    receive loop starts.
+
+    Holding a ``Depends(get_db)`` session for the entire connection lifetime
+    kept an aiosqlite worker pinned while the socket blocked in
+    ``receive_json`` — a deadlock surface (seen as a rare CI hang) and a
+    wasted connection per socket. The dependency-overrides lookup keeps test
+    ``get_db`` overrides working.
+    """
+    dep = websocket.app.dependency_overrides.get(get_db, get_db)
+    agen = dep()
+    try:
+        db = await anext(agen)
+        return await _authenticate(token, db)
+    finally:
+        await agen.aclose()
+
+
 # ── WebSocket route ───────────────────────────────────────────────────────────
 
 @router.websocket("/ws/prices")
 async def websocket_price_stream(
     websocket: WebSocket,
     token: str | None = None,
-    db: AsyncSession = Depends(get_db),
 ) -> None:
     """Stream real-time price updates to authenticated clients.
 
@@ -79,8 +97,8 @@ async def websocket_price_stream(
         ``{"type": "price_update", "symbol": "RELIANCE", "data": {...}}``
         ``{"type": "error", "message": "..."}``
     """
-    # ── authenticate ──────────────────────────────────────────────
-    user_id = await _authenticate(token, db)
+    # ── authenticate (short-lived DB session; closed before the loop) ──
+    user_id = await _authenticate_scoped(websocket, token)
     if user_id is None:
         await websocket.close(code=4001, reason="Authentication failed")
         return
