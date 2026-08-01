@@ -22,6 +22,11 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      - name: Install system dependencies
+        # xhtml2pdf → svglib → rlpycairo → pycairo builds against the system
+        # cairo lib (no manylinux wheel), so it must be present or `uv sync` fails.
+        run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config
+
       - name: Install dependencies
         working-directory: backend
         # --extra cas so the CAS-import mapping tests exercise the real casparser
@@ -48,8 +53,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        # Version comes from "packageManager" in package.json — specifying it here
+        # too makes pnpm/action-setup@v4 fail with "Multiple versions specified".
 
       - uses: actions/setup-node@v4
         with:
@@ -85,13 +90,17 @@ jobs:
         run: uv python install 3.12
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        # Version comes from "packageManager" in package.json — specifying it here
+        # too makes pnpm/action-setup@v4 fail with "Multiple versions specified".
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: "pnpm"
+
+      - name: Install system dependencies
+        # cairo for pycairo (xhtml2pdf chain) — see the backend job.
+        run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config
 
       - name: Install all dependencies
         run: |
