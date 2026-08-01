@@ -83,13 +83,14 @@ dev = [
     "pytest-asyncio>=0.25.0",
     "pytest-cov>=6.0.0",
     "pytest-socket>=0.7.0",
+    "pytest-timeout>=2.4.0",
     "ruff>=0.8.0",
     "mypy>=1.14.0",
     "pyinstaller>=6.19.0",
 ]
-# All optional dependencies
+# All optional dependencies ("mf" was folded into "cas" when mftool was dropped)
 all = [
-    "finance-tracker-backend[queue,ml,llm-ollama,llm-openai,llm-anthropic,llm-google,mf,notifications,dev]",
+    "finance-tracker-backend[queue,ml,llm-ollama,llm-openai,llm-anthropic,llm-google,cas,notifications,dev]",
 ]
 
 [tool.ruff]
@@ -112,7 +113,10 @@ testpaths = ["tests"]
 # yfinance/HTTP call (Yahoo rate-limits CI datacenter IPs → requests retry
 # forever). Services degrade gracefully to empty when a call is blocked.
 # Loopback (test client, aiosqlite) stays allowed.
-addopts = "--disable-socket --allow-hosts=127.0.0.1,::1,localhost"
+# --timeout: no single test may hang the suite (a rare nondeterministic
+# deadlock was hanging CI); the "thread" method dumps every thread's stack on
+# expiry, naming the culprit in the CI log instead of hanging forever.
+addopts = "--disable-socket --allow-hosts=127.0.0.1,::1,localhost --timeout=120 --timeout-method=thread"
 
 [tool.mypy]
 python_version = "3.12"
@@ -143,4 +147,5 @@ dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "pytest-socket>=0.8.0",
+    "pytest-timeout>=2.4.0",
 ]
