@@ -398,15 +398,44 @@ class TestBrokerTokenRestore:
         assert fake.restored_with == "stored-token"
         assert fake.connect_called is False
 
-    async def test_zerodha_adapter_restore_offline(self):
-        """The real Zerodha adapter restores a session offline (no network)."""
-        pytest.importorskip("kiteconnect")
+    async def test_zerodha_adapter_restore_validates_token(self, monkeypatch):
+        """Zerodha restore_session validates the stored token with a cheap
+        authenticated call (``kite.profile()``): a valid token restores the
+        session, a rejected (expired) token returns False instead of silently
+        arming a dead client."""
+        from app.brokers import zerodha
         from app.brokers.zerodha import ZerodhaBroker
 
+        class _FakeKite:
+            profile_ok = True
+
+            def __init__(self, api_key: str) -> None:
+                self.api_key = api_key
+                self.token: str | None = None
+
+            def set_access_token(self, token: str) -> None:
+                self.token = token
+
+            def profile(self) -> dict:
+                if not _FakeKite.profile_ok:
+                    raise Exception("TokenException: token expired")
+                return {"user_id": "AB1234"}
+
+        monkeypatch.setattr(zerodha, "_KITE_AVAILABLE", True)
+        monkeypatch.setattr(zerodha, "KiteConnect", _FakeKite)
+
+        # Valid token → restored, connected.
+        _FakeKite.profile_ok = True
         broker = ZerodhaBroker()
         assert broker.is_connected() is False
-
         restored = await broker.restore_session("api_key", "api_secret", "tok-123")
         assert restored is True
         assert broker.is_connected() is True
         assert broker._access_token == "tok-123"
+
+        # Dead token → validation fails → False, still disconnected.
+        _FakeKite.profile_ok = False
+        broker2 = ZerodhaBroker()
+        restored2 = await broker2.restore_session("api_key", "api_secret", "tok-dead")
+        assert restored2 is False
+        assert broker2.is_connected() is False

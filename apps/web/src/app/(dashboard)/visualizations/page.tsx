@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
 import {
   BarChart2,
-  ChevronDown,
   Grid3X3,
   PieChart as PieChartIcon,
   CalendarDays,
@@ -15,6 +14,7 @@ import { usePortfolioStore } from "@/stores/portfolio-store";
 import { motion } from "framer-motion";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
+import { PortfolioSelector } from "@/components/shared/portfolio-selector";
 
 /* Recharts is heavy (~100kB gz) — load each tab's chart only when needed */
 const chartSkeleton = () => (
@@ -110,10 +110,7 @@ const TREEMAP_COLORS = [
 /* ------------------------------------------------------------------ */
 
 export default function VisualizationsPage() {
-  const { portfolios, activePortfolioId, hasLoadedPortfolios, setActivePortfolio } =
-    usePortfolioStore();
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const { activePortfolioId, hasLoadedPortfolios } = usePortfolioStore();
   const [activeTab, setActiveTab] = useState<TabKey>("correlation");
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [riskData, setRiskData] = useState<RiskData | null>(null);
@@ -123,16 +120,6 @@ export default function VisualizationsPage() {
   const [drawdownData, setDrawdownData] = useState<{ date: string; drawdown: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false);
-      }
-    }
-    if (dropdownOpen) document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [dropdownOpen]);
 
   const loadData = useCallback(
     async (portfolioId: number, isActive: () => boolean = () => true) => {
@@ -174,13 +161,6 @@ export default function VisualizationsPage() {
       active = false;
     };
   }, [activePortfolioId, loadData]);
-
-  function handlePortfolioChange(id: number) {
-    setActivePortfolio(id);
-    setDropdownOpen(false);
-  }
-
-  const activePortfolio = portfolios.find((p) => p.id === activePortfolioId);
 
   /* ---- Computed Data ---- */
 
@@ -230,38 +210,7 @@ export default function VisualizationsPage() {
         </div>
 
         {/* Portfolio Selector */}
-        <div className="relative" ref={dropdownRef}>
-          <button
-            onClick={() => setDropdownOpen(!dropdownOpen)}
-            className="inline-flex items-center gap-2 rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-4 py-2 text-sm font-medium hover:bg-[hsl(var(--accent))] transition-colors"
-          >
-            <BarChart2 className="h-4 w-4 text-[hsl(var(--primary))]" />
-            {activePortfolio?.name || "Select Portfolio"}
-            <ChevronDown className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
-          </button>
-          {dropdownOpen && (
-            <div className="absolute right-0 z-10 mt-1 w-56 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-1 shadow-lg">
-              {portfolios.map((portfolio) => (
-                <button
-                  key={portfolio.id}
-                  onClick={() => handlePortfolioChange(portfolio.id)}
-                  className={`w-full px-4 py-2 text-left text-sm transition-colors ${
-                    portfolio.id === activePortfolioId
-                      ? "bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]"
-                      : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]"
-                  }`}
-                >
-                  {portfolio.name}
-                  {portfolio.is_default && (
-                    <span className="ml-2 text-xs text-[hsl(var(--muted-foreground))]">
-                      (default)
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <PortfolioSelector icon={BarChart2} />
       </div>
 
       {/* ---- Tabs ---- */}

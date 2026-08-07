@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core import markets
 from app.models.dividend import Dividend
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
@@ -68,37 +69,18 @@ BASISZINS_DEFAULT = 2.29  # documented fallback (2024 rate) for unknown years
 GRANDFATHER_LOT_CUTOFF = date(2018, 2, 1)
 # The fair-market-value reference date whose close we look up.
 FMV_2018_DATE = date(2018, 1, 31)
-# yfinance suffix per exchange (mirrors market_data_service._EXCHANGE_SUFFIX).
-_EXCHANGE_YF_SUFFIX: dict[str, str] = {
-    "NSE": ".NS",
-    "BSE": ".BO",
-    "XETRA": ".DE",
-    "NYSE": "",
-    "NASDAQ": "",
-}
 # Process-level cache of 31-Jan-2018 closes keyed by "SYMBOL:EXCHANGE".
 # Only SUCCESSFUL (non-None) lookups are cached. A failed lookup is deliberately
 # NOT cached so a transient failure (network down, rate limit) is retried on the
 # next call rather than permanently disabling grandfathering for that symbol.
 _FMV_2018_CACHE: dict[str, float] = {}
 
-# Exchange -> jurisdiction mapping
-EXCHANGE_JURISDICTION_MAP: dict[str, str] = {
-    "NSE": "IN",
-    "BSE": "IN",
-    "XETRA": "DE",
-    "NYSE": "US",
-    "NASDAQ": "US",
-}
-
-# Exchange -> currency mapping
-EXCHANGE_CURRENCY_MAP: dict[str, str] = {
-    "NSE": "INR",
-    "BSE": "INR",
-    "XETRA": "EUR",
-    "NYSE": "USD",
-    "NASDAQ": "USD",
-}
+# Exchange metadata now lives in ``app.core.markets``; the module-level names
+# are kept as re-exported aliases for existing importers (``app.api.v1.tax``
+# imports EXCHANGE_JURISDICTION_MAP, tests import all three).
+_EXCHANGE_YF_SUFFIX: dict[str, str] = markets.YF_SUFFIX
+EXCHANGE_JURISDICTION_MAP: dict[str, str] = markets.JURISDICTION
+EXCHANGE_CURRENCY_MAP: dict[str, str] = markets.CURRENCY
 
 
 # ---------------------------------------------------------------------------
@@ -210,19 +192,27 @@ async def get_fmv_31jan2018(symbol: str, exchange: str) -> float | None:
             import yfinance as yf  # type: ignore[import-untyped]
         except Exception:
             return None
-        suffix = _EXCHANGE_YF_SUFFIX.get(exchange.upper(), "")
-        ticker = yf.Ticker(f"{symbol}{suffix}")
+        ticker = yf.Ticker(markets.ticker_symbol(symbol, exchange))
         # 31 Jan 2018 was a trading day, but scan a small window to be robust
         # against holidays / missing rows, then take the close ON 31-Jan-2018
         # (or the nearest trading day before it within the window).
-        hist = ticker.history(start="2018-01-25", end="2018-02-02")
+        #
+        # auto_adjust=False is essential: yfinance defaults to dividend/split-
+        # adjusted closes, which deflate the historical 31-Jan-2018 price by
+        # every dividend paid since — understating the grandfathered basis and
+        # overstating the taxable LTCG. The raw "Close" is the actual close.
+        hist = ticker.history(start="2018-01-25", end="2018-02-02", auto_adjust=False)
         if hist is None or hist.empty:
             return None
         exact: float | None = None
         best_before: tuple[date, float] | None = None
         for idx, row in hist.iterrows():
             d = idx.date() if hasattr(idx, "date") else idx
-            close = float(row["Close"])
+            try:
+                close = float(row["Close"])
+            except (KeyError, TypeError, ValueError):
+                # Guard against a missing/renamed Close column.
+                continue
             if d == FMV_2018_DATE:
                 exact = close
                 break
@@ -477,24 +467,31 @@ def compute_vorabpauschale(
 # Compute tax for a specific SELL transaction
 # ---------------------------------------------------------------------------
 
-def _build_consumed_lots(
+def _replay_fifo(
     transactions: list[Transaction],
-    taxed_txn_id: int,
-) -> list[dict]:
-    """Replay BUY/SELL transactions in date order, consuming lots FIFO, and
-    return the lots (with matched quantity, buy price, buy date) that the taxed
-    SELL consumes.
+    taxed_txn_id: int | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Replay BUY/SELL transactions in date order, consuming lots FIFO.
 
-    The lot queue is built from BUY transactions in chronological order. Every
-    SELL up to and including the taxed one is replayed against that queue,
-    consuming lots from the front (first-in, first-out). For the taxed SELL we
-    record exactly which lots — and how much of each — it draws from.
+    The lot queue is built from BUY transactions in chronological order —
+    ordered by ``(date, id)`` so a BUY and SELL on the same day resolve
+    deterministically (earlier-created first). Every SELL is replayed against
+    the queue, consuming lots from the front (first-in, first-out).
+
+    Each lot is ``{"qty": remaining, "price": buy price, "date": buy date}``.
+
+    Returns ``(open_lots, consumed)``:
+
+    - ``open_lots`` — the lots still UNSOLD after the replay, oldest buy first
+      (which is also the LTCG-clock order); a partially-sold lot keeps only
+      its remaining quantity.
+    - ``consumed`` — the lots (with matched quantity) that the SELL identified
+      by ``taxed_txn_id`` draws from. When ``taxed_txn_id`` is given, the
+      replay stops after that SELL; with ``None`` the whole history is
+      replayed and ``consumed`` is empty.
     """
-    # Ordered by (date, id) so a BUY and SELL on the same day resolve
-    # deterministically (earlier-created first).
     ordered = sorted(transactions, key=lambda t: (t.date, t.id))
 
-    # Each lot: {"qty": remaining, "price": buy price, "date": buy date}
     lots: list[dict] = []
     consumed: list[dict] = []
 
@@ -514,7 +511,7 @@ def _build_consumed_lots(
 
         # Consume this SELL's quantity FIFO from the front of the queue.
         remaining = float(t.quantity)
-        is_taxed = t.id == taxed_txn_id
+        is_taxed = taxed_txn_id is not None and t.id == taxed_txn_id
         while remaining > 1e-12 and lots:
             lot = lots[0]
             matched = min(remaining, lot["qty"])
@@ -535,50 +532,103 @@ def _build_consumed_lots(
             # We only care up to and including the taxed SELL.
             break
 
-    return consumed
+    # Defensive: drop any lot rounded down to (effectively) zero.
+    return [lot for lot in lots if lot["qty"] > 1e-12], consumed
+
+
+def _build_consumed_lots(
+    transactions: list[Transaction],
+    taxed_txn_id: int,
+) -> list[dict]:
+    """The lots (matched quantity, buy price, buy date) a taxed SELL consumes."""
+    return _replay_fifo(transactions, taxed_txn_id)[1]
 
 
 def build_open_lots(transactions: list[Transaction]) -> list[dict]:
-    """Replay BUY/SELL transactions FIFO and return the still-open buy lots.
+    """Replay BUY/SELL transactions FIFO and return the still-open buy lots."""
+    return _replay_fifo(transactions)[0]
 
-    Mirrors the FIFO consumption in :func:`_build_consumed_lots`, but instead of
-    the lots a SELL draws from, this returns the lots that remain UNSOLD after
-    every SELL has been applied. Each returned lot is
-    ``{"qty": remaining, "price": buy price, "date": buy date}``; a lot that was
-    partially sold keeps only its remaining quantity. Lots are ordered oldest
-    buy first (FIFO order), which is also the LTCG-clock order.
+
+async def _resolve_filing(
+    user_id: int, db: AsyncSession, filing: str | None = None
+) -> str:
+    """German filing status (``single``/``joint``) from stored tax settings."""
+    if filing is None:
+        prefs_res = await db.execute(
+            select(UserPreferences).where(UserPreferences.user_id == user_id)
+        )
+        prefs = prefs_res.scalar_one_or_none()
+        filing = ((prefs.tax_settings if prefs else None) or {}).get("filing", "single")
+    return "joint" if filing == "joint" else "single"
+
+
+async def _teilfreistellung_net_gains(
+    records: list[TaxRecord], db: AsyncSession
+) -> float:
+    """Net German gains reduced by each record's fund Teilfreistellung.
+
+    The Sparer-Pauschbetrag is consumed by the TAXABLE portion of each gain
+    (after the fund partial exemption), not the gross gain — so each record's
+    gain is reduced by its holding's Teilfreistellung rate before summing.
+    Losses net against gains; callers floor the sum at zero.
+
+    Shared by the sale-path Freibetrag netting and the standalone allowance
+    tracker (previously two divergent copies of the same logic).
     """
-    # Ordered by (date, id) so a BUY and SELL on the same day resolve
-    # deterministically (earlier-created first) — same rule as the consumed path.
-    ordered = sorted(transactions, key=lambda t: (t.date, t.id))
+    txn_ids = [r.transaction_id for r in records if r.transaction_id is not None]
+    fund_type_by_txn: dict[int, str | None] = {}
+    if txn_ids:
+        ft_res = await db.execute(
+            select(Transaction.id, Holding.fund_type)
+            .join(Holding, Transaction.holding_id == Holding.id)
+            .where(Transaction.id.in_(txn_ids))
+        )
+        for txn_id, ft in ft_res.all():
+            fund_type_by_txn[txn_id] = ft
 
-    lots: list[dict] = []
-    for t in ordered:
-        if t.transaction_type == "BUY":
-            lots.append(
-                {
-                    "qty": float(t.quantity),
-                    "price": float(t.price),
-                    "date": t.date,
-                }
-            )
+    net_gains = 0.0
+    for r in records:
+        if r.gain_amount is None:
             continue
+        fund_type = (
+            fund_type_by_txn.get(r.transaction_id)
+            if r.transaction_id is not None
+            else None
+        )
+        teil = teilfreistellung_for_fund_type(fund_type)
+        net_gains += float(r.gain_amount) * (1.0 - teil / 100.0)
+    return net_gains
 
-        if t.transaction_type != "SELL":
-            continue
 
-        # Consume this SELL's quantity FIFO from the front of the queue.
-        remaining = float(t.quantity)
-        while remaining > 1e-12 and lots:
-            lot = lots[0]
-            matched = min(remaining, lot["qty"])
-            lot["qty"] -= matched
-            remaining -= matched
-            if lot["qty"] <= 1e-12:
-                lots.pop(0)
+async def _de_dividend_allowance_used(
+    user_id: int, financial_year: str, db: AsyncSession
+) -> float:
+    """Teilfreistellung-reduced German (XETRA) dividends for a financial year.
 
-    # Defensive: drop any lot rounded down to (effectively) zero.
-    return [lot for lot in lots if lot["qty"] > 1e-12]
+    Germany's financial year is the calendar year, so ``financial_year`` must
+    be a plain year string (anything else yields ``0.0``). These dividends
+    consume the Sparer-Pauschbetrag alongside capital gains, so both the
+    standalone allowance tracker AND the sale-path Freibetrag netting must
+    subtract them.
+    """
+    year = int(financial_year) if financial_year.isdigit() else None
+    if year is None:
+        return 0.0
+    div_res = await db.execute(
+        select(Dividend.total_amount, Dividend.ex_date, Holding.fund_type)
+        .join(Holding, Dividend.holding_id == Holding.id)
+        .join(Portfolio, Holding.portfolio_id == Portfolio.id)
+        .where(
+            Portfolio.user_id == user_id,
+            Holding.exchange == "XETRA",
+        )
+    )
+    total = 0.0
+    for amount, ex_date, ft in div_res.all():
+        if ex_date is not None and ex_date.year == year:
+            teil = teilfreistellung_for_fund_type(ft)
+            total += float(amount) * (1.0 - teil / 100.0)
+    return total
 
 
 async def compute_tax_for_transaction(
@@ -594,17 +644,73 @@ async def compute_tax_for_transaction(
     has no split (a single ``ABGELTUNGSSTEUER`` record) but still uses the
     per-lot FIFO cost basis.
 
+    FY exemption / Freibetrag netting is strictly order-based: each sale nets
+    only against records that PRECEDE it in ``(sale_date, transaction_id)``
+    order. After this sale's records are written, every LATER computed SELL in
+    the same financial year is recomputed (in order) so the year's allocation
+    is always identical to computing the sales chronologically — recomputing
+    an earlier sale can no longer misallocate the exemption.
+
     Returns
     -------
     list[TaxRecord]
-        One record per non-empty gain-type bucket. Empty if the SELL matched
-        no available buy lots.
+        One record per non-empty gain-type bucket (for THIS transaction).
+        Empty if the SELL matched no available buy lots.
 
     Raises
     ------
     ValueError
         If the transaction is not found, does not belong to the user, or is
         not a SELL transaction.
+    """
+    records, fy, jurisdiction, sale_date = await _compute_tax_single(
+        transaction_id, user_id, db
+    )
+
+    # ── Cascade: recompute later computed SELLs in the same FY ─────────────
+    # An explicit loop over the non-cascading single-sale compute — no
+    # recursion. Only sells that already have TaxRecords are replayed;
+    # never-computed sells are not given records as a side effect.
+    later_res = await db.execute(
+        select(TaxRecord.transaction_id, TaxRecord.sale_date)
+        .where(
+            TaxRecord.user_id == user_id,
+            TaxRecord.financial_year == fy,
+            TaxRecord.tax_jurisdiction == jurisdiction,
+            TaxRecord.transaction_id.isnot(None),
+            or_(
+                TaxRecord.sale_date > sale_date,
+                and_(
+                    TaxRecord.sale_date == sale_date,
+                    TaxRecord.transaction_id > transaction_id,
+                ),
+            ),
+        )
+        .order_by(TaxRecord.sale_date, TaxRecord.transaction_id)
+    )
+    later_txn_ids: list[int] = []
+    for later_txn_id, _sale_date in later_res.all():
+        if later_txn_id not in later_txn_ids:
+            later_txn_ids.append(later_txn_id)
+
+    for later_txn_id in later_txn_ids:
+        await _compute_tax_single(later_txn_id, user_id, db)
+
+    return records
+
+
+async def _compute_tax_single(
+    transaction_id: int,
+    user_id: int,
+    db: AsyncSession,
+) -> tuple[list[TaxRecord], str, str, date]:
+    """Compute and persist the tax records for ONE SELL transaction.
+
+    Does NOT cascade to later sells — that is the public wrapper's job
+    (:func:`compute_tax_for_transaction`), keeping this function safe to call
+    in a loop without recursion.
+
+    Returns ``(records, financial_year, jurisdiction, sale_date)``.
     """
     # Load transaction with holding eagerly
     result = await db.execute(
@@ -675,7 +781,7 @@ async def compute_tax_for_transaction(
             "Tax compute: txn=%d consumed no buy lots — no tax records created",
             transaction_id,
         )
-        return []
+        return [], fy, jurisdiction, sale_date
 
     # ── Indian LTCG grandfathering (31-Jan-2018) ───────────────────────
     # Income-tax Act §55(2)(ac): for equity / equity-MF lots acquired BEFORE
@@ -738,6 +844,20 @@ async def compute_tax_for_transaction(
         key=lambda g: ordering.index(g) if g in ordering else len(ordering),
     )
 
+    # Records that PRECEDE this sale in (sale_date, transaction_id) order.
+    # Netting strictly against earlier sales makes the FY allocation
+    # independent of the order in which sales are (re)computed; the public
+    # wrapper cascades a recompute over the later sales. Records for this
+    # very transaction (deleted and recreated above) never match: strict
+    # inequality excludes the same (sale_date, transaction_id).
+    precedes = or_(
+        TaxRecord.sale_date < sale_date,
+        and_(
+            TaxRecord.sale_date == sale_date,
+            TaxRecord.transaction_id < transaction_id,
+        ),
+    )
+
     tax_records: list[TaxRecord] = []
     for gain_type in ordered_types:
         bucket = buckets[gain_type]
@@ -745,10 +865,8 @@ async def compute_tax_for_transaction(
         purchase_date = bucket["earliest_buy"]
         holding_period_days = (sale_date - purchase_date).days
 
-        # Tax calculation with FY exemption / Freibetrag netting. Records
-        # already created earlier in this same call (e.g. an STCG bucket) do
-        # not affect the LTCG exemption, but must be flushed so the FY netting
-        # query below sees any prior sales in the FY.
+        # Tax calculation with FY exemption / Freibetrag netting against the
+        # PRECEDING records only.
         if jurisdiction == "IN":
             existing_result = await db.execute(
                 select(TaxRecord).where(
@@ -756,11 +874,12 @@ async def compute_tax_for_transaction(
                     TaxRecord.financial_year == fy,
                     TaxRecord.tax_jurisdiction == "IN",
                     TaxRecord.gain_type == "LTCG",
+                    precedes,
                 )
             )
-            existing_records = existing_result.scalars().all()
-            # Net LTCG for the FY: losses set off against gains before the
-            # exemption is consumed.
+            existing_records = list(existing_result.scalars().all())
+            # Net LTCG for the FY so far: losses set off against gains before
+            # the exemption is consumed.
             net_ltcg = sum(
                 float(r.gain_amount) for r in existing_records
                 if r.gain_amount is not None
@@ -775,51 +894,31 @@ async def compute_tax_for_transaction(
                     TaxRecord.user_id == user_id,
                     TaxRecord.financial_year == fy,
                     TaxRecord.tax_jurisdiction == "DE",
+                    precedes,
                 )
             )
-            existing_records = existing_result.scalars().all()
+            existing_records = list(existing_result.scalars().all())
 
             # Total Freibetrag depends on the user's filing status:
             # EUR 1000 single / EUR 2000 jointly-assessed spouses. Keep it
             # consistent with the standalone allowance tracker.
-            prefs_res = await db.execute(
-                select(UserPreferences).where(UserPreferences.user_id == user_id)
-            )
-            prefs = prefs_res.scalar_one_or_none()
-            filing = ((prefs.tax_settings if prefs else None) or {}).get("filing", "single")
+            filing = await _resolve_filing(user_id, db)
             total_freibetrag = (
                 SPARER_PAUSCHBETRAG_JOINT if filing == "joint"
                 else SPARER_PAUSCHBETRAG_SINGLE
             )
 
-            # Prior German sales consume the Freibetrag by their TAXABLE amount
-            # (after Teilfreistellung), not their gross gain — so reduce each
-            # prior record by its fund's partial-exemption rate.
-            prior_txn_ids = [
-                r.transaction_id for r in existing_records if r.transaction_id is not None
-            ]
-            fund_type_by_txn: dict[int, str | None] = {}
-            if prior_txn_ids:
-                ft_res = await db.execute(
-                    select(Transaction.id, Holding.fund_type)
-                    .join(Holding, Transaction.holding_id == Holding.id)
-                    .where(Transaction.id.in_(prior_txn_ids))
-                )
-                for txn_id, ft in ft_res.all():
-                    fund_type_by_txn[txn_id] = ft
-            net_gains = 0.0
-            for r in existing_records:
-                if r.gain_amount is None:
-                    continue
-                fund_type = (
-                    fund_type_by_txn.get(r.transaction_id)
-                    if r.transaction_id is not None
-                    else None
-                )
-                teil = teilfreistellung_for_fund_type(fund_type)
-                net_gains += float(r.gain_amount) * (1.0 - teil / 100.0)
-            freibetrag_used = min(max(net_gains, 0.0), total_freibetrag)
-            freibetrag_remaining = max(total_freibetrag - freibetrag_used, 0.0)
+            # Preceding German sales consume the Freibetrag by their TAXABLE
+            # amount (after Teilfreistellung), not their gross gain — and
+            # German dividends consume it too (same components as
+            # compute_german_allowance, so the sale path and the standalone
+            # tracker can never disagree).
+            net_gains = await _teilfreistellung_net_gains(existing_records, db)
+            dividends_used = await _de_dividend_allowance_used(user_id, fy, db)
+            allowance_used = min(
+                max(net_gains, 0.0) + dividends_used, total_freibetrag
+            )
+            freibetrag_remaining = max(total_freibetrag - allowance_used, 0.0)
             # Teilfreistellung partial exemption by the holding's fund class.
             # gain_amount is the GROSS economic gain (what the record stores);
             # calculate_german_tax applies the exemption before charging tax.
@@ -863,7 +962,7 @@ async def compute_tax_for_transaction(
             gain_type,
         )
 
-    return tax_records
+    return tax_records, fy, jurisdiction, sale_date
 
 
 # ---------------------------------------------------------------------------
@@ -914,12 +1013,12 @@ async def generate_tax_summary(
         )
         exemption_used = min(max(net_ltcg, 0.0), INDIA_LTCG_EXEMPTION)
     elif jurisdiction == "DE":
-        net_gains = sum(
-            float(r.gain_amount)
-            for r in records
-            if r.gain_amount is not None
-        )
-        exemption_used = min(max(net_gains, 0.0), GERMANY_DEFAULT_FREIBETRAG)
+        # Delegate to the allowance tracker so the summary agrees with the
+        # compute path: filing-aware (EUR 1000 single / 2000 joint),
+        # Teilfreistellung-reduced gains, and German dividends included —
+        # instead of the old hardcoded €1000 cap over gross gains.
+        allowance = await compute_german_allowance(user_id, financial_year, db)
+        exemption_used = allowance["used"]
 
     return {
         "financial_year": financial_year,
@@ -958,15 +1057,7 @@ async def compute_german_allowance(
     Returns ``{total_allowance, used, remaining, filing}``.
     """
     # Determine filing status (single/joint) from stored tax settings.
-    if filing is None:
-        prefs_res = await db.execute(
-            select(UserPreferences).where(UserPreferences.user_id == user_id)
-        )
-        prefs = prefs_res.scalar_one_or_none()
-        tax_settings = (prefs.tax_settings if prefs else None) or {}
-        filing = tax_settings.get("filing", "single")
-
-    filing = "joint" if filing == "joint" else "single"
+    filing = await _resolve_filing(user_id, db, filing)
     total_allowance = (
         SPARER_PAUSCHBETRAG_JOINT if filing == "joint" else SPARER_PAUSCHBETRAG_SINGLE
     )
@@ -981,48 +1072,12 @@ async def compute_german_allowance(
     )
     records = list(rec_res.scalars().all())
 
-    # Map transaction_id -> fund_type so per-record Teilfreistellung matches the
-    # exemption applied at tax-computation time.
-    txn_ids = [r.transaction_id for r in records if r.transaction_id is not None]
-    fund_type_by_txn: dict[int, str | None] = {}
-    if txn_ids:
-        ft_res = await db.execute(
-            select(Transaction.id, Holding.fund_type)
-            .join(Holding, Transaction.holding_id == Holding.id)
-            .where(Transaction.id.in_(txn_ids))
-        )
-        for txn_id, ft in ft_res.all():
-            fund_type_by_txn[txn_id] = ft
-
-    net_gains = 0.0
-    for r in records:
-        gain = float(r.gain_amount) if r.gain_amount is not None else 0.0
-        fund_type = (
-            fund_type_by_txn.get(r.transaction_id)
-            if r.transaction_id is not None
-            else None
-        )
-        teil = teilfreistellung_for_fund_type(fund_type)
-        net_gains += gain * (1.0 - teil / 100.0)
-    gains_component = max(net_gains, 0.0)
+    gains_component = max(await _teilfreistellung_net_gains(records, db), 0.0)
 
     # ── German dividends for the FY (calendar year), Teilfreistellung-reduced ──
-    year = int(financial_year) if financial_year.isdigit() else None
-    dividends_component = 0.0
-    if year is not None:
-        div_res = await db.execute(
-            select(Dividend.total_amount, Dividend.ex_date, Holding.fund_type)
-            .join(Holding, Dividend.holding_id == Holding.id)
-            .join(Portfolio, Holding.portfolio_id == Portfolio.id)
-            .where(
-                Portfolio.user_id == user_id,
-                Holding.exchange == "XETRA",
-            )
-        )
-        for total, ex_date, ft in div_res.all():
-            if ex_date is not None and ex_date.year == year:
-                teil = teilfreistellung_for_fund_type(ft)
-                dividends_component += float(total) * (1.0 - teil / 100.0)
+    dividends_component = await _de_dividend_allowance_used(
+        user_id, financial_year, db
+    )
 
     used = min(total_allowance, gains_component + dividends_component)
     remaining = max(total_allowance - used, 0.0)

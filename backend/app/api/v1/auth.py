@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, validate_pcat
 from app.config import settings
 from app.database import get_db
 from app.models.password_reset import PasswordReset
@@ -283,6 +283,16 @@ async def refresh_token(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User account is deactivated or does not exist",
+        )
+
+    # Reject refresh tokens minted before the user's most recent password
+    # change/reset. Without this, a stolen refresh token would survive a
+    # password reset indefinitely by minting fresh token pairs (each carrying
+    # the NEW pcat), bypassing the revocation that get_current_user enforces.
+    if not validate_pcat(payload, user):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token revoked",
         )
 
     token_data = _token_payload(user)

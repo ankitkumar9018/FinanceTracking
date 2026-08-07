@@ -22,6 +22,7 @@ from app.models.tax_record import TaxRecord
 from app.models.transaction import Transaction
 from app.services.backup_service import export_portfolio_json
 from app.services.tax_service import generate_tax_summary
+from app.services.valuation import invested_value, market_value
 
 logger = logging.getLogger(__name__)
 
@@ -139,21 +140,32 @@ async def generate_portfolio_report_html(
     if portfolio is None:
         raise ValueError(f"Portfolio {portfolio_id} not found")
 
+    # Holdings without a live price must not be shown as a -100% loss: their
+    # current/value/P&L render as "—" and they are excluded from the
+    # current-value / P&L totals (invested is still known and shown).
     total_invested = 0.0
-    total_current = 0.0
+    total_current = 0.0  # priced holdings only
+    priced_invested = 0.0  # invested value of priced holdings (P&L basis)
+    unpriced_count = 0
     holdings_data = []
 
     for h in portfolio.holdings:
         qty = float(h.cumulative_quantity)
         avg = float(h.average_price)
-        invested = qty * avg
-        current_price = float(h.current_price) if h.current_price else 0
-        current_value = qty * current_price
-        pnl = current_value - invested
-        pnl_pct = (pnl / invested * 100) if invested > 0 else 0
-
+        invested = invested_value(h)
+        current_value = market_value(h, fallback_to_avg=False)
         total_invested += invested
-        total_current += current_value
+
+        if current_value is None:
+            unpriced_count += 1
+            pnl = pnl_pct = None
+            current_price = None
+        else:
+            current_price = float(h.current_price)  # type: ignore[arg-type]
+            pnl = current_value - invested
+            pnl_pct = (pnl / invested * 100) if invested > 0 else 0
+            total_current += current_value
+            priced_invested += invested
 
         holdings_data.append({
             "symbol": h.stock_symbol,
@@ -170,8 +182,8 @@ async def generate_portfolio_report_html(
             "rsi": h.current_rsi,
         })
 
-    total_pnl = total_current - total_invested
-    total_pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0
+    total_pnl = total_current - priced_invested
+    total_pnl_pct = (total_pnl / priced_invested * 100) if priced_invested > 0 else 0
 
     now = datetime.now().strftime("%B %d, %Y")
 
@@ -179,17 +191,25 @@ async def generate_portfolio_report_html(
     _esc = html_mod.escape
     rows_html = ""
     for h in holdings_data:
-        pnl_color = "#16a34a" if h["pnl"] >= 0 else "#dc2626"
-        pnl_str = f"{h['pnl']:+,.2f} ({h['pnl_pct']:+.1f}%)"
+        if h["pnl"] is None:
+            pnl_color = "#666"
+            pnl_str = "—"
+            current_str = "—"
+            value_str = "—"
+        else:
+            pnl_color = "#16a34a" if h["pnl"] >= 0 else "#dc2626"
+            pnl_str = f"{h['pnl']:+,.2f} ({h['pnl_pct']:+.1f}%)"
+            current_str = f"{h['current']:.2f}"
+            value_str = f"{h['value']:,.2f}"
         rows_html += f"""
         <tr>
             <td>{_esc(str(h['symbol']))}</td>
             <td>{_esc(str(h['name']))}</td>
             <td style="text-align:right">{h['qty']:.2f}</td>
             <td style="text-align:right">{h['avg']:.2f}</td>
-            <td style="text-align:right">{h['current']:.2f}</td>
+            <td style="text-align:right">{current_str}</td>
             <td style="text-align:right">{h['invested']:,.2f}</td>
-            <td style="text-align:right">{h['value']:,.2f}</td>
+            <td style="text-align:right">{value_str}</td>
             <td style="text-align:right;color:{pnl_color}">{pnl_str}</td>
             <td style="text-align:center">{_esc(str(h['action']))}</td>
             <td style="text-align:right">{f"{h['rsi']:.1f}" if h['rsi'] else '--'}</td>
@@ -197,6 +217,14 @@ async def generate_portfolio_report_html(
 
     total_pnl_color = "#16a34a" if total_pnl >= 0 else "#dc2626"
     total_pnl_str = f"{total_pnl:+,.2f} ({total_pnl_pct:+.1f}%)"
+
+    unpriced_note = ""
+    if unpriced_count:
+        unpriced_note = (
+            f'<p class="note">{unpriced_count} holding'
+            f'{"s" if unpriced_count != 1 else ""} awaiting price data — '
+            "excluded from current value and P&amp;L totals.</p>"
+        )
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -213,6 +241,7 @@ async def generate_portfolio_report_html(
     th {{ background: #1e3a5f; color: white; padding: 10px 8px; text-align: left; }}
     td {{ padding: 8px; border-bottom: 1px solid #e5e7eb; }}
     tr:hover {{ background: #f8f9fa; }}
+    .note {{ color: #666; font-size: 12px; font-style: italic; margin-bottom: 16px; }}
     .footer {{ margin-top: 32px; font-size: 11px; color: #999; text-align: center; }}
 </style></head><body>
 <h1>{_esc(portfolio.name)} — Portfolio Report</h1>
@@ -236,6 +265,7 @@ async def generate_portfolio_report_html(
         <div class="value">{len(holdings_data)}</div>
     </div>
 </div>
+{unpriced_note}
 <table>
 <thead><tr>
     <th>Symbol</th><th>Name</th><th style="text-align:right">Qty</th>
@@ -593,20 +623,32 @@ async def export_workbook_xlsx(portfolio_id: int, db: AsyncSession) -> bytes:
         "Invested", "Current Value", "P&L", "P&L %",
     ])
 
+    # Same policy as the HTML report: unpriced holdings render "—" for
+    # current/value/P&L and are excluded from the current-value/P&L totals.
     total_invested = 0.0
-    total_current = 0.0
+    total_current = 0.0  # priced holdings only
+    priced_invested = 0.0
+    unpriced_count = 0
     for h in portfolio.holdings:
         qty = float(h.cumulative_quantity)
         avg = float(h.average_price)
-        cur = float(h.current_price) if h.current_price else 0.0
-        invested = qty * avg
-        current_value = qty * cur
+        invested = invested_value(h)
+        current_value = market_value(h, fallback_to_avg=False)
+        total_invested += invested
+        if current_value is None:
+            unpriced_count += 1
+            ws_h.append([
+                h.stock_symbol, h.exchange, qty, avg, "—",
+                round(invested, 2), "—", "—", "—",
+            ])
+            continue
+        cur = float(h.current_price)  # type: ignore[arg-type]
         pnl = current_value - invested
         pnl_pct = (pnl / invested * 100) if invested > 0 else 0.0
-        total_invested += invested
         total_current += current_value
+        priced_invested += invested
         ws_h.append([
-            h.stock_symbol, h.exchange, qty, avg, cur or None,
+            h.stock_symbol, h.exchange, qty, avg, cur,
             round(invested, 2), round(current_value, 2),
             round(pnl, 2), round(pnl_pct, 2),
         ])
@@ -638,9 +680,9 @@ async def export_workbook_xlsx(portfolio_id: int, db: AsyncSession) -> bytes:
     # ── Summary ─────────────────────────────────────────────────────────
     ws_s = wb.create_sheet("Summary")
     _xlsx_header(ws_s, ["Metric", "Value"])
-    total_pnl = total_current - total_invested
-    total_pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0.0
-    for label, value in [
+    total_pnl = total_current - priced_invested
+    total_pnl_pct = (total_pnl / priced_invested * 100) if priced_invested > 0 else 0.0
+    summary_rows: list[tuple[str, object]] = [
         ("Portfolio", portfolio.name),
         ("Currency", portfolio.currency),
         ("Total Invested", round(total_invested, 2)),
@@ -649,7 +691,14 @@ async def export_workbook_xlsx(portfolio_id: int, db: AsyncSession) -> bytes:
         ("Total P&L %", round(total_pnl_pct, 2)),
         ("Holdings Count", len(portfolio.holdings)),
         ("Generated At", datetime.now().isoformat(timespec="seconds")),
-    ]:
+    ]
+    if unpriced_count:
+        summary_rows.append((
+            "Note",
+            f"{unpriced_count} holdings awaiting price data — "
+            "excluded from Current Value and P&L totals",
+        ))
+    for label, value in summary_rows:
         ws_s.append([label, value])
 
     for ws in (ws_h, ws_t, ws_d, ws_s):

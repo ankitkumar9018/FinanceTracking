@@ -5,7 +5,6 @@ Aggregate net worth across stocks, crypto, gold, FD, bonds, and real estate.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 import yfinance as yf
@@ -16,7 +15,9 @@ from sqlalchemy.orm import selectinload
 from app.models.asset import Asset
 from app.models.portfolio import Portfolio
 from app.models.user import User
-from app.services import forex_service
+from app.services.forex_service import RateCache
+from app.services.valuation import invested_value, market_value
+from app.utils.concurrency import bounded_thread_map
 
 logger = logging.getLogger(__name__)
 
@@ -48,53 +49,28 @@ def _sync_fetch_price(symbol: str) -> tuple[float, str | None] | None:
             return None
 
 
-async def _fetch_live_price(symbol: str) -> tuple[float, str | None] | None:
-    """Fetch current price + quote currency via yfinance (crypto, gold, …)."""
-    try:
-        return await asyncio.wait_for(asyncio.to_thread(_sync_fetch_price, symbol), timeout=10.0)
-    except Exception:
-        logger.warning("Failed to fetch live price for %s", symbol)
-        return None
+async def _fetch_live_prices(
+    symbols: list[str],
+) -> dict[str, tuple[float, str | None]]:
+    """Fetch current price + quote currency for many symbols concurrently.
 
-
-class _RateCache:
-    """Per-request cache of conversion rates into the base currency."""
-
-    def __init__(self, base_currency: str, db: AsyncSession) -> None:
-        self.base = base_currency.upper()
-        self.db = db
-        self._rates: dict[str, float] = {self.base: 1.0}
-        self._failed: set[str] = set()
-
-    async def to_base(
-        self, amount: float, from_currency: str | None
-    ) -> tuple[float, bool]:
-        """Convert *amount* into the base currency.
-
-        Returns ``(value_in_base, converted)``. When no exchange rate is
-        available ``converted`` is ``False`` and the amount is returned
-        UNconverted (still in its native currency) — callers must then mark the
-        item and exclude it from base-currency totals rather than silently
-        mixing currencies (which would count e.g. $10k as ₹10k).
-        """
-        cur = (from_currency or self.base).upper()
-        if cur == self.base:
-            return amount, True
-        if cur not in self._rates and cur not in self._failed:
-            try:
-                self._rates[cur] = await forex_service.get_exchange_rate(
-                    cur, self.base, None, self.db
-                )
-            except Exception:
-                logger.warning(
-                    "No %s->%s rate available; marking value unconverted "
-                    "(excluded from the base-currency total)",
-                    cur, self.base,
-                )
-                self._failed.add(cur)
-        if cur in self._rates:
-            return amount * self._rates[cur], True
-        return amount, False
+    Best-effort with bounded concurrency and a per-symbol timeout (via
+    :func:`bounded_thread_map`); failed symbols are simply absent from the
+    returned mapping.
+    """
+    unique = list(dict.fromkeys(symbols))
+    if not unique:
+        return {}
+    results = await bounded_thread_map(
+        _sync_fetch_price, unique, limit=8, timeout=10.0
+    )
+    prices: dict[str, tuple[float, str | None]] = {}
+    for symbol, result in zip(unique, results, strict=True):
+        if result is None:
+            logger.warning("Failed to fetch live price for %s", symbol)
+        else:
+            prices[symbol] = result
+    return prices
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +113,7 @@ async def get_net_worth(
         or (user.preferred_currency if user else None)
         or "INR"
     )
-    rates = _RateCache(base_currency, db)
+    rates = RateCache(base_currency, db)
 
     # ── 1. Stocks from existing portfolio holdings ─────────────────
     stock_value = 0.0
@@ -155,7 +131,8 @@ async def get_net_worth(
             qty = float(h.cumulative_quantity)
             avg = float(h.average_price)
             price = float(h.current_price) if h.current_price is not None else avg
-            value = qty * price
+            mv = market_value(h)
+            value = mv if mv is not None else 0.0
             holding_currency = h.currency or portfolio.currency
             value_base, converted = await rates.to_base(value, holding_currency)
             if converted:
@@ -167,7 +144,7 @@ async def get_net_worth(
                 "symbol": h.stock_symbol,
                 "exchange": h.exchange,
                 "quantity": qty,
-                "purchase_price": round(qty * avg, 2),
+                "purchase_price": round(invested_value(h), 2),
                 "current_price": price,
                 "current_value": round(value, 2),
                 "value": round(value, 2),
@@ -200,6 +177,16 @@ async def get_net_worth(
     for asset in assets:
         asset_groups.setdefault(asset.asset_type, []).append(asset)
 
+    # Live prices for crypto/gold are fetched concurrently up front (bounded
+    # pool + per-symbol timeout) instead of one blocking call per asset.
+    live_prices = await _fetch_live_prices(
+        [
+            asset.symbol
+            for asset in assets
+            if asset.asset_type in ("CRYPTO", "GOLD") and asset.symbol
+        ]
+    )
+
     for asset_type, asset_list in asset_groups.items():
         type_value = 0.0
         type_items: list[dict] = []
@@ -213,7 +200,7 @@ async def get_net_worth(
             # (USD for BTC-USD/GC=F, INR for GOLDBEES.NS, …), which may
             # differ from the currency stored on the asset.
             if asset_type in ("CRYPTO", "GOLD") and asset.symbol:
-                live = await _fetch_live_price(asset.symbol)
+                live = live_prices.get(asset.symbol)
                 if live is not None and float(asset.quantity) > 0:
                     live_price, quote_currency = live
                     value = float(asset.quantity) * live_price

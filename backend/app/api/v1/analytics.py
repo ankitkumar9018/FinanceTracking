@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -555,9 +555,13 @@ async def get_monthly_returns(
 
         returns = []
         for i in range(11, -1, -1):
-            month_dt = today.replace(day=1) - timedelta(days=i * 30)
-            month_key = month_dt.strftime("%Y-%m")
-            month_label = month_names[month_dt.month - 1]
+            # Step back by CALENDAR months, not 30-day blocks — day arithmetic
+            # duplicates/skips months around short months (e.g. two "Dec" rows
+            # and no "Feb" when run in March).
+            months_back = (today.year * 12 + today.month - 1) - i
+            year, month0 = divmod(months_back, 12)
+            month_key = f"{year:04d}-{month0 + 1:02d}"
+            month_label = month_names[month0]
             ret_pct = months_data.get(month_key, 0) * 100
             returns.append({"month": month_label, "return_pct": round(ret_pct, 2)})
 

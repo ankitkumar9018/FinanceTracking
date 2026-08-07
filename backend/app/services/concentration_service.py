@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.holding import Holding
 from app.services.market_data_service import _ticker_symbol
+from app.services.valuation import market_value
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +70,9 @@ _MCAP_DEFAULT: tuple[float, float] = (10e9, 2e9)  # USD/EUR-scale
 # ---------------------------------------------------------------------------
 
 def _market_value(holding: Holding) -> float:
-    """Current market value of a holding (falls back to average price)."""
-    price = (
-        float(holding.current_price)
-        if holding.current_price is not None
-        else float(holding.average_price)
-    )
-    return float(holding.cumulative_quantity) * price
+    """Current market value via the shared valuation helper (0.0 if unknown)."""
+    mv = market_value(holding)
+    return mv if mv is not None else 0.0
 
 
 def _effective_count(weights: list[float]) -> float:

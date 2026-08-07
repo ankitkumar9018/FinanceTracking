@@ -14,6 +14,30 @@ from app.utils.security import decode_token
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
+def validate_pcat(payload: dict, user: User) -> bool:
+    """Return ``False`` if the token predates the user's last password change.
+
+    The ``pcat`` claim carries the ``password_changed_at`` epoch at mint time;
+    if the stored stamp is newer, this token was minted before a credential
+    change and must not be honoured (defends against stolen tokens surviving a
+    password reset). A missing/garbled claim is treated as 0, so legacy tokens
+    without ``pcat`` stay valid until the user actually changes their password.
+
+    Shared by ``get_current_user`` (access tokens), the ``/auth/refresh``
+    endpoint (refresh tokens) and the WebSocket authenticator.
+    """
+    token_pcat_raw = payload.get("pcat", 0)
+    try:
+        token_pcat = int(token_pcat_raw)
+    except (TypeError, ValueError):
+        token_pcat = 0
+    if user.password_changed_at is not None:
+        current_pcat = int(user.password_changed_at.timestamp())
+        if token_pcat < current_pcat:
+            return False
+    return True
+
+
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
@@ -58,17 +82,7 @@ async def get_current_user(
         )
 
     # Reject tokens minted before the user's most recent password change/reset.
-    # The "pcat" claim carries the password_changed_at epoch at mint time; if the
-    # stored stamp is newer, this token predates a credential change and must not
-    # be honoured (defends against stolen tokens surviving a password reset).
-    token_pcat_raw = payload.get("pcat", 0)
-    try:
-        token_pcat = int(token_pcat_raw)
-    except (TypeError, ValueError):
-        token_pcat = 0
-    if user.password_changed_at is not None:
-        current_pcat = int(user.password_changed_at.timestamp())
-        if token_pcat < current_pcat:
-            raise credentials_exception
+    if not validate_pcat(payload, user):
+        raise credentials_exception
 
     return user

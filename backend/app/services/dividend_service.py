@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import math
 from collections import defaultdict
@@ -17,15 +16,26 @@ from app.models.dividend import Dividend
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.transaction import Transaction
+from app.models.user import User
 from app.schemas.dividend import DividendCreate
+from app.services.forex_service import RateCache
 from app.services.market_data_service import _ticker_symbol
 from app.services.portfolio_service import calculate_cumulative_holding
+from app.services.valuation import invested_value, market_value
+from app.utils.concurrency import bounded_thread_map
 
 logger = logging.getLogger(__name__)
 
 # Bound concurrent yfinance calls during forecasting.
 _FORECAST_CONCURRENCY = 6
 _FORECAST_TIMEOUT_S = 12.0
+
+
+async def _user_base_currency(user_id: int, db: AsyncSession) -> str:
+    """The user's preferred currency (falls back to INR)."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    return (user.preferred_currency if user else None) or "INR"
 
 
 # ---------------------------------------------------------------------------
@@ -173,23 +183,34 @@ async def list_dividends(
 async def get_dividend_summary(user_id: int, db: AsyncSession) -> dict:
     """Compute a dividend summary for the user.
 
+    All monetary figures are converted into the user's ``preferred_currency``
+    before summing — per-holding amounts are in each holding's own currency,
+    and adding raw INR and EUR numbers would fabricate the totals and the
+    yield. Amounts whose currency has no available FX rate are excluded from
+    the converted totals (never mixed in 1:1); they still count toward
+    ``count``.
+
     Returns:
-        total_dividends: sum of all total_amount values
+        total_dividends: sum of all total_amount values (in preferred currency)
         total_reinvested: sum of total_amount where is_reinvested is True
-        dividend_yield: (total annual dividends / total portfolio value) * 100
+        dividend_yield: (trailing-12m dividends / total portfolio value) * 100
         count: number of dividend records
         calendar: list of {month, amount} grouped by YYYY-MM
+        currency: the currency all figures are expressed in
     """
-    # Fetch all dividends for the user
+    base_currency = await _user_base_currency(user_id, db)
+    rates = RateCache(base_currency, db)
+
+    # Fetch all dividends for the user with each holding's currency
     stmt = (
-        select(Dividend)
+        select(Dividend, Holding.currency, Portfolio.currency)
         .join(Holding, Dividend.holding_id == Holding.id)
         .join(Portfolio, Holding.portfolio_id == Portfolio.id)
         .where(Portfolio.user_id == user_id)
         .order_by(Dividend.ex_date.asc())
     )
     result = await db.execute(stmt)
-    dividends = result.scalars().all()
+    dividend_rows = result.all()
 
     total_dividends = 0.0
     total_reinvested = 0.0
@@ -197,8 +218,12 @@ async def get_dividend_summary(user_id: int, db: AsyncSession) -> dict:
     monthly: dict[str, float] = defaultdict(float)
     one_year_ago = date.today() - timedelta(days=365)
 
-    for div in dividends:
-        amount = float(div.total_amount)
+    for div, holding_currency, portfolio_currency in dividend_rows:
+        currency = holding_currency or portfolio_currency
+        amount, converted = await rates.to_base(float(div.total_amount), currency)
+        if not converted:
+            continue  # no FX rate — excluded rather than mixed in 1:1
+
         total_dividends += amount
 
         if div.is_reinvested:
@@ -212,21 +237,28 @@ async def get_dividend_summary(user_id: int, db: AsyncSession) -> dict:
 
     # Dividend yield: trailing 12-month dividends / total portfolio value
     holdings_stmt = (
-        select(Holding)
+        select(Holding, Portfolio.currency)
         .join(Portfolio, Holding.portfolio_id == Portfolio.id)
         .where(Portfolio.user_id == user_id)
     )
     holdings_result = await db.execute(holdings_stmt)
-    holdings = holdings_result.scalars().all()
+    holding_rows = holdings_result.all()
 
     total_portfolio_value = 0.0
     total_invested = 0.0
-    for h in holdings:
-        qty = float(h.cumulative_quantity)
-        avg = float(h.average_price)
-        price = float(h.current_price) if h.current_price is not None else avg
-        total_portfolio_value += qty * price
-        total_invested += qty * avg
+    for h, portfolio_currency in holding_rows:
+        currency = h.currency or portfolio_currency
+        mv = market_value(h)
+        value, value_converted = await rates.to_base(
+            mv if mv is not None else 0.0, currency
+        )
+        invested, invested_converted = await rates.to_base(
+            invested_value(h), currency
+        )
+        if value_converted:
+            total_portfolio_value += value
+        if invested_converted:
+            total_invested += invested
 
     dividend_yield: float | None = None
     if total_portfolio_value > 0 and annual_dividends > 0:
@@ -247,8 +279,9 @@ async def get_dividend_summary(user_id: int, db: AsyncSession) -> dict:
         "dividend_yield": dividend_yield,
         "yield_on_cost": yield_on_cost,
         "total_reinvested": round(total_reinvested, 2),
-        "count": len(dividends),
+        "count": len(dividend_rows),
         "calendar": calendar,
+        "currency": base_currency,
     }
 
 
@@ -379,7 +412,14 @@ async def get_dividend_forecast(user_id: int, db: AsyncSession) -> dict:
     """Estimate the next 12 months of dividend income for the user's holdings.
 
     Best-effort: symbols without dividend data are skipped. yfinance calls run
-    in threads with bounded concurrency.
+    in threads with bounded concurrency (via :func:`bounded_thread_map`).
+
+    All aggregate money figures (``monthly``, ``total_forward_12m``,
+    per-holding ``annual_estimate``) are converted into the user's
+    ``preferred_currency`` before summing so mixed INR/EUR holdings do not add
+    raw numbers together. Holdings whose currency has no available FX rate are
+    excluded from the totals and flagged ``unconverted`` in ``by_holding``
+    (their per-share yield percentages are currency-free and stay accurate).
 
     Returns::
 
@@ -391,34 +431,29 @@ async def get_dividend_forecast(user_id: int, db: AsyncSession) -> dict:
                 {"symbol", "exchange", "annual_estimate",
                  "yield_pct", "yield_on_cost_pct"}, ...
             ],
+            "currency": str,
         }
     """
+    base_currency = await _user_base_currency(user_id, db)
+    rates = RateCache(base_currency, db)
+
     holdings_stmt = (
-        select(Holding)
+        select(Holding, Portfolio.currency)
         .join(Portfolio, Holding.portfolio_id == Portfolio.id)
         .where(Portfolio.user_id == user_id)
     )
     holdings_result = await db.execute(holdings_stmt)
-    holdings = list(holdings_result.scalars().all())
+    holding_rows = holdings_result.all()
+    holdings = [h for h, _ in holding_rows]
 
-    sem = asyncio.Semaphore(_FORECAST_CONCURRENCY)
-
-    async def _fetch(h: Holding) -> tuple[Holding, dict | None]:
-        async with sem:
-            try:
-                prim = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        _sync_fetch_dividend_forecast,
-                        _ticker_symbol(h.stock_symbol, h.exchange),
-                    ),
-                    timeout=_FORECAST_TIMEOUT_S,
-                )
-            except Exception:
-                logger.debug("Dividend forecast fetch failed for %s", h.stock_symbol)
-                prim = None
-            return h, prim
-
-    results = await asyncio.gather(*[_fetch(h) for h in holdings]) if holdings else []
+    prims = await bounded_thread_map(
+        lambda h: _sync_fetch_dividend_forecast(
+            _ticker_symbol(h.stock_symbol, h.exchange)
+        ),
+        holdings,
+        limit=_FORECAST_CONCURRENCY,
+        timeout=_FORECAST_TIMEOUT_S,
+    )
 
     today = date.today()
     forward_months = _forward_months(today.year, today.month)
@@ -428,36 +463,48 @@ async def get_dividend_forecast(user_id: int, db: AsyncSession) -> dict:
     total_current_value = 0.0
     total_forward = 0.0
 
-    for h, prim in results:
+    for (h, portfolio_currency), prim in zip(holding_rows, prims, strict=True):
+        currency = h.currency or portfolio_currency
         qty = float(h.cumulative_quantity)
         avg = float(h.average_price)
         price = float(h.current_price) if h.current_price is not None else avg
-        total_current_value += qty * price
+
+        mv = market_value(h)
+        value_base, value_converted = await rates.to_base(
+            mv if mv is not None else 0.0, currency
+        )
+        if value_converted:
+            total_current_value += value_base
 
         if not prim:
             continue
 
         annual_rate = prim["annual_rate"]
-        annual_estimate = annual_rate * qty
+        annual_estimate, converted = await rates.to_base(annual_rate * qty, currency)
 
         schedule = _holding_monthly_schedule(prim, forward_months)
-        for month_key, per_share in schedule.items():
-            amount = per_share * qty
-            monthly_totals[month_key] += amount
-            total_forward += amount
+        if converted:
+            for month_key, per_share in schedule.items():
+                amount, _ = await rates.to_base(per_share * qty, currency)
+                monthly_totals[month_key] += amount
+                total_forward += amount
 
+        # Per-share ratios in the holding's own currency — currency-free.
         yield_pct = round(annual_rate / price * 100, 2) if price > 0 else None
         yield_on_cost_pct = round(annual_rate / avg * 100, 2) if avg > 0 else None
 
-        by_holding.append(
-            {
-                "symbol": h.stock_symbol,
-                "exchange": h.exchange,
-                "annual_estimate": round(annual_estimate, 2),
-                "yield_pct": yield_pct,
-                "yield_on_cost_pct": yield_on_cost_pct,
-            }
-        )
+        row = {
+            "symbol": h.stock_symbol,
+            "exchange": h.exchange,
+            "annual_estimate": round(annual_estimate, 2),
+            "yield_pct": yield_pct,
+            "yield_on_cost_pct": yield_on_cost_pct,
+        }
+        if not converted:
+            # annual_estimate is still in the holding's native currency and is
+            # excluded from the totals above.
+            row["unconverted"] = True
+        by_holding.append(row)
 
     monthly = [
         {
@@ -478,6 +525,7 @@ async def get_dividend_forecast(user_id: int, db: AsyncSession) -> dict:
         "total_forward_12m": round(total_forward, 2),
         "forward_yield_pct": forward_yield_pct,
         "by_holding": by_holding,
+        "currency": base_currency,
     }
 
 

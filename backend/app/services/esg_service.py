@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.portfolio import Portfolio
 from app.services.market_data_service import _ticker_symbol
+from app.services.valuation import market_value
 
 logger = logging.getLogger(__name__)
 
@@ -122,11 +123,32 @@ def _safe_float(data, key: str) -> float | None:
 # Portfolio ESG (weighted average)
 # ---------------------------------------------------------------------------
 
+def _weighted_average(pairs: list[tuple[float | None, float]]) -> float | None:
+    """Weighted mean over ``(value, weight)`` pairs, skipping ``None`` values.
+
+    Each sub-score keeps its own weight denominator: a holding whose provider
+    is missing e.g. the governance score contributes to neither the numerator
+    nor the denominator for governance — counting it as 0 with full weight
+    would bias the portfolio average toward zero.
+    """
+    numerator = 0.0
+    denominator = 0.0
+    for value, weight in pairs:
+        if value is None:
+            continue
+        numerator += value * weight
+        denominator += weight
+    return round(numerator / denominator, 2) if denominator > 0 else None
+
+
 async def get_portfolio_esg(portfolio_id: int, db: AsyncSession) -> dict:
     """Calculate weighted-average ESG scores for a portfolio.
 
     Weights are based on holding value (quantity * current_price).
-    Holdings without ESG data are excluded from the weighted average.
+    Holdings without ESG data are excluded from the weighted average, and each
+    sub-score (E/S/G) averages only over holdings that actually report it.
+    ESG results are keyed by (symbol, exchange) so the same ticker listed on
+    two exchanges cannot collide.
 
     Returns a dict matching PortfolioESGResponse schema.
     """
@@ -139,67 +161,55 @@ async def get_portfolio_esg(portfolio_id: int, db: AsyncSession) -> dict:
     if portfolio is None:
         raise ValueError(f"Portfolio {portfolio_id} not found")
 
-    # Collect symbols and their weights (market value)
+    # Collect symbols and their weights (market value; no live price -> 0)
     holdings_data: list[dict] = []
     for h in portfolio.holdings:
-        qty = float(h.cumulative_quantity)
-        price = float(h.current_price) if h.current_price is not None else 0.0
-        value = qty * price
         holdings_data.append({
             "symbol": h.stock_symbol,
             "exchange": h.exchange,
-            "value": value,
+            "value": market_value(h, fallback_to_avg=False) or 0.0,
         })
 
-    # Fetch ESG for all holdings — group by exchange to use proper ticker symbol
-    all_scores: list[dict] = []
+    # Fetch ESG for all holdings — group by exchange to use proper ticker
+    # symbol, and key the lookup by (symbol, exchange) to avoid collisions
+    # between identically-named tickers on different exchanges.
     exchange_groups: dict[str, list[str]] = {}
     for hd in holdings_data:
         exchange_groups.setdefault(hd["exchange"], []).append(hd["symbol"])
 
+    esg_lookup: dict[tuple[str, str], dict] = {}
     for exchange, syms in exchange_groups.items():
         scores = await get_esg_scores(syms, exchange)
-        all_scores.extend(scores)
+        for score in scores:
+            esg_lookup[(score["symbol"], exchange)] = score
 
-    # Build a lookup: symbol -> esg data
-    esg_lookup: dict[str, dict] = {s["symbol"]: s for s in all_scores}
-
-    # Calculate weighted averages
-    total_weight = 0.0
-    weighted_total = 0.0
-    weighted_env = 0.0
-    weighted_social = 0.0
-    weighted_gov = 0.0
+    # Calculate weighted averages (per-sub-score denominators, None skipped)
+    total_pairs: list[tuple[float | None, float]] = []
+    env_pairs: list[tuple[float | None, float]] = []
+    social_pairs: list[tuple[float | None, float]] = []
+    gov_pairs: list[tuple[float | None, float]] = []
     with_esg = 0
     without_esg = 0
 
     stock_scores: list[dict] = []
     for hd in holdings_data:
-        esg = esg_lookup.get(hd["symbol"])
+        esg = esg_lookup.get((hd["symbol"], hd["exchange"]))
         if esg and esg["esg_available"] and esg["total_esg"] is not None:
             weight = hd["value"]
-            total_weight += weight
-            weighted_total += (esg["total_esg"] or 0) * weight
-            weighted_env += (esg["environment_score"] or 0) * weight
-            weighted_social += (esg["social_score"] or 0) * weight
-            weighted_gov += (esg["governance_score"] or 0) * weight
+            total_pairs.append((esg["total_esg"], weight))
+            env_pairs.append((esg["environment_score"], weight))
+            social_pairs.append((esg["social_score"], weight))
+            gov_pairs.append((esg["governance_score"], weight))
             with_esg += 1
             stock_scores.append(esg)
         else:
             without_esg += 1
-            stock_scores.append(esg or {
-                "symbol": hd["symbol"],
-                "total_esg": None,
-                "environment_score": None,
-                "social_score": None,
-                "governance_score": None,
-                "esg_available": False,
-            })
+            stock_scores.append(esg or _default_esg(hd["symbol"]))
 
-    avg_total = round(weighted_total / total_weight, 2) if total_weight > 0 else None
-    avg_env = round(weighted_env / total_weight, 2) if total_weight > 0 else None
-    avg_social = round(weighted_social / total_weight, 2) if total_weight > 0 else None
-    avg_gov = round(weighted_gov / total_weight, 2) if total_weight > 0 else None
+    avg_total = _weighted_average(total_pairs)
+    avg_env = _weighted_average(env_pairs)
+    avg_social = _weighted_average(social_pairs)
+    avg_gov = _weighted_average(gov_pairs)
 
     return {
         "portfolio_id": portfolio.id,

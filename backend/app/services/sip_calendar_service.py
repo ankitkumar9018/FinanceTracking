@@ -11,7 +11,6 @@ type, date, amount, and associated stock.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from calendar import monthrange
 from datetime import date, timedelta
@@ -24,8 +23,14 @@ from app.models.dividend import Dividend
 from app.models.holding import Holding
 from app.services.market_data_service import _ticker_symbol
 from app.services.recurring_detection_service import detect_recurring
+from app.utils.concurrency import bounded_thread_map
 
 logger = logging.getLogger(__name__)
+
+# Cap concurrent yfinance calendar fetches; the per-fetch timeout starts only
+# after a semaphore slot is acquired (see bounded_thread_map).
+_MAX_CONCURRENCY = 8
+_FETCH_TIMEOUT = 10.0
 
 
 def _sync_fetch_earnings_calendar(ticker_str: str):
@@ -163,22 +168,18 @@ async def get_calendar_events(
         )
         holdings_list = list(h_result.scalars().all())
 
-        # Fetch all earnings calendars in parallel
-        fetch_tasks = [
-            asyncio.wait_for(
-                asyncio.to_thread(
-                    _sync_fetch_earnings_calendar,
-                    _ticker_symbol(h.stock_symbol, h.exchange),
-                ),
-                timeout=10.0,
-            )
-            for h in holdings_list
-        ]
-        fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+        # Fetch all earnings calendars with bounded concurrency (failures and
+        # timeouts surface as None).
+        fetch_results = await bounded_thread_map(
+            _sync_fetch_earnings_calendar,
+            [_ticker_symbol(h.stock_symbol, h.exchange) for h in holdings_list],
+            limit=_MAX_CONCURRENCY,
+            timeout=_FETCH_TIMEOUT,
+        )
 
         for h, cal in zip(holdings_list, fetch_results):
             try:
-                if isinstance(cal, BaseException) or cal is None:
+                if cal is None:
                     continue
 
                 # yfinance returns a dict or DataFrame depending on version

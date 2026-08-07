@@ -22,9 +22,11 @@ async def audit_log(
 ) -> None:
     """Record an auditable action.
 
-    In the current implementation this logs to Python's logging system
-    and to the notification_log table (reusing existing infrastructure).
-    A dedicated audit_log table can be added via migration if needed.
+    Current implementation logs a structured entry to Python's logging system
+    (the ``audit`` logger) ONLY — nothing is persisted to the database. The
+    ``db`` session parameter is accepted (and passed by all callers) so a
+    future dedicated audit_log table can be adopted without changing call
+    sites, but it is intentionally unused today.
     """
     timestamp = datetime.now(UTC).isoformat()
     log_entry = (

@@ -55,13 +55,15 @@ export default function DashboardPage() {
   // Fetch converted totals when a display currency is active. The backend only
   // returns the *_display fields when a conversion is genuinely needed, so an
   // absence (equal currency) or any error cleanly falls back to native cards.
+  // Debounced (trailing 2s): `holdings` is rebuilt on every WebSocket price
+  // tick, and without the debounce this effect would hammer /summary per tick.
   useEffect(() => {
     if (!activePortfolioId) {
       setConverted(null);
       return;
     }
     let cancelled = false;
-    (async () => {
+    const timer = setTimeout(async () => {
       try {
         const res = await api.get<Partial<ConvertedSummary>>(
           `/portfolios/${activePortfolioId}/summary?display_currency=${encodeURIComponent(
@@ -87,9 +89,10 @@ export default function DashboardPage() {
           toast.error("Could not convert to display currency — showing native values");
         }
       }
-    })();
+    }, 2000);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
     // Re-run when the portfolio, currency, or holdings (post price-refresh) change.
   }, [activePortfolioId, effectiveCurrency, holdings]);

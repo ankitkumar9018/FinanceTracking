@@ -20,6 +20,7 @@ from app.models.dividend import Dividend
 from app.models.portfolio import Portfolio
 from app.models.transaction import Transaction
 from app.services.export_service import _sanitize_csv_cell
+from app.services.valuation import invested_value, market_value
 
 logger = logging.getLogger(__name__)
 
@@ -104,20 +105,33 @@ async def generate_portfolio_csv(
         ]
     )
 
+    # Same policy as export_service: holdings without a live price render "—"
+    # for current/market-value/P&L (no silent avg-price fallback) and are
+    # excluded from the market-value / P&L totals.
     total_invested = 0.0
-    total_market_value = 0.0
+    total_market_value = 0.0  # priced holdings only
+    priced_invested = 0.0
 
     for h in sorted(holdings, key=lambda x: x.stock_symbol):
         qty = float(h.cumulative_quantity)
         avg = float(h.average_price)
-        cur = float(h.current_price) if h.current_price is not None else avg
-        mv = qty * cur
-        invested = qty * avg
-        pnl = mv - invested
-        pnl_pct = round((pnl / invested) * 100, 2) if invested > 0 else 0.0
-
+        invested = invested_value(h)
+        mv = market_value(h, fallback_to_avg=False)
         total_invested += invested
-        total_market_value += mv
+
+        if mv is None:
+            cur_cell: object = "—"
+            mv_cell: object = "—"
+            pnl_cell: object = "—"
+            pnl_pct_cell: object = "—"
+        else:
+            pnl = mv - invested
+            cur_cell = round(float(h.current_price), 4)  # type: ignore[arg-type]
+            mv_cell = round(mv, 2)
+            pnl_cell = round(pnl, 2)
+            pnl_pct_cell = round((pnl / invested) * 100, 2) if invested > 0 else 0.0
+            total_market_value += mv
+            priced_invested += invested
 
         last_updated_str = ""
         if h.last_price_update is not None:
@@ -131,19 +145,19 @@ async def generate_portfolio_csv(
                 _sanitize_csv_cell(h.sector or ""),
                 round(qty, 4),
                 round(avg, 4),
-                round(cur, 4),
-                round(mv, 2),
-                round(pnl, 2),
-                pnl_pct,
+                cur_cell,
+                mv_cell,
+                pnl_cell,
+                pnl_pct_cell,
                 round(float(h.current_rsi), 2) if h.current_rsi is not None else "",
                 last_updated_str,
             ]
         )
 
-    # Totals row
-    total_pnl = total_market_value - total_invested
+    # Totals row (priced holdings only)
+    total_pnl = total_market_value - priced_invested
     total_pnl_pct = (
-        round((total_pnl / total_invested) * 100, 2) if total_invested > 0 else 0.0
+        round((total_pnl / priced_invested) * 100, 2) if priced_invested > 0 else 0.0
     )
     writer.writerow([])
     writer.writerow(

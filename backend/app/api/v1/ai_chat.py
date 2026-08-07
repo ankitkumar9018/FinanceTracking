@@ -50,6 +50,14 @@ async def send_chat_message(
             )
         )
         session = result.scalar_one_or_none()
+        if session is None:
+            # A stale/foreign session id must not silently fork a new session
+            # (the client would keep sending the old id and fragment the
+            # conversation, answered with no history each time).
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat session not found",
+            )
 
     if session is None:
         session = ChatSession(user_id=user.id, messages=[], context={})

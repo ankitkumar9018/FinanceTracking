@@ -23,6 +23,12 @@ export function formatPercent(value: number | null | undefined, decimals = 2): s
   return `${sign}${value.toFixed(decimals)}%`;
 }
 
+export function formatNumber(value: number | null | undefined, decimals = 2): string {
+  // Guard null/undefined AND NaN/Infinity so we never render "NaN".
+  if (value == null || !Number.isFinite(value)) return "—";
+  return value.toFixed(decimals);
+}
+
 export function formatCompact(value: number): string {
   if (Math.abs(value) >= 1e12) return `${(value / 1e12).toFixed(1)}T`;
   if (Math.abs(value) >= 1e9) return `${(value / 1e9).toFixed(1)}B`;
@@ -37,21 +43,8 @@ export function formatRsi(value: number | null): string {
   return value.toFixed(1);
 }
 
-/** Trading currency for an exchange. Used to display each holding in its
- * native currency instead of defaulting everything to INR. */
-const EXCHANGE_CURRENCY: Record<string, string> = {
-  NSE: "INR",
-  BSE: "INR",
-  XETRA: "EUR",
-  FRA: "EUR",
-  NYSE: "USD",
-  NASDAQ: "USD",
-};
-
-export function currencyForExchange(exchange: string | null | undefined): string {
-  if (!exchange) return "INR";
-  return EXCHANGE_CURRENCY[exchange.toUpperCase()] ?? "INR";
-}
+// Exchange metadata now lives in lib/exchanges.ts; re-exported here for compat.
+export { currencyForExchange } from "./exchanges";
 
 /** Shared date formatter so every page renders dates the same way.
  * `style: "short"` \u2192 17 Jul 2026, `"long"` \u2192 17 July 2026, `"numeric"` \u2192 17/07/2026 */

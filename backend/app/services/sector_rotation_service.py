@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.holding import Holding
 from app.models.transaction import Transaction
+from app.services.valuation import market_value
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +28,9 @@ _UNKNOWN_SECTOR = "Unknown"
 # ---------------------------------------------------------------------------
 
 def _market_value(holding: Holding) -> float:
-    """Return current market value for a holding."""
-    price = (
-        float(holding.current_price)
-        if holding.current_price is not None
-        else float(holding.average_price)
-    )
-    return float(holding.cumulative_quantity) * price
+    """Current market value via the shared helper (average-price fallback
+    when there is no live price, matching the original inline logic)."""
+    return market_value(holding, fallback_to_avg=True) or 0.0
 
 
 def _compute_weights(sector_values: dict[str, float]) -> dict[str, float]:

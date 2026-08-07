@@ -12,6 +12,8 @@ from app.models.goal import Goal
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.schemas.goal import GoalCreate, GoalUpdate
+from app.services.fire_service import project_monthly
+from app.services.valuation import market_value
 
 logger = logging.getLogger(__name__)
 
@@ -87,42 +89,23 @@ def sip_projection(
         including ``current_amount``) and a ``projection`` list of
         ``{year, invested, value}`` snapshots for the stepped-up path.
     """
-    current_amount = float(current_amount)
-    monthly_sip = float(monthly_sip)
-    years = max(int(years), 0)
-
-    monthly_rate = annual_return_pct / 100.0 / 12.0
-    step_up = step_up_pct / 100.0
-
-    corpus_step = current_amount
-    corpus_flat = current_amount
-    invested = current_amount
-
-    monthly_step = monthly_sip
-    monthly_flat = monthly_sip
-
-    projection: list[dict] = [
-        {"year": 0, "invested": round(invested, 2), "value": round(corpus_step, 2)}
-    ]
-
-    for year in range(1, years + 1):
-        for _ in range(12):
-            corpus_step = corpus_step * (1 + monthly_rate) + monthly_step
-            corpus_flat = corpus_flat * (1 + monthly_rate) + monthly_flat
-            invested += monthly_step
-
-        projection.append(
-            {"year": year, "invested": round(invested, 2), "value": round(corpus_step, 2)}
-        )
-
-        # Step up next year's monthly SIP.
-        monthly_step *= 1 + step_up
+    stepped = project_monthly(
+        current_amount, monthly_sip, annual_return_pct, years, step_up_pct=step_up_pct
+    )
+    flat = project_monthly(current_amount, monthly_sip, annual_return_pct, years)
 
     return {
-        "corpus_with_stepup": round(corpus_step, 2),
-        "corpus_without_stepup": round(corpus_flat, 2),
-        "total_invested": round(invested, 2),
-        "projection": projection,
+        "corpus_with_stepup": round(stepped["final_corpus"], 2),
+        "corpus_without_stepup": round(flat["final_corpus"], 2),
+        "total_invested": round(stepped["invested"], 2),
+        "projection": [
+            {
+                "year": snap["year"],
+                "invested": round(snap["invested"], 2),
+                "value": round(snap["corpus"], 2),
+            }
+            for snap in stepped["yearly"]
+        ],
     }
 
 
@@ -207,9 +190,9 @@ async def update_goal(
             months_remaining=months,
         )
 
-    # Auto-achieve check
-    if float(goal.current_amount) >= float(goal.target_amount):
-        goal.is_achieved = True
+    # Auto-achieve check (two-way: raising the target or lowering the current
+    # amount un-achieves a previously achieved goal).
+    goal.is_achieved = float(goal.current_amount) >= float(goal.target_amount)
 
     await db.flush()
     await db.refresh(goal)
@@ -290,9 +273,8 @@ async def sync_goal_from_portfolio(
 
     total_value = 0.0
     for h in holdings:
-        qty = float(h.cumulative_quantity)
-        price = float(h.current_price) if h.current_price is not None else float(h.average_price)
-        total_value += qty * price
+        mv = market_value(h)
+        total_value += mv if mv is not None else 0.0
 
     goal.current_amount = total_value
 
@@ -304,9 +286,8 @@ async def sync_goal_from_portfolio(
         months_remaining=months,
     )
 
-    # Auto-achieve check
-    if total_value >= float(goal.target_amount):
-        goal.is_achieved = True
+    # Auto-achieve check (two-way: a value drop below target un-achieves).
+    goal.is_achieved = total_value >= float(goal.target_amount)
 
     await db.flush()
     await db.refresh(goal)

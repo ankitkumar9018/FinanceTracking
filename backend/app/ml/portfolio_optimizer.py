@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -11,9 +12,10 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ml.common import RISK_FREE_RATE_ANNUAL, TRADING_DAYS_PER_YEAR
+from app.ml.price_data import fetch_return_series
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
-from app.models.price_history import PriceHistory
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +27,9 @@ try:
 except ImportError:
     HAS_SCIPY = False
 
-TRADING_DAYS_PER_YEAR = 252
-RISK_FREE_RATE_ANNUAL = 0.07
+# A holding is identified by (stock_symbol, exchange) — symbol alone is NOT
+# unique (the same company trades on NSE and BSE).
+HoldingKey = tuple[str, str]
 
 
 # ---------------------------------------------------------------------------
@@ -289,69 +292,56 @@ async def optimize_portfolio(
             f"Found {len(holdings)}."
         )
 
-    # Current weights by market value
+    # Current weights by market value, keyed by (symbol, exchange) exactly as
+    # risk_calculator does — a plain-symbol key would collide for the same
+    # company held on NSE and BSE, leaving duplicate entries in the valid list
+    # and a covariance matrix whose size no longer matches → matmul ValueError.
     total_value = 0.0
-    holding_values: dict[str, float] = {}
-    symbols: list[str] = []
+    holding_values: dict[HoldingKey, float] = {}
 
     for h in holdings:
         qty = float(h.cumulative_quantity)
         price = float(h.current_price) if h.current_price is not None else float(h.average_price)
         value = qty * price
-        holding_values[h.stock_symbol] = value
+        key = (h.stock_symbol, h.exchange)
+        holding_values[key] = holding_values.get(key, 0.0) + value
         total_value += value
-        symbols.append(h.stock_symbol)
+
+    keys: list[HoldingKey] = list(holding_values)
 
     if total_value == 0:
         raise ValueError("Portfolio has zero total value")
 
-    current_weights = {
-        sym: round(val / total_value, 6) for sym, val in holding_values.items()
+    current_by_key = {
+        key: round(val / total_value, 6) for key, val in holding_values.items()
     }
 
-    # Fetch price history for all holdings
+    # Fetch price history for all holdings (single batched query).
     # `days` means trading days (default 252 = 1y); widen the calendar
     # window accordingly or a "1-year" metric only sees ~7 months of bars
     cutoff = date.today() - timedelta(days=int(days * 1.45) + 10)
-    returns_data: dict[str, pd.Series] = {}
-
-    for h in holdings:
-        price_result = await db.execute(
-            select(PriceHistory.date, PriceHistory.close)
-            .where(
-                PriceHistory.stock_symbol == h.stock_symbol,
-                PriceHistory.exchange == h.exchange,
-                PriceHistory.date >= cutoff,
-            )
-            .order_by(PriceHistory.date.asc())
-        )
-        prices = price_result.all()
-
-        if len(prices) >= 2:
-            price_series = pd.Series(
-                [float(p.close) for p in prices],
-                index=[p.date for p in prices],
-            )
-            daily_returns = price_series.pct_change().dropna()
-            returns_data[h.stock_symbol] = daily_returns
+    returns_data = await fetch_return_series(db, holdings, cutoff)
 
     # Only optimise holdings with enough data
-    valid_symbols = [s for s in symbols if s in returns_data and len(returns_data[s]) >= 30]
-    if len(valid_symbols) < 2:
+    valid_keys = [
+        k for k in keys if k in returns_data and len(returns_data[k]) >= 30
+    ]
+    if len(valid_keys) < 2:
         raise ValueError(
             "Insufficient price history for optimisation. "
-            f"Need at least 2 holdings with 30+ days of data, found {len(valid_symbols)}."
+            f"Need at least 2 holdings with 30+ days of data, found {len(valid_keys)}."
         )
 
-    # Build returns matrix
+    # Build returns matrix (positional integer columns; row i maps to
+    # valid_keys[i])
     returns_df = pd.DataFrame(
-        {sym: returns_data[sym] for sym in valid_symbols}
+        {i: returns_data[k] for i, k in enumerate(valid_keys)}
     ).dropna()
 
     if len(returns_df) < 30:
         raise ValueError("Insufficient overlapping price data for optimisation.")
 
-    n = len(valid_symbols)
+    n = len(valid_keys)
     mean_daily = returns_df.mean().values
     cov_daily = returns_df.cov().values
 
@@ -370,23 +360,29 @@ async def optimize_portfolio(
         logger.info("scipy not available — using Monte Carlo fallback for optimisation")
         optimal_raw = _optimize_fallback(mean_daily, cov_daily, n, objective)
 
-    optimal_weights = {
-        sym: round(float(optimal_raw[i]), 6) for i, sym in enumerate(valid_symbols)
+    optimal_by_key = {
+        key: round(float(optimal_raw[i]), 6) for i, key in enumerate(valid_keys)
     }
 
     # Holdings without enough price history are excluded from optimisation.
     # Freeze them at their current weight (scaling the optimised weights into
     # the remaining budget) — a zero target would tell the user to sell to
     # zero because of a data gap, not a decision.
-    excluded = [sym for sym in symbols if sym not in optimal_weights]
-    frozen_total = sum(current_weights.get(sym, 0.0) for sym in excluded)
+    excluded = [key for key in keys if key not in optimal_by_key]
+    frozen_total = sum(current_by_key.get(key, 0.0) for key in excluded)
     if excluded and frozen_total < 1.0:
         scale = 1.0 - frozen_total
-        optimal_weights = {
-            sym: round(w * scale, 6) for sym, w in optimal_weights.items()
+        optimal_by_key = {
+            key: round(w * scale, 6) for key, w in optimal_by_key.items()
         }
-    for sym in excluded:
-        optimal_weights[sym] = round(current_weights.get(sym, 0.0), 6)
+    for key in excluded:
+        optimal_by_key[key] = round(current_by_key.get(key, 0.0), 6)
+
+    # Result dicts use display names: plain "SYM" in the common case, and
+    # "SYM (EXCH)" only when the same symbol appears on multiple exchanges.
+    display = _display_names(keys)
+    current_weights = {display[key]: w for key, w in current_by_key.items()}
+    optimal_weights = {display[key]: w for key, w in optimal_by_key.items()}
 
     # Compute expected metrics for optimal portfolio
     exp_return = _portfolio_return(mean_daily, optimal_raw)
@@ -406,9 +402,25 @@ async def optimize_portfolio(
     )
 
     # Generate rebalance suggestions
-    suggestions = _build_suggestions(current_weights, optimal_weights, symbols)
+    suggestions = _build_suggestions(
+        current_weights, optimal_weights, [display[key] for key in keys]
+    )
 
     return optimization_result, suggestions
+
+
+def _display_names(keys: list[HoldingKey]) -> dict[HoldingKey, str]:
+    """Map each (symbol, exchange) key to its display name.
+
+    Plain "SYM" unless the same symbol appears on multiple exchanges, in which
+    case every occurrence is disambiguated as "SYM (EXCH)" — the common
+    single-exchange case keeps its familiar labels unchanged.
+    """
+    symbol_counts = Counter(sym for sym, _ in keys)
+    return {
+        (sym, exch): f"{sym} ({exch})" if symbol_counts[sym] > 1 else sym
+        for sym, exch in keys
+    }
 
 
 def _build_suggestions(

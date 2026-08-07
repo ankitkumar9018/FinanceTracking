@@ -7,29 +7,38 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+# One source of truth for valid values: a typo'd channel previously passed
+# create/update untouched and the alert then silently never notified.
+Channel = Literal["in_app", "email", "telegram", "whatsapp", "sms"]
+AlertType = Literal["PRICE_RANGE", "RSI", "CUSTOM"]
+
+
+def _default_channels() -> list[Channel]:
+    return ["in_app"]
+
 
 class AlertCreate(BaseModel):
     holding_id: int | None = None
     watchlist_item_id: int | None = None
-    alert_type: Literal["PRICE_RANGE", "RSI", "CUSTOM"] = "PRICE_RANGE"
+    alert_type: AlertType = "PRICE_RANGE"
     condition: dict = Field(
         ...,
         description="Alert condition, e.g. {'above': 150.0} or {'rsi_above': 70}",
     )
     is_active: bool = True
-    channels: list[str] = Field(default_factory=lambda: ["in_app"])
+    channels: list[Channel] = Field(default_factory=_default_channels)
 
 
 class AlertUpdate(BaseModel):
-    alert_type: str | None = None
+    alert_type: AlertType | None = None
     condition: dict | None = None
     is_active: bool | None = None
 
 
 class AlertChannelUpdate(BaseModel):
-    channels: list[str] = Field(
+    channels: list[Channel] = Field(
         ...,
-        description="List of notification channels: in_app, email, telegram, whatsapp",
+        description="List of notification channels: in_app, email, telegram, whatsapp, sms",
     )
 
 

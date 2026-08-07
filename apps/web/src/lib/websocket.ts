@@ -1,4 +1,5 @@
 import { getWsBaseAsync } from "./tauri-port";
+import { tryRefresh } from "./api-client";
 
 type MessageHandler = (data: unknown) => void;
 
@@ -17,6 +18,10 @@ export class WSConnection {
   // the async getWsBaseAsync() handshake from a prior connect() is still pending
   // (the readyState guard can't see a socket that doesn't exist yet).
   private connecting = false;
+  // True while we're retrying after a 4001 auth close. Prevents an endless
+  // refresh/reconnect loop when the refresh token itself is invalid; reset on
+  // a successful connect so a later expiry gets one fresh retry again.
+  private retriedAuth = false;
 
   constructor(path: string) {
     this.basePath = path;
@@ -58,6 +63,7 @@ export class WSConnection {
 
     this.ws.onopen = () => {
       this.reconnectAttempts = 0;
+      this.retriedAuth = false;
       this.emit("connected", {});
     };
 
@@ -76,6 +82,18 @@ export class WSConnection {
       const noReconnectCodes = [1000, 1001, 4001]; // normal close, going away, auth failure
       // Never reconnect a socket we closed on purpose (disconnect/unmount).
       if (this.intentionalClose) return;
+      // 4001 = auth failure. The access token may simply have expired, so try
+      // ONE refresh via the shared api-client mechanism and reconnect if it
+      // succeeds. retriedAuth prevents a loop when the refresh token is dead;
+      // it resets in onopen so a later expiry gets a fresh retry.
+      if (event.code === 4001) {
+        if (this.retriedAuth) return;
+        this.retriedAuth = true;
+        tryRefresh().then((refreshed) => {
+          if (refreshed && !this.intentionalClose) this._resolveAndConnect();
+        });
+        return;
+      }
       if (!noReconnectCodes.includes(event.code) && this.reconnectAttempts < this.maxReconnectAttempts) {
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
         this.reconnectTimeout = setTimeout(() => {

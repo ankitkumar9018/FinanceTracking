@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Plus, Star, Trash2, Search, X } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { formatCurrency, currencyForExchange } from "@/lib/utils";
+import { EXCHANGES } from "@/lib/exchanges";
 import { StockHoverCard } from "@/components/shared/stock-hover-card";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
@@ -141,11 +142,13 @@ export default function WatchlistPage() {
                   onChange={(e) => setNewExchange(e.target.value)}
                   className="rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
                 >
-                  <option value="NSE">NSE</option>
-                  <option value="BSE">BSE</option>
-                  <option value="XETRA">XETRA</option>
-                  <option value="NYSE">NYSE</option>
-                  <option value="NASDAQ">NASDAQ</option>
+                  {/* FRA is display-only metadata (no Yahoo suffix) — keep it out
+                      of the pickable set, same options as before. */}
+                  {EXCHANGES.filter((ex) => ex.code !== "FRA").map((ex) => (
+                    <option key={ex.code} value={ex.code}>
+                      {ex.code}
+                    </option>
+                  ))}
                 </select>
                 <input
                   type="number"

@@ -113,7 +113,7 @@ class _FakeTicker:
     def __init__(self, next_hist) -> None:
         self._next_hist = next_hist
 
-    def history(self, start=None, end=None):  # noqa: ARG002 - signature parity
+    def history(self, start=None, end=None, **kwargs):  # noqa: ARG002 - signature parity
         return self._next_hist()
 
 

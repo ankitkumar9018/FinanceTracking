@@ -3,6 +3,10 @@
 Covers:
 - JWT ``pcat`` token revocation on password change (tokens minted before a
   password change are rejected).
+- Refresh tokens honouring ``pcat`` revocation (a stolen refresh token must
+  not survive a password reset).
+- ``validate_pcat`` unit behaviour (legacy tokens without the claim, stale
+  claims, garbled claims).
 - Constant-time login for unknown emails (bcrypt runs even with no user).
 - Fail-closed guard on the default JWT secret in production.
 - Refresh tokens with a non-numeric ``sub`` return 401 (not 500).
@@ -12,6 +16,7 @@ Covers:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
@@ -102,6 +107,121 @@ async def test_change_password_endpoint_bumps_stamp(client: AsyncClient):
     assert resp.status_code == 200
     # password_changed_at is bumped; the old token's pcat is now stale.
     assert resp.json()["message"]
+
+
+async def test_refresh_rejected_after_password_change(
+    client: AsyncClient, db: AsyncSession
+):
+    """A refresh token minted before a password change is rejected (401).
+
+    Key regression test: /auth/refresh previously never checked ``pcat``, so a
+    stolen refresh token survived a password reset and could mint fresh token
+    pairs (each carrying the NEW pcat) indefinitely.
+    """
+    from app.utils.security import create_refresh_token
+
+    email = "refresh-revoke@example.com"
+    password = "RefreshRevoke123!"
+
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": password},
+    )
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": password},
+    )
+    old_refresh = login.json()["refresh_token"]
+
+    # Before the password change, the refresh token works.
+    ok = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": old_refresh}
+    )
+    assert ok.status_code == 200
+    assert ok.json()["access_token"]
+
+    # Simulate a password change by advancing password_changed_at well past the
+    # token's mint time (a full minute avoids any same-second boundary).
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one()
+    user.password_changed_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+    await db.commit()
+
+    # The pre-change refresh token must now be rejected.
+    rejected = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": old_refresh}
+    )
+    assert rejected.status_code == 401
+    assert rejected.json()["detail"] == "Token revoked"
+
+    # A refresh token carrying the CURRENT pcat is still accepted.
+    current = create_refresh_token(
+        {
+            "sub": str(user.id),
+            "email": email,
+            "pcat": int(user.password_changed_at.timestamp()),
+        }
+    )
+    still_ok = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": current}
+    )
+    assert still_ok.status_code == 200
+    assert still_ok.json()["access_token"]
+
+
+# ---------------------------------------------------------------------------
+# validate_pcat — shared revocation check (unit tests)
+# ---------------------------------------------------------------------------
+
+def _user_stub(password_changed_at: datetime | None) -> SimpleNamespace:
+    """Duck-typed User: validate_pcat only reads ``password_changed_at``."""
+    return SimpleNamespace(password_changed_at=password_changed_at)
+
+
+def test_validate_pcat_legacy_token_no_password_change():
+    """No pcat claim + user never changed password → tolerated (legacy)."""
+    from app.api.deps import validate_pcat
+
+    assert validate_pcat({}, _user_stub(None)) is True
+
+
+def test_validate_pcat_legacy_token_rejected_after_change():
+    """No pcat claim but the user HAS changed their password → rejected."""
+    from app.api.deps import validate_pcat
+
+    assert validate_pcat({}, _user_stub(datetime.now(timezone.utc))) is False
+
+
+def test_validate_pcat_older_claim_rejected():
+    """A pcat older than password_changed_at → rejected."""
+    from app.api.deps import validate_pcat
+
+    changed = datetime.now(timezone.utc)
+    stale = {"pcat": int(changed.timestamp()) - 100}
+    assert validate_pcat(stale, _user_stub(changed)) is False
+
+
+def test_validate_pcat_current_claim_accepted():
+    """A pcat matching (or newer than) password_changed_at → accepted."""
+    from app.api.deps import validate_pcat
+
+    changed = datetime.now(timezone.utc)
+    assert validate_pcat({"pcat": int(changed.timestamp())}, _user_stub(changed)) is True
+    assert (
+        validate_pcat({"pcat": int(changed.timestamp()) + 100}, _user_stub(changed))
+        is True
+    )
+
+
+def test_validate_pcat_garbled_claim_treated_as_zero():
+    """A non-numeric pcat degrades to 0: fine pre-change, rejected post-change."""
+    from app.api.deps import validate_pcat
+
+    assert validate_pcat({"pcat": "not-a-number"}, _user_stub(None)) is True
+    assert validate_pcat({"pcat": None}, _user_stub(None)) is True
+    changed = datetime.now(timezone.utc)
+    assert validate_pcat({"pcat": "not-a-number"}, _user_stub(changed)) is False
+    assert validate_pcat({"pcat": None}, _user_stub(changed)) is False
 
 
 # ---------------------------------------------------------------------------

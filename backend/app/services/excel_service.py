@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import logging
-from datetime import date, datetime
 from typing import Any
 
 from openpyxl import Workbook, load_workbook
@@ -17,6 +16,7 @@ from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.transaction import Transaction
 from app.services.portfolio_service import calculate_cumulative_holding
+from app.utils.dates import parse_date
 
 logger = logging.getLogger(__name__)
 
@@ -115,17 +115,13 @@ def parse_excel(file_bytes: bytes) -> list[dict]:
             logger.warning("Invalid transaction type '%s' in row, skipping", tx_type)
             continue
 
-        # Parse date
-        if isinstance(tx_date, datetime):
-            row_dict["date"] = tx_date.date()
-        elif isinstance(tx_date, date):
-            row_dict["date"] = tx_date
-        else:
-            try:
-                row_dict["date"] = datetime.strptime(str(tx_date).strip(), "%Y-%m-%d").date()
-            except ValueError:
-                logger.warning("Invalid date '%s' in row, skipping", tx_date)
-                continue
+        # Parse date via the shared parser (handles datetime/date cells and the
+        # same string formats as the CSV importer, not just ISO).
+        parsed_date = parse_date(tx_date)
+        if parsed_date is None:
+            logger.warning("Invalid date '%s' in row, skipping", tx_date)
+            continue
+        row_dict["date"] = parsed_date
 
         try:
             row_dict["quantity"] = float(qty)
@@ -167,12 +163,17 @@ async def import_to_portfolio(
     parsed_data: list[dict],
     portfolio_id: int,
     db: AsyncSession,
+    *,
+    source: str = "EXCEL",
 ) -> dict:
-    """Create holdings and transactions from parsed Excel data.
+    """Create holdings and transactions from parsed import data.
 
     If a holding with the same symbol + exchange already exists in the
     portfolio, transactions are appended to it. Otherwise a new holding
     is created.
+
+    ``source`` is stamped on every created transaction so provenance reflects
+    the actual upload format (EXCEL / CSV / OFX / QIF), not always "EXCEL".
 
     Returns a summary dict with counts.
     """
@@ -282,7 +283,7 @@ async def import_to_portfolio(
             price=row["price"],
             brokerage=row.get("brokerage", 0),
             notes=row.get("notes"),
-            source="EXCEL",
+            source=source,
         )
         db.add(tx)
         transactions_created += 1

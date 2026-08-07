@@ -150,15 +150,8 @@ async def update_alert_channels(
     """Update the notification channels for a specific alert."""
     alert = await _get_user_alert(alert_id, user, db)
 
-    # Validate channels
-    valid_channels = {"in_app", "email", "telegram", "whatsapp", "sms"}
-    for channel in body.channels:
-        if channel not in valid_channels:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid channel '{channel}'. Valid: {sorted(valid_channels)}",
-            )
-
+    # Channel validity is enforced by the schema (AlertChannelUpdate uses the
+    # Channel Literal), so an invalid name is rejected as 422 before we get here.
     alert.channels = body.channels
     await db.flush()
     await db.refresh(alert)

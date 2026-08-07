@@ -7,7 +7,7 @@ classes — and ``get_broker()`` to instantiate an adapter by name.
 from __future__ import annotations
 
 from app.brokers.angel_one import AngelOneBroker
-from app.brokers.base import BrokerAdapter
+from app.brokers.base import BrokerAdapter, StubBroker
 from app.brokers.fivepaisa import FivePaisaBroker
 from app.brokers.german.comdirect import ComdirectBroker
 from app.brokers.german.deutsche_bank import DeutscheBankBroker
@@ -58,6 +58,7 @@ def get_broker(name: str) -> BrokerAdapter:
 __all__ = [
     "BROKER_REGISTRY",
     "BrokerAdapter",
+    "StubBroker",
     "get_broker",
     # Concrete adapters
     "ZerodhaBroker",

@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { api } from "@/lib/api-client";
+import { formatPercent, formatNumber } from "@/lib/utils";
+import { EXCHANGES } from "@/lib/exchanges";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
 
@@ -105,14 +107,17 @@ interface BacktestResult {
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-function formatPercent(value: number): string {
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(2)}%`;
+/** Param defaults arrive as numbers; the form keeps them as strings so a
+ * cleared field stays cleared while editing instead of snapping to 0. */
+function toParamStrings(params: Record<string, number>): Record<string, string> {
+  return Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)]));
 }
 
-function formatNumber(value: number, decimals = 2): string {
-  return value.toFixed(decimals);
-}
+// Exchanges the backtest backend can fetch price history for (yfinance
+// suffix mapping exists for all of these; FRA has none, so it's excluded).
+const BACKTEST_EXCHANGES = EXCHANGES.filter((e) =>
+  ["NSE", "BSE", "XETRA", "NYSE", "NASDAQ"].includes(e.code)
+);
 
 const DAYS_OPTIONS = [
   { value: 90, label: "90 days" },
@@ -131,7 +136,8 @@ export default function BacktestPage() {
   const [symbol, setSymbol] = useState("");
   const [exchange, setExchange] = useState("NSE");
   const [days, setDays] = useState(365);
-  const [params, setParams] = useState<Record<string, number>>({});
+  // Kept as strings while editing (see toParamStrings); parsed on submit.
+  const [params, setParams] = useState<Record<string, string>>({});
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [strategiesLoading, setStrategiesLoading] = useState(true);
@@ -144,7 +150,7 @@ export default function BacktestPage() {
       setStrategies(data);
       if (data.length > 0) {
         setSelectedStrategy(data[0].name);
-        setParams({ ...(raw[0].default_params || {}) });
+        setParams(toParamStrings(raw[0].default_params || {}));
       }
     } catch {
       setStrategies([]);
@@ -161,9 +167,9 @@ export default function BacktestPage() {
     setSelectedStrategy(strategyName);
     const strat = strategies.find((s) => s.name === strategyName);
     if (strat) {
-      const defaultParams: Record<string, number> = {};
+      const defaultParams: Record<string, string> = {};
       strat.parameters.forEach((p) => {
-        defaultParams[p.name] = p.default;
+        defaultParams[p.name] = String(p.default);
       });
       setParams(defaultParams);
     }
@@ -173,11 +179,19 @@ export default function BacktestPage() {
     if (!symbol.trim() || !selectedStrategy) return;
     setLoading(true);
     try {
+      // Parse the string form values; a blank/invalid field falls back to the
+      // strategy's default rather than silently submitting 0.
+      const strat = strategies.find((s) => s.name === selectedStrategy);
+      const parsedParams: Record<string, number> = {};
+      (strat?.parameters ?? []).forEach((p) => {
+        const parsed = parseFloat(params[p.name] ?? "");
+        parsedParams[p.name] = Number.isFinite(parsed) ? parsed : p.default;
+      });
       const data = await api.post<BackendBacktestResponse>("/backtest/", {
         symbol: symbol.trim().toUpperCase(),
         exchange,
         strategy_name: selectedStrategy,
-        params,
+        params: parsedParams,
         days,
       });
       setResult({
@@ -309,9 +323,11 @@ export default function BacktestPage() {
                 onChange={(e) => setExchange(e.target.value)}
                 className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
               >
-                <option value="NSE">NSE</option>
-                <option value="BSE">BSE</option>
-                <option value="XETRA">XETRA</option>
+                {BACKTEST_EXCHANGES.map((ex) => (
+                  <option key={ex.code} value={ex.code}>
+                    {ex.code}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -350,11 +366,11 @@ export default function BacktestPage() {
                 </label>
                 <input
                   type="number"
-                  value={params[param.name] ?? param.default}
+                  value={params[param.name] ?? String(param.default)}
                   min={param.min}
                   max={param.max}
                   onChange={(e) =>
-                    setParams({ ...params, [param.name]: parseFloat(e.target.value) || 0 })
+                    setParams({ ...params, [param.name]: e.target.value })
                   }
                   className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
                 />

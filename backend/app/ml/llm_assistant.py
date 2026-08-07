@@ -50,17 +50,35 @@ class LLMProvider(ABC):
     async def is_available(self) -> bool:
         """Check if this provider is reachable."""
 
-    @abstractmethod
-    def stream(
+    @staticmethod
+    def _openai_messages(
+        messages: list[ChatMessage], system_prompt: str = ""
+    ) -> list[dict]:
+        """Build the OpenAI-style role/content message list.
+
+        The system prompt (when given) leads as a ``system`` message. Shared
+        by every provider speaking this wire format (Ollama and OpenAI, in
+        both chat and stream) — previously the same block was duplicated four
+        times.
+        """
+        formatted: list[dict] = []
+        if system_prompt:
+            formatted.append({"role": "system", "content": system_prompt})
+        formatted.extend({"role": m.role, "content": m.content} for m in messages)
+        return formatted
+
+    async def stream(
         self, messages: list[ChatMessage], system_prompt: str = ""
     ) -> AsyncIterator[str]:
-        """Stream response tokens.
+        """Stream response tokens. Callers consume it with ``async for``.
 
-        Declared as a plain ``def`` (not ``async def``) returning an
-        ``AsyncIterator`` so concrete async-generator implementations override it
-        without a return-type mismatch. Callers consume it with ``async for``.
+        Default implementation is the simplified non-streaming bridge: call
+        ``chat()`` and yield the full message as a single chunk (Anthropic and
+        Google use this). Providers with real streaming (Ollama, OpenAI)
+        override it with true async generators.
         """
-        ...
+        response = await self.chat(messages, system_prompt)
+        yield response.message
 
 
 class OllamaProvider(LLMProvider):
@@ -83,11 +101,7 @@ class OllamaProvider(LLMProvider):
     async def chat(
         self, messages: list[ChatMessage], system_prompt: str = ""
     ) -> ChatResponse:
-        formatted = []
-        if system_prompt:
-            formatted.append({"role": "system", "content": system_prompt})
-        for m in messages:
-            formatted.append({"role": m.role, "content": m.content})
+        formatted = self._openai_messages(messages, system_prompt)
 
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
@@ -111,11 +125,7 @@ class OllamaProvider(LLMProvider):
     async def stream(
         self, messages: list[ChatMessage], system_prompt: str = ""
     ) -> AsyncIterator[str]:
-        formatted = []
-        if system_prompt:
-            formatted.append({"role": "system", "content": system_prompt})
-        for m in messages:
-            formatted.append({"role": m.role, "content": m.content})
+        formatted = self._openai_messages(messages, system_prompt)
 
         async with (
             httpx.AsyncClient(timeout=120.0) as client,
@@ -165,11 +175,7 @@ class OpenAIProvider(LLMProvider):
     async def chat(
         self, messages: list[ChatMessage], system_prompt: str = ""
     ) -> ChatResponse:
-        formatted = []
-        if system_prompt:
-            formatted.append({"role": "system", "content": system_prompt})
-        for m in messages:
-            formatted.append({"role": m.role, "content": m.content})
+        formatted = self._openai_messages(messages, system_prompt)
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
@@ -196,11 +202,7 @@ class OpenAIProvider(LLMProvider):
     async def stream(
         self, messages: list[ChatMessage], system_prompt: str = ""
     ) -> AsyncIterator[str]:
-        formatted = []
-        if system_prompt:
-            formatted.append({"role": "system", "content": system_prompt})
-        for m in messages:
-            formatted.append({"role": m.role, "content": m.content})
+        formatted = self._openai_messages(messages, system_prompt)
 
         async with (
             httpx.AsyncClient(timeout=60.0) as client,
@@ -231,12 +233,17 @@ class OpenAIProvider(LLMProvider):
 
 
 class AnthropicProvider(LLMProvider):
-    """Anthropic Claude API provider."""
+    """Anthropic Claude API provider.
+
+    Streaming uses the base-class default (full ``chat()`` message yielded as
+    one chunk).
+    """
 
     NAME = "anthropic"
 
     def __init__(self):
         self.api_key = settings.anthropic_api_key
+        self.model = settings.anthropic_model
 
     async def is_available(self) -> bool:
         return bool(self.api_key)
@@ -247,7 +254,7 @@ class AnthropicProvider(LLMProvider):
         formatted = [{"role": m.role, "content": m.content} for m in messages]
 
         body: dict = {
-            "model": "claude-sonnet-4-20250514",
+            "model": self.model,
             "max_tokens": 2048,
             "messages": formatted,
         }
@@ -273,21 +280,18 @@ class AnthropicProvider(LLMProvider):
         return ChatResponse(
             message=content,
             provider=self.NAME,
-            model="claude-sonnet-4-20250514",
+            model=self.model,
             tokens_used=usage.get("input_tokens", 0)
             + usage.get("output_tokens", 0),
         )
 
-    async def stream(
-        self, messages: list[ChatMessage], system_prompt: str = ""
-    ) -> AsyncIterator[str]:
-        # Simplified: just call chat and yield full response
-        response = await self.chat(messages, system_prompt)
-        yield response.message
-
 
 class GoogleProvider(LLMProvider):
-    """Google Gemini API provider."""
+    """Google Gemini API provider.
+
+    Streaming uses the base-class default (full ``chat()`` message yielded as
+    one chunk).
+    """
 
     NAME = "google"
 
@@ -334,12 +338,6 @@ class GoogleProvider(LLMProvider):
             model="gemini-pro",
             tokens_used=None,
         )
-
-    async def stream(
-        self, messages: list[ChatMessage], system_prompt: str = ""
-    ) -> AsyncIterator[str]:
-        response = await self.chat(messages, system_prompt)
-        yield response.message
 
 
 # -- Provider Registry -----------------------------------------------------

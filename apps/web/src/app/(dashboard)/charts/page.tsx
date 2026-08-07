@@ -6,7 +6,8 @@ import { ExternalLink } from "lucide-react";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { PriceChart } from "@/components/charts/price-chart";
 import { ContextualHelp } from "@/components/shared/contextual-help";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, currencyForExchange } from "@/lib/utils";
+import { yahooSuffixForExchange } from "@/lib/exchanges";
 
 /* Recharts is heavy (~100kB gz) — load the donut lazily */
 const PortfolioDonut = dynamic(
@@ -26,18 +27,8 @@ const TIME_RANGES = [
   { label: "1Y", days: 365 },
 ];
 
-// Exchange suffix mapping for Yahoo Finance URLs
-const EXCHANGE_SUFFIX: Record<string, string> = {
-  NSE: ".NS",
-  BSE: ".BO",
-  XETRA: ".DE",
-  NYSE: "",
-  NASDAQ: "",
-};
-
 function getYahooFinanceUrl(symbol: string, exchange: string): string {
-  const suffix = EXCHANGE_SUFFIX[exchange.toUpperCase()] ?? "";
-  return `https://finance.yahoo.com/quote/${symbol}${suffix}`;
+  return `https://finance.yahoo.com/quote/${symbol}${yahooSuffixForExchange(exchange)}`;
 }
 
 export default function ChartsPage() {
@@ -103,7 +94,7 @@ export default function ChartsPage() {
                     const h = holdings.find((h) => h.stock_symbol === selectedSymbol);
                     return h?.current_price ? (
                       <span className="font-mono text-sm font-semibold">
-                        {formatCurrency(h.current_price)}
+                        {formatCurrency(h.current_price, h.currency ?? currencyForExchange(h.exchange))}
                       </span>
                     ) : null;
                   })()}

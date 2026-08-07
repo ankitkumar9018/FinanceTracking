@@ -6,6 +6,7 @@ import asyncio
 import logging
 import math
 from datetime import date
+from functools import partial
 
 import httpx
 from sqlalchemy import select
@@ -15,6 +16,7 @@ from app.models.mutual_fund import MutualFund
 from app.models.portfolio import Portfolio
 from app.schemas.mutual_fund import MutualFundCreate, MutualFundUpdate
 from app.services.xirr_service import CashFlow, xirr
+from app.utils.concurrency import gather_bounded
 
 logger = logging.getLogger(__name__)
 
@@ -227,11 +229,18 @@ async def refresh_all_navs(user_id: int, db: AsyncSession) -> dict:
     """
     funds = await list_mutual_funds(portfolio_id=None, user_id=user_id, db=db)
 
+    # Fetch all NAVs concurrently (bounded) instead of one blocking HTTP call
+    # per fund; a failed fetch yields None and counts as failed, as before.
+    navs = await gather_bounded(
+        [partial(fetch_nav, fund.scheme_code) for fund in funds],
+        limit=8,
+        timeout=HTTP_TIMEOUT + 2.0,
+    )
+
     updated = 0
     failed = 0
 
-    for fund in funds:
-        nav = await fetch_nav(fund.scheme_code)
+    for fund, nav in zip(funds, navs, strict=True):
         if nav is not None:
             fund.nav = nav
             fund.current_value = round(float(fund.units) * nav, 4)

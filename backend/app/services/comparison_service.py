@@ -10,6 +10,8 @@ from datetime import date, timedelta
 
 import yfinance as yf
 
+from app.utils.concurrency import bounded_thread_map
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,52 +73,31 @@ async def compare_stocks(
     exchanges: list[str] | None = None,
     days: int = 90,
 ) -> StockComparison:
-    """Compare up to 3 stocks with their key metrics and price history."""
+    """Compare up to 3 stocks with their key metrics and price history.
+
+    The per-symbol yfinance fetches run concurrently with a bounded pool and
+    per-item timeout via :func:`bounded_thread_map`; a failed/timed-out fetch
+    degrades that stock to all-``None`` metrics instead of failing the batch.
+    """
     from app.services.market_data_service import _ticker_symbol
+
+    selected = [
+        (symbol, exchanges[i] if exchanges and i < len(exchanges) else "NSE")
+        for i, symbol in enumerate(symbols[:3])
+    ]
+
+    results = await bounded_thread_map(
+        lambda pair: _sync_fetch_stock_data(_ticker_symbol(pair[0], pair[1]), days),
+        selected,
+        limit=3,
+        timeout=10.0,
+    )
 
     stocks: list[StockMetrics] = []
     price_history: dict[str, list[dict]] = {}
 
-    for i, symbol in enumerate(symbols[:3]):
-        exchange = exchanges[i] if exchanges and i < len(exchanges) else "NSE"
-        yf_symbol = _ticker_symbol(symbol, exchange)
-
-        try:
-            info, history = await asyncio.wait_for(
-                asyncio.to_thread(_sync_fetch_stock_data, yf_symbol, days),
-                timeout=10.0,
-            )
-
-            current = _safe_float_val(
-                info.get("currentPrice") or info.get("regularMarketPrice")
-            )
-            prev_close = _safe_float_val(
-                info.get("previousClose") or info.get("regularMarketPreviousClose")
-            )
-            day_change = (
-                ((current - prev_close) / prev_close * 100)
-                if current and prev_close
-                else None
-            )
-
-            metrics = StockMetrics(
-                symbol=symbol,
-                name=info.get("shortName") or info.get("longName") or symbol,
-                exchange=exchange,
-                current_price=current,
-                day_change_pct=round(day_change, 2) if day_change else None,
-                week_52_high=_safe_float_val(info.get("fiftyTwoWeekHigh")),
-                week_52_low=_safe_float_val(info.get("fiftyTwoWeekLow")),
-                pe_ratio=_safe_float_val(info.get("trailingPE")),
-                market_cap=_safe_float_val(info.get("marketCap")),
-                volume=info.get("volume"),
-                dividend_yield=_safe_float_val(info.get("dividendYield")),
-                beta=_safe_float_val(info.get("beta")),
-            )
-            stocks.append(metrics)
-            price_history[symbol] = history
-
-        except Exception:
+    for (symbol, exchange), fetched in zip(selected, results, strict=True):
+        if fetched is None:
             logger.warning("Stock data fetch failed for %s", symbol)
             stocks.append(StockMetrics(
                 symbol=symbol, name=symbol, exchange=exchange,
@@ -125,6 +106,37 @@ async def compare_stocks(
                 volume=None, dividend_yield=None, beta=None,
             ))
             price_history[symbol] = []
+            continue
+
+        info, history = fetched
+        current = _safe_float_val(
+            info.get("currentPrice") or info.get("regularMarketPrice")
+        )
+        prev_close = _safe_float_val(
+            info.get("previousClose") or info.get("regularMarketPreviousClose")
+        )
+        day_change = (
+            ((current - prev_close) / prev_close * 100)
+            if current and prev_close
+            else None
+        )
+
+        metrics = StockMetrics(
+            symbol=symbol,
+            name=info.get("shortName") or info.get("longName") or symbol,
+            exchange=exchange,
+            current_price=current,
+            day_change_pct=round(day_change, 2) if day_change is not None else None,
+            week_52_high=_safe_float_val(info.get("fiftyTwoWeekHigh")),
+            week_52_low=_safe_float_val(info.get("fiftyTwoWeekLow")),
+            pe_ratio=_safe_float_val(info.get("trailingPE")),
+            market_cap=_safe_float_val(info.get("marketCap")),
+            volume=info.get("volume"),
+            dividend_yield=_safe_float_val(info.get("dividendYield")),
+            beta=_safe_float_val(info.get("beta")),
+        )
+        stocks.append(metrics)
+        price_history[symbol] = history
 
     return StockComparison(stocks=stocks, price_history=price_history, period_days=days)
 

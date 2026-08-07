@@ -62,7 +62,14 @@ async def get_stop_loss_holdings(
 async def set_stop_loss(
     holding_id: int, stop_loss_price: float, db: AsyncSession, *, user_id: int | None = None
 ) -> None:
-    """Set or update stop-loss price for a holding (stored in custom_fields)."""
+    """Set or update stop-loss price for a holding (stored in custom_fields).
+
+    When ``user_id`` is provided, ownership is enforced in-service: the
+    holding must belong to one of that user's portfolios, otherwise a
+    ``ValueError`` ("not found") is raised. When ``user_id`` is ``None`` the
+    caller is responsible for having verified ownership beforehand (the API
+    layer does its own check) — prefer passing ``user_id``.
+    """
     if stop_loss_price <= 0:
         raise ValueError("Stop-loss price must be positive")
     query = select(Holding).where(Holding.id == holding_id)
@@ -82,7 +89,12 @@ async def set_stop_loss(
 async def remove_stop_loss(
     holding_id: int, db: AsyncSession, *, user_id: int | None = None
 ) -> None:
-    """Remove stop-loss for a holding."""
+    """Remove stop-loss for a holding.
+
+    When ``user_id`` is provided, ownership is enforced in-service (a holding
+    outside the user's portfolios raises ``ValueError``); when ``None``, the
+    caller must have verified ownership already — prefer passing ``user_id``.
+    """
     query = select(Holding).where(Holding.id == holding_id)
     if user_id is not None:
         query = query.join(Portfolio).where(Portfolio.user_id == user_id)

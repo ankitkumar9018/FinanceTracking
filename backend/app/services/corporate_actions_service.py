@@ -8,13 +8,14 @@ adjustment maths for a split and a bonus are identical anyway: quantity is
 multiplied by the ratio and average price divided by it, leaving the total
 cost basis unchanged.
 
-Applying an action directly adjusts ``holding.cumulative_quantity`` /
-``average_price`` (authoritative) and also writes a zero-cost adjustment
-``Transaction`` dated at the ex-date so a later ``calculate_cumulative_holding``
-recompute reproduces the same numbers. The adjustment quantity is positive for
-a forward split/bonus (ratio > 1) and negative for a reverse split (ratio < 1);
-either way the cost basis is preserved. Every apply is idempotent — an
-already-APPLIED action is a no-op.
+Applying an action writes a zero-cost adjustment ``Transaction`` dated at the
+ex-date whose quantity is ``qty_held_at_ex_date * (ratio - 1)`` — positive for
+a forward split/bonus (ratio > 1), negative for a reverse split (ratio < 1) —
+and then recomputes the holding via ``calculate_cumulative_holding`` so the
+stored quantity/average derive from the ledger. Only shares held on the
+ex-date are adjusted; buys after the ex-date already trade at post-split
+prices and are unaffected. Every apply is idempotent — an already-APPLIED
+action is a no-op.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from app.models.portfolio import Portfolio
 from app.models.transaction import Transaction
 from app.services.alert_service import determine_action_needed
 from app.services.market_data_service import _ticker_symbol
+from app.services.portfolio_service import calculate_cumulative_holding
 
 logger = logging.getLogger(__name__)
 
@@ -235,10 +237,15 @@ async def apply_corporate_action(
 ) -> dict:
     """Apply a DETECTED split/bonus to its holding.
 
-    Adjusts ``cumulative_quantity *= ratio`` and ``average_price /= ratio``
-    (cost basis unchanged) and marks the action APPLIED. Idempotent: an
-    already-APPLIED action is returned unchanged. A DISMISSED action cannot
-    be applied.
+    Only shares held *as of the ex-date* are adjusted: the delta is
+    ``qty_at_ex_date * (ratio - 1)``, written as a zero-cost adjustment
+    transaction dated at the ex-date, and the holding's quantity/average are
+    then recomputed from the transaction ledger. Shares bought after the
+    ex-date already trade at the post-split price and are unaffected —
+    multiplying the *current* cumulative quantity would double-adjust them.
+
+    Idempotent: an already-APPLIED action is returned unchanged. A DISMISSED
+    action cannot be applied.
     """
     action, holding = await _get_user_action(action_id, user_id, db)
 
@@ -256,36 +263,57 @@ async def apply_corporate_action(
     old_avg = float(holding.average_price)
     cost_basis = old_qty * old_avg
 
-    new_qty = old_qty * ratio
-    new_avg = round(old_avg / ratio, 4)
+    # Quantity held as of the ex-date, from the transaction ledger.
+    tx_result = await db.execute(
+        select(Transaction).where(Transaction.holding_id == holding.id)
+    )
+    transactions = list(tx_result.scalars().all())
+    qty_at_ex = 0.0
+    for tx in transactions:
+        if action.ex_date is not None and tx.date > action.ex_date:
+            continue
+        if tx.transaction_type == "BUY":
+            qty_at_ex += float(tx.quantity)
+        elif tx.transaction_type == "SELL":
+            qty_at_ex -= float(tx.quantity)
 
-    holding.cumulative_quantity = new_qty
-    holding.average_price = new_avg
-
-    # Record a zero-cost adjustment BUY dated at the ex-date so a future
-    # calculate_cumulative_holding recompute reproduces the post-split numbers.
-    # The delta ``old_qty * (ratio - 1)`` is positive for a forward split/bonus
-    # (ratio > 1) and negative for a reverse split (ratio < 1); a negative-qty,
-    # zero-price BUY correctly shrinks the quantity while leaving the cost basis
-    # unchanged (so the average price rises), matching the direct adjustment.
-    # Without this, a reverse split would be reverted on the next recompute.
     txn_written = False
-    if old_qty > 0 and ratio != 1.0:
-        db.add(
-            Transaction(
-                holding_id=holding.id,
-                transaction_type="BUY",
-                date=action.ex_date,
-                quantity=old_qty * (ratio - 1),
-                price=0,
-                brokerage=0,
-                notes=f"{action.action_type} adjustment (ratio {ratio}) — auto",
-                source="MANUAL",
+    if transactions:
+        # Zero-cost adjustment dated at the ex-date. The delta
+        # ``qty_at_ex * (ratio - 1)`` is positive for a forward split/bonus
+        # (ratio > 1) and negative for a reverse split (ratio < 1); a
+        # negative-qty, zero-price BUY correctly shrinks the quantity while
+        # leaving the cost basis unchanged (so the average price rises).
+        if qty_at_ex > 0 and ratio != 1.0:
+            db.add(
+                Transaction(
+                    holding_id=holding.id,
+                    transaction_type="BUY",
+                    date=action.ex_date,
+                    quantity=qty_at_ex * (ratio - 1),
+                    price=0,
+                    brokerage=0,
+                    notes=f"{action.action_type} adjustment (ratio {ratio}) — auto",
+                    source="MANUAL",
+                )
             )
-        )
-        txn_written = True
+            txn_written = True
+            await db.flush()
 
-    holding.action_needed = determine_action_needed(holding.current_price, holding)
+        # Recompute quantity/average from the ledger so the stored numbers
+        # derive from the transactions (post-ex-date buys stay untouched).
+        holding = await calculate_cumulative_holding(holding.id, db)
+    else:
+        # No ledger to derive from (holding seeded directly): fall back to a
+        # direct adjustment of the stored quantity/average.
+        holding.cumulative_quantity = old_qty * ratio
+        holding.average_price = round(old_avg / ratio, 4)
+        holding.action_needed = determine_action_needed(
+            holding.current_price, holding
+        )
+
+    new_qty = float(holding.cumulative_quantity)
+    new_avg = float(holding.average_price)
 
     action.status = "APPLIED"
     action.applied_at = datetime.now(UTC)
@@ -297,6 +325,7 @@ async def apply_corporate_action(
             "new_quantity": new_qty,
             "old_average_price": old_avg,
             "new_average_price": new_avg,
+            "quantity_at_ex_date": qty_at_ex,
             "cost_basis": round(cost_basis, 2),
             "ratio": ratio,
             "adjustment_transaction": txn_written,

@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   ShieldAlert,
   TrendingDown,
   Activity,
   BarChart3,
   AlertTriangle,
-  ChevronDown,
   Umbrella,
 } from "lucide-react";
 import toast from "react-hot-toast";
@@ -21,6 +20,7 @@ import {
   DiversificationCard,
   type ConcentrationData,
 } from "@/components/diversification-card";
+import { PortfolioSelector } from "@/components/shared/portfolio-selector";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -111,8 +111,7 @@ function getVaRColor(value: number | null): string {
 /* ------------------------------------------------------------------ */
 
 export default function RiskPage() {
-  const { portfolios, activePortfolioId, hasLoadedPortfolios, setActivePortfolio } =
-    usePortfolioStore();
+  const { portfolios, activePortfolioId, hasLoadedPortfolios } = usePortfolioStore();
   const [metrics, setMetrics] = useState<RiskMetrics | null>(null);
   const [holdingRisks, setHoldingRisks] = useState<HoldingRisk[]>([]);
   const [concentration, setConcentration] = useState<ConcentrationData | null>(null);
@@ -120,9 +119,6 @@ export default function RiskPage() {
   const [concentrationError, setConcentrationError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
   // Downside protection / hedge estimate (informational, interactive)
   const [hedgeInputs, setHedgeInputs] = useState({
     protection_pct: "80",
@@ -133,16 +129,6 @@ export default function RiskPage() {
   const [hedge, setHedge] = useState<HedgeEstimate | null>(null);
   const [hedgeLoading, setHedgeLoading] = useState(false);
   const [hedgeError, setHedgeError] = useState<string | null>(null);
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false);
-      }
-    }
-    if (dropdownOpen) document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [dropdownOpen]);
 
   const loadRiskData = useCallback(
     async (portfolioId: number, isActive: () => boolean = () => true) => {
@@ -238,11 +224,6 @@ export default function RiskPage() {
     };
   }, [activePortfolioId, loadRiskData, loadConcentration]);
 
-  function handlePortfolioChange(id: number) {
-    setActivePortfolio(id);
-    setDropdownOpen(false);
-  }
-
   /* ---- Summary card definitions ---- */
   const summaryCards = metrics
     ? [
@@ -337,38 +318,7 @@ export default function RiskPage() {
         </div>
 
         {/* Portfolio Selector */}
-        <div className="relative" ref={dropdownRef}>
-          <button
-            onClick={() => setDropdownOpen(!dropdownOpen)}
-            className="inline-flex items-center gap-2 rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-4 py-2 text-sm font-medium hover:bg-[hsl(var(--accent))] transition-colors"
-          >
-            <ShieldAlert className="h-4 w-4 text-[hsl(var(--primary))]" />
-            {activePortfolio?.name || "Select Portfolio"}
-            <ChevronDown className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
-          </button>
-          {dropdownOpen && (
-            <div className="absolute right-0 z-10 mt-1 w-56 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-1 shadow-lg">
-              {portfolios.map((portfolio) => (
-                <button
-                  key={portfolio.id}
-                  onClick={() => handlePortfolioChange(portfolio.id)}
-                  className={`w-full px-4 py-2 text-left text-sm transition-colors ${
-                    portfolio.id === activePortfolioId
-                      ? "bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]"
-                      : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]"
-                  }`}
-                >
-                  {portfolio.name}
-                  {portfolio.is_default && (
-                    <span className="ml-2 text-xs text-[hsl(var(--muted-foreground))]">
-                      (default)
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <PortfolioSelector icon={ShieldAlert} />
       </div>
 
       {/* ---- No portfolio / Error states ---- */}

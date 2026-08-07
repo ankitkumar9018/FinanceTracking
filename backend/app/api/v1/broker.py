@@ -165,29 +165,14 @@ async def list_available_brokers(
     """List all available brokers from the registry.
 
     Returns the broker name, display name, and implementation status.
+    Stub detection uses the adapters' declarative ``is_stub`` class flag
+    (previously this inspected each adapter's source code).
     """
-    brokers: list[dict] = []
-    for name, cls in BROKER_REGISTRY.items():
-        # Detect stub adapters by checking if connect raises NotImplementedError
-        is_stub = False
-        try:
-            cls()
-            # Check if all abstract methods raise NotImplementedError
-            # We look at the class itself — stubs have a simple pattern
-            import inspect
-
-            source = inspect.getsource(cls.connect)
-            if "NotImplementedError" in source:
-                is_stub = True
-        except Exception:
-            logger.debug("Failed to inspect broker %s for stub detection", name, exc_info=True)
-
-        brokers.append(
-            {
-                "name": name,
-                "display_name": name.replace("_", " ").title(),
-                "status": "coming_soon" if is_stub else "available",
-            }
-        )
-
-    return brokers
+    return [
+        {
+            "name": name,
+            "display_name": name.replace("_", " ").title(),
+            "status": "coming_soon" if cls.is_stub else "available",
+        }
+        for name, cls in BROKER_REGISTRY.items()
+    ]

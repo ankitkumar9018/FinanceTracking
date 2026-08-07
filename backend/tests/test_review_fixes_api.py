@@ -5,7 +5,8 @@ Covers:
 - goal creation rejecting a linked_portfolio_id owned by another user,
 - alert_history resolving the correct stock symbols via the batched lookup,
 - export PDF raising when xhtml2pdf reports a failure,
-- WebSocket ``_authenticate`` rejecting deactivated / missing / revoked tokens.
+- WebSocket auth (shared ``app.api.ws.auth``) rejecting deactivated / missing /
+  revoked tokens.
 
 Reuses the shared conftest fixtures (``client``, ``auth_headers``, ``db``).
 """
@@ -242,7 +243,7 @@ async def test_generate_portfolio_pdf_success_returns_bytes(db: AsyncSession) ->
 # ---------------------------------------------------------------------------
 
 async def test_ws_authenticate_rejects_deactivated_user(db: AsyncSession) -> None:
-    from app.api.ws.price_stream import _authenticate
+    from app.api.ws.auth import authenticate_token
 
     user = User(
         email="deactivated@example.com",
@@ -253,18 +254,18 @@ async def test_ws_authenticate_rejects_deactivated_user(db: AsyncSession) -> Non
     await db.flush()
 
     token = create_access_token(data={"sub": str(user.id)})
-    assert await _authenticate(token, db) is None
+    assert await authenticate_token(token, db) is None
 
 
 async def test_ws_authenticate_rejects_missing_user(db: AsyncSession) -> None:
-    from app.api.ws.price_stream import _authenticate
+    from app.api.ws.auth import authenticate_token
 
     token = create_access_token(data={"sub": "987654"})
-    assert await _authenticate(token, db) is None
+    assert await authenticate_token(token, db) is None
 
 
 async def test_ws_authenticate_accepts_active_user(db: AsyncSession) -> None:
-    from app.api.ws.price_stream import _authenticate
+    from app.api.ws.auth import authenticate_token
 
     user = User(
         email="ws-active@example.com",
@@ -280,13 +281,13 @@ async def test_ws_authenticate_accepts_active_user(db: AsyncSession) -> None:
         else 0
     )
     token = create_access_token(data={"sub": str(user.id), "pcat": pcat})
-    assert await _authenticate(token, db) == user.id
+    assert await authenticate_token(token, db) == user.id
 
 
 async def test_ws_authenticate_rejects_password_change_revocation(
     db: AsyncSession,
 ) -> None:
-    from app.api.ws.alert_stream import _authenticate
+    from app.api.ws.auth import authenticate_token
 
     user = User(
         email="ws-revoked@example.com",
@@ -300,4 +301,44 @@ async def test_ws_authenticate_rejects_password_change_revocation(
     # Token minted BEFORE the stored password-change stamp -> revoked.
     stale_pcat = int(user.password_changed_at.timestamp()) - 100
     token = create_access_token(data={"sub": str(user.id), "pcat": stale_pcat})
-    assert await _authenticate(token, db) is None
+    assert await authenticate_token(token, db) is None
+
+
+async def test_authenticate_ws_scoped_session_honours_overrides(
+    db: AsyncSession,
+) -> None:
+    """``authenticate_ws`` resolves ``get_db`` through dependency overrides and
+    closes the session generator before returning (the deadlock-fix contract)."""
+    from app.api.ws.auth import authenticate_ws
+    from app.database import get_db
+
+    user = User(
+        email="ws-scoped@example.com",
+        password_hash=hash_password("SecurePass123!"),
+        is_active=True,
+    )
+    db.add(user)
+    await db.flush()
+
+    pcat = (
+        int(user.password_changed_at.timestamp())
+        if user.password_changed_at is not None
+        else 0
+    )
+    token = create_access_token(data={"sub": str(user.id), "pcat": pcat})
+
+    closed = {"value": False}
+
+    async def _fake_get_db():
+        try:
+            yield db
+        finally:
+            closed["value"] = True
+
+    fake_ws = SimpleNamespace(
+        app=SimpleNamespace(dependency_overrides={get_db: _fake_get_db})
+    )
+    assert await authenticate_ws(fake_ws, token) == user.id  # type: ignore[arg-type]
+    # The short-lived auth session must be closed before authenticate_ws
+    # returns, i.e. before the caller's receive loop starts.
+    assert closed["value"] is True

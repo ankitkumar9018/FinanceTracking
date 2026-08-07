@@ -9,10 +9,11 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-logger = logging.getLogger(__name__)
+from app.ml import common
+from app.ml.common import RISK_FREE_RATE_ANNUAL, TRADING_DAYS_PER_YEAR
+from app.ml.price_data import fetch_return_series
 
-RISK_FREE_RATE_ANNUAL = 0.07  # 7% (India 10Y govt bond approx)
-TRADING_DAYS_PER_YEAR = 252
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -65,14 +66,10 @@ def calculate_sharpe_ratio(
     returns: pd.Series,
     risk_free_rate: float = RISK_FREE_RATE_ANNUAL,
 ) -> float | None:
-    """Annualized Sharpe ratio."""
+    """Annualized Sharpe ratio (None-guarded wrapper over ``common.sharpe``)."""
     if len(returns) < 30 or returns.std() < 1e-10:
         return None
-    daily_rf = (1 + risk_free_rate) ** (1 / TRADING_DAYS_PER_YEAR) - 1
-    excess = returns - daily_rf
-    if excess.std() < 1e-10:
-        return None
-    return float(excess.mean() / excess.std() * np.sqrt(TRADING_DAYS_PER_YEAR))
+    return common.sharpe(returns, risk_free_rate, min_obs=30)
 
 
 def calculate_sortino_ratio(
@@ -96,28 +93,13 @@ def calculate_sortino_ratio(
 def calculate_max_drawdown(
     cumulative_returns: pd.Series,
 ) -> tuple[float | None, int | None]:
-    """Max drawdown and its duration in trading days."""
+    """Max drawdown and its duration in trading days.
+
+    None-guarded wrapper over ``common.max_drawdown_from_returns``.
+    """
     if len(cumulative_returns) < 2:
         return None, None
-
-    wealth = (1 + cumulative_returns).cumprod()
-    running_max = wealth.cummax()
-    drawdown = (wealth - running_max) / running_max
-
-    max_dd = float(drawdown.min())
-
-    # Duration
-    in_drawdown = drawdown < 0
-    if not in_drawdown.any():
-        return 0.0, 0
-
-    # Find longest drawdown period
-    groups = (~in_drawdown).cumsum()
-    dd_groups = groups[in_drawdown]
-    if len(dd_groups) == 0:
-        return max_dd, 0
-    duration = dd_groups.value_counts().max()
-    return max_dd, int(duration)
+    return common.max_drawdown_from_returns(cumulative_returns)
 
 
 def calculate_var(
@@ -225,7 +207,6 @@ async def compute_portfolio_risk(
 
     from app.models.holding import Holding
     from app.models.portfolio import Portfolio
-    from app.models.price_history import PriceHistory
 
     # Verify portfolio ownership
     port_result = await db.execute(
@@ -258,34 +239,9 @@ async def compute_portfolio_risk(
     cutoff = date.today() - timedelta(days=int(days * 1.45) + 10)
     holdings_data = []
 
-    # Batch-fetch every holding's price history in a SINGLE query instead of one
-    # SELECT per holding (this used to be an N+1, now called on every AI-context
-    # build). Over-fetching across exchanges is harmless: rows are grouped by the
-    # exact (symbol, exchange) key and only actual-holding keys are read back.
-    symbols = {h.stock_symbol for h in holdings}
-    exchanges = {h.exchange for h in holdings}
-    price_rows = (
-        await db.execute(
-            select(
-                PriceHistory.stock_symbol,
-                PriceHistory.exchange,
-                PriceHistory.date,
-                PriceHistory.close,
-            )
-            .where(
-                PriceHistory.stock_symbol.in_(symbols),
-                PriceHistory.exchange.in_(exchanges),
-                PriceHistory.date >= cutoff,
-            )
-            .order_by(PriceHistory.date.asc())
-        )
-    ).all()
-
-    prices_by_key: dict[tuple[str, str], list] = {}
-    for r in price_rows:
-        prices_by_key.setdefault((r.stock_symbol, r.exchange), []).append(
-            (r.date, r.close)
-        )
+    # Single-query batch fetch of every holding's return series, keyed by
+    # (symbol, exchange) — see app.ml.price_data.fetch_return_series.
+    returns_by_key = await fetch_return_series(db, holdings, cutoff)
 
     for h in holdings:
         value = float(h.cumulative_quantity) * float(
@@ -293,14 +249,8 @@ async def compute_portfolio_risk(
         )
         weight = value / total_value if total_value > 0 else 0
 
-        # Already ordered by date asc from the batched query.
-        prices = prices_by_key.get((h.stock_symbol, h.exchange), [])
-        if len(prices) >= 2:
-            price_series = pd.Series(
-                [float(close) for _, close in prices],
-                index=[d for d, _ in prices],
-            )
-            daily_returns = price_series.pct_change().dropna()
+        daily_returns = returns_by_key.get((h.stock_symbol, h.exchange))
+        if daily_returns is not None:
             holdings_data.append(
                 {
                     "symbol": h.stock_symbol,
@@ -398,7 +348,6 @@ async def compute_holding_risks(
 
     from app.models.holding import Holding
     from app.models.portfolio import Portfolio
-    from app.models.price_history import PriceHistory
 
     port_result = await db.execute(
         select(Portfolio).where(
@@ -428,33 +377,9 @@ async def compute_holding_risks(
     # Benchmark returns
     bench_returns = await _fetch_benchmark_returns(db, benchmark_symbol, cutoff)
 
-    # Batch-fetch every holding's price history in a SINGLE query instead of one
-    # SELECT per holding (this used to be an N+1). Over-fetching across exchanges
-    # is harmless: rows are grouped by the exact (symbol, exchange) key below.
-    symbols = {h.stock_symbol for h in holdings}
-    exchanges = {h.exchange for h in holdings}
-    price_rows = (
-        await db.execute(
-            select(
-                PriceHistory.stock_symbol,
-                PriceHistory.exchange,
-                PriceHistory.date,
-                PriceHistory.close,
-            )
-            .where(
-                PriceHistory.stock_symbol.in_(symbols),
-                PriceHistory.exchange.in_(exchanges),
-                PriceHistory.date >= cutoff,
-            )
-            .order_by(PriceHistory.date.asc())
-        )
-    ).all()
-
-    prices_by_key: dict[tuple[str, str], list] = {}
-    for r in price_rows:
-        prices_by_key.setdefault((r.stock_symbol, r.exchange), []).append(
-            (r.date, r.close)
-        )
+    # Single-query batch fetch of every holding's return series, keyed by
+    # (symbol, exchange) — see app.ml.price_data.fetch_return_series.
+    returns_by_key = await fetch_return_series(db, holdings, cutoff)
 
     results = []
     for h in holdings:
@@ -463,20 +388,14 @@ async def compute_holding_risks(
         )
         weight = value / total_value if total_value > 0 else 0
 
-        # Already ordered by date asc from the batched query.
-        prices = prices_by_key.get((h.stock_symbol, h.exchange), [])
+        daily_returns = returns_by_key.get((h.stock_symbol, h.exchange))
 
         beta_val = None
         corr_val = None
         vol_val = None
         contrib = None
 
-        if len(prices) >= 2:
-            price_series = pd.Series(
-                [float(close) for _, close in prices],
-                index=[d for d, _ in prices],
-            )
-            daily_returns = price_series.pct_change().dropna()
+        if daily_returns is not None:
             vol_val = float(daily_returns.std() * np.sqrt(TRADING_DAYS_PER_YEAR))
 
             if len(bench_returns) > 0:

@@ -22,6 +22,26 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Guards against wiping phone/telegram on Save when /auth/me failed: until
+  // the profile loads we don't know the stored values, so a PUT with
+  // phone: null would silently erase them server-side.
+  const [profileState, setProfileState] = useState<"loading" | "loaded" | "error">("loading");
+  const profileLoaded = profileState === "loaded";
+
+  function loadProfile() {
+    setProfileState("loading");
+    // Notification destinations live on the user record, not /settings.
+    api.get<{ phone: string | null; telegram_chat_id: string | null }>("/auth/me")
+      .then((me) => {
+        setPhone(me.phone || "");
+        setTelegramChatId(me.telegram_chat_id || "");
+        setProfileState("loaded");
+      })
+      .catch((err) => {
+        console.error("Failed to load profile:", err);
+        setProfileState("error");
+      });
+  }
 
   function loadSettings() {
     setLoading(true);
@@ -33,17 +53,12 @@ export default function SettingsPage() {
         setLoadError(err instanceof Error ? err.message : "Failed to load settings");
       })
       .finally(() => setLoading(false));
-    // Notification destinations live on the user record, not /settings.
-    api.get<{ phone: string | null; telegram_chat_id: string | null }>("/auth/me")
-      .then((me) => {
-        setPhone(me.phone || "");
-        setTelegramChatId(me.telegram_chat_id || "");
-      })
-      .catch((err) => console.error("Failed to load profile:", err));
+    loadProfile();
   }
 
   useEffect(() => {
     loadSettings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleSave() {
@@ -54,8 +69,11 @@ export default function SettingsPage() {
         preferred_currency: settings.display.preferred_currency,
         theme_preference: settings.display.theme_preference,
         display_name: settings.display.display_name,
-        phone: phone || null,
-        telegram_chat_id: telegramChatId || null,
+        // Only send the notification destinations when the profile actually
+        // loaded — otherwise a failed /auth/me would make Save wipe them.
+        ...(profileLoaded
+          ? { phone: phone || null, telegram_chat_id: telegramChatId || null }
+          : {}),
         notification_preferences: settings.notifications,
       });
       setTheme(settings.display.theme_preference as "dark" | "light" | "system");
@@ -195,6 +213,19 @@ export default function SettingsPage() {
               />
             </label>
           ))}
+          {profileState === "error" && (
+            <p className="text-xs text-[hsl(var(--destructive))]">
+              Profile failed to load — phone and Telegram fields are read-only so Save
+              cannot wipe them.{" "}
+              <button
+                type="button"
+                onClick={loadProfile}
+                className="underline hover:text-[hsl(var(--foreground))]"
+              >
+                Retry
+              </button>
+            </p>
+          )}
           {settings.notifications.telegram_enabled && (
             <div>
               <label className="block text-sm font-medium mb-1">Telegram chat ID</label>
@@ -202,9 +233,10 @@ export default function SettingsPage() {
                 type="text"
                 value={telegramChatId}
                 onChange={(e) => setTelegramChatId(e.target.value)}
+                disabled={!profileLoaded}
                 aria-label="Telegram chat ID"
                 placeholder="123456789"
-                className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+                className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] disabled:opacity-50"
               />
             </div>
           )}
@@ -215,9 +247,10 @@ export default function SettingsPage() {
                 type="tel"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
+                disabled={!profileLoaded}
                 aria-label="Phone number in E.164 format"
                 placeholder="+9198XXXXXXXX"
-                className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+                className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] disabled:opacity-50"
               />
             </div>
           )}

@@ -11,8 +11,9 @@ from sqlalchemy.orm import selectinload
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.transaction import Transaction
-from app.services import forex_service
 from app.services.alert_service import determine_action_needed
+from app.services.forex_service import RateCache
+from app.services.valuation import invested_value, market_value
 
 # ---------------------------------------------------------------------------
 # Cumulative holding recalculation
@@ -110,10 +111,11 @@ async def get_portfolio_summary(
     for h in portfolio.holdings:
         qty = float(h.cumulative_quantity)
         avg = float(h.average_price)
-        invested = qty * avg
+        invested = invested_value(h)
 
         current = float(h.current_price) if h.current_price is not None else avg
-        current_value = qty * current
+        mv = market_value(h)
+        current_value = mv if mv is not None else 0.0
 
         pnl_percent: float | None = None
         if h.current_price is not None and invested > 0:
@@ -209,17 +211,16 @@ async def _add_display_currency(
     if source_currencies == {target}:
         return summary
 
-    rate_cache: dict[str, float] = {}
+    # Shared per-request FX memoization (one fetch per source currency).
+    rates = RateCache(target, db)
 
-    async def rate_for(src: str) -> float:
-        src = (src or base).upper()
-        if src == target:
-            return 1.0
-        if src not in rate_cache:
-            rate_cache[src] = await forex_service.get_exchange_rate(
-                src, target, None, db
-            )
-        return rate_cache[src]
+    async def _to_display(amount: float, src: str) -> float:
+        value, converted = await rates.to_base(amount, src or base)
+        if not converted:
+            # Preserve the all-or-nothing contract: any missing rate aborts
+            # the display conversion (caught below, display fields stripped).
+            raise RuntimeError(f"No {src}->{target} rate available")
+        return value
 
     try:
         total_invested_display = 0.0
@@ -227,14 +228,13 @@ async def _add_display_currency(
 
         for row in rows:
             src = (row.get("currency") or base).upper()
-            rate = await rate_for(src)
             qty = float(row.get("quantity") or 0.0)
             avg = float(row.get("avg_price") or 0.0)
             current = row.get("current_price")
             current = float(current) if current is not None else avg
 
-            invested_display = qty * avg * rate
-            value_display = qty * current * rate
+            invested_display = await _to_display(qty * avg, src)
+            value_display = await _to_display(qty * current, src)
             total_invested_display += invested_display
             total_current_value_display += value_display
 
@@ -242,7 +242,7 @@ async def _add_display_currency(
             row["invested_display"] = round(invested_display, 2)
             row["current_value_display"] = round(value_display, 2)
 
-        headline_rate = await rate_for(base)
+        headline_rate = await _to_display(1.0, base)
     except Exception:
         # Forex unavailable — strip any partial per-row display fields so the
         # response stays consistently native, and return unchanged.

@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.markets import CURRENCY
 from app.models.forex_rates import ForexRate
 
 logger = logging.getLogger(__name__)
@@ -16,14 +17,9 @@ logger = logging.getLogger(__name__)
 # refetching. Historical closes are immutable and never expire.
 RATE_CACHE_STALE_HOURS = 24
 
-# Exchange -> currency mapping
-EXCHANGE_CURRENCY_MAP: dict[str, str] = {
-    "NSE": "INR",
-    "BSE": "INR",
-    "XETRA": "EUR",
-    "NYSE": "USD",
-    "NASDAQ": "USD",
-}
+# Exchange -> currency mapping. Re-exported alias of the shared
+# ``app.core.markets.CURRENCY`` map (kept for existing importers).
+EXCHANGE_CURRENCY_MAP: dict[str, str] = CURRENCY
 
 
 # ---------------------------------------------------------------------------
@@ -292,13 +288,52 @@ async def get_rate_history(
 
 
 # ---------------------------------------------------------------------------
-# Utility: infer currency from exchange
+# Per-request rate cache
 # ---------------------------------------------------------------------------
 
-def _infer_currency_from_exchange(exchange: str) -> str:
-    """Map an exchange code to its base currency.
+class RateCache:
+    """Per-request cache of conversion rates into a base currency.
 
-    Supported: NSE/BSE -> INR, XETRA -> EUR, NYSE/NASDAQ -> USD.
-    Defaults to ``"USD"`` for unknown exchanges.
+    Memoizes :func:`get_exchange_rate` per source currency so a request that
+    converts many values only fetches each pair once. Failed lookups are also
+    memoized (per request) so an unavailable pair is not retried per item.
+
+    Promoted from ``net_worth_service._RateCache``; ``portfolio_service`` used
+    to carry its own closure-based copy of the same memoization.
     """
-    return EXCHANGE_CURRENCY_MAP.get(exchange.upper(), "USD")
+
+    def __init__(self, base_currency: str, db: AsyncSession) -> None:
+        self.base = base_currency.upper()
+        self.db = db
+        self._rates: dict[str, float] = {self.base: 1.0}
+        self._failed: set[str] = set()
+
+    async def to_base(
+        self, amount: float, from_currency: str | None
+    ) -> tuple[float, bool]:
+        """Convert *amount* into the base currency.
+
+        Returns ``(value_in_base, converted)``. When no exchange rate is
+        available ``converted`` is ``False`` and the amount is returned
+        UNconverted (still in its native currency) — callers must then mark the
+        item and exclude it from base-currency totals rather than silently
+        mixing currencies (which would count e.g. $10k as ₹10k).
+        """
+        cur = (from_currency or self.base).upper()
+        if cur == self.base:
+            return amount, True
+        if cur not in self._rates and cur not in self._failed:
+            try:
+                self._rates[cur] = await get_exchange_rate(
+                    cur, self.base, None, self.db
+                )
+            except Exception:
+                logger.warning(
+                    "No %s->%s rate available; marking value unconverted "
+                    "(excluded from the base-currency total)",
+                    cur, self.base,
+                )
+                self._failed.add(cur)
+        if cur in self._rates:
+            return amount * self._rates[cur], True
+        return amount, False

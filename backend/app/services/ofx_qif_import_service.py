@@ -21,6 +21,8 @@ from datetime import date, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.excel_service import import_to_portfolio
+from app.utils.dates import infer_dayfirst, parse_date
+from app.utils.numbers import parse_number
 
 logger = logging.getLogger(__name__)
 
@@ -28,31 +30,9 @@ logger = logging.getLogger(__name__)
 # app's primary market. Cash/bank fallback rows use a distinct "CASH" exchange.
 _DEFAULT_EXCHANGE = "NSE"
 
-
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
-
-def _safe_float(value: object) -> float | None:
-    """Coerce a value to float, tolerating thousands separators / currency."""
-    if value is None:
-        return None
-    if isinstance(value, int | float):
-        return float(value)
-    s = (
-        str(value)
-        .strip()
-        .replace(",", "")
-        .replace("₹", "")  # ₹
-        .replace("$", "")
-        .replace("€", "")  # €
-    )
-    if not s:
-        return None
-    try:
-        return float(s)
-    except ValueError:
-        return None
+# Numeric fields are parsed with the shared locale-aware parser so European
+# statements ("1234,56") are read as 1234.56 rather than 123456.0.
+_safe_float = parse_number
 
 
 # ---------------------------------------------------------------------------
@@ -177,33 +157,46 @@ def parse_ofx(file_bytes: bytes) -> list[dict]:
 # QIF
 # ---------------------------------------------------------------------------
 
-_QIF_DATE_FORMATS = (
-    "%m/%d'%y",
-    "%m/%d'%Y",
-    "%m/%d/%Y",
-    "%m/%d/%y",
-    "%d/%m/%Y",
-    "%d/%m/%y",
-    "%Y-%m-%d",
-)
+def _normalize_qif_date(value: str) -> str:
+    """Normalize a raw QIF date string: strip spaces and rewrite the classic
+    Quicken apostrophe year separator (``01/15'24`` → ``01/15/24``)."""
+    return value.strip().replace(" ", "").replace("'", "/")
 
 
-def _parse_qif_date(value: str | None) -> date | None:
-    """Parse a QIF date (``MM/DD'YY``, ``MM/DD/YYYY``, ``D/M/YYYY``, …)."""
+def _parse_qif_date(value: str | None, *, dayfirst: bool = True) -> date | None:
+    """Parse a QIF date (``MM/DD'YY``, ``MM/DD/YYYY``, ``D/M/YYYY``, …) using
+    one consistent day/month convention for the whole file.
+
+    ``dayfirst`` comes from :func:`infer_dayfirst` over all of the file's
+    D-records (defaulting to day-first when ambiguous — the app's primary
+    markets are India/Germany), so ``13/04`` and ``05/04`` in the same file
+    are read with a single convention instead of per-row format guessing.
+    """
     if not value:
         return None
-    s = value.strip().replace(" ", "")
-    for fmt in _QIF_DATE_FORMATS:
-        try:
-            return datetime.strptime(s, fmt).date()
-        except ValueError:
-            continue
-    return None
+    s = _normalize_qif_date(value)
+    parts = s.split("/")
+    if len(parts) == 3 and len(parts[2]) <= 2:
+        # Two-digit year (e.g. "01/15/24" from "01/15'24"): handle locally —
+        # strptime's %Y would happily read "24" as the year 24 AD.
+        fmts = ("%d/%m/%y", "%m/%d/%y") if dayfirst else ("%m/%d/%y", "%d/%m/%y")
+        for fmt in fmts:
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        return None
+    return parse_date(s, dayfirst=dayfirst)
 
 
-def _build_qif_row(fields: dict[str, str], acct_type: str | None) -> dict | None:
+def _build_qif_row(
+    fields: dict[str, str],
+    acct_type: str | None,
+    *,
+    dayfirst: bool = True,
+) -> dict | None:
     """Turn one QIF record's field map into an import row (or None to skip)."""
-    dt = _parse_qif_date(fields.get("D"))
+    dt = _parse_qif_date(fields.get("D"), dayfirst=dayfirst)
     if dt is None:
         return None
 
@@ -274,9 +267,17 @@ def parse_qif(file_bytes: bytes) -> list[dict]:
 
     Records are separated by ``^``. Returns ``[]`` when nothing usable is
     found.
+
+    Dates are parsed with a single day/month convention for the whole file:
+    all D-records are collected first, :func:`infer_dayfirst` decides the
+    convention once (day-first when ambiguous), and every row is parsed with
+    it — a per-row format guess would silently mix ``MM/DD`` and ``DD/MM``
+    within one statement.
     """
     text = file_bytes.decode("utf-8-sig", errors="ignore")
-    rows: list[dict] = []
+
+    # ── Pass 1: collect records (field map + account type in effect) ──
+    records: list[tuple[dict[str, str], str | None]] = []
     acct_type: str | None = None
     current: dict[str, str] = {}
 
@@ -293,16 +294,27 @@ def parse_qif(file_bytes: bytes) -> list[dict]:
         code = line[0]
         value = line[1:].strip()
         if code == "^":
-            row = _build_qif_row(current, acct_type)
-            if row:
-                rows.append(row)
+            if current:
+                records.append((current, acct_type))
             current = {}
             continue
         current[code] = value
 
     # Flush a trailing record with no closing '^'.
     if current:
-        row = _build_qif_row(current, acct_type)
+        records.append((current, acct_type))
+
+    # ── Decide the file-wide date convention once ─────────────────────
+    date_strings = [
+        _normalize_qif_date(fields["D"]) for fields, _ in records if fields.get("D")
+    ]
+    inferred = infer_dayfirst(date_strings)
+    dayfirst = True if inferred is None else inferred
+
+    # ── Pass 2: build rows with the fixed convention ──────────────────
+    rows: list[dict] = []
+    for fields, rec_type in records:
+        row = _build_qif_row(fields, rec_type, dayfirst=dayfirst)
         if row:
             rows.append(row)
 
@@ -317,10 +329,13 @@ async def import_statement(
     rows: list[dict],
     portfolio_id: int,
     db: AsyncSession,
+    *,
+    source: str = "OFX",
 ) -> dict:
     """Create holdings/transactions from parsed OFX/QIF rows.
 
     Delegates to ``excel_service.import_to_portfolio`` so creation logic is
-    shared with the Excel/CSV importers.
+    shared with the Excel/CSV importers. ``source`` ("OFX" or "QIF") is
+    stamped on every created transaction for provenance.
     """
-    return await import_to_portfolio(rows, portfolio_id, db)
+    return await import_to_portfolio(rows, portfolio_id, db, source=source)

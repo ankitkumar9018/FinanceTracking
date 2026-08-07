@@ -87,15 +87,14 @@ async def compare_with_benchmark(
     # When fewer than two portfolio points fall inside the window there is no
     # honest period return to compute, so we degrade gracefully: the benchmark
     # comparison is still returned, but ``portfolio_return_pct`` / ``alpha`` are
-    # ``None`` and ``insufficient_history`` is set — never a fabricated number.
+    # ``None`` and ``insufficient_history`` is set — never a fabricated number
+    # and never a silent fall-back to the unclipped (mismatched-window) series.
     bench_first_date = benchmark_closes[0][0]
     bench_last_date = benchmark_closes[-1][0]
     aligned_pf = [
         p for p in portfolio_daily_values
         if bench_first_date <= p["date"] <= bench_last_date
     ]
-    if len(aligned_pf) < 2:
-        aligned_pf = list(portfolio_daily_values)
 
     insufficient = len(aligned_pf) < 2
     pf_start: float | None = None
@@ -103,23 +102,33 @@ async def compare_with_benchmark(
     if not insufficient:
         pf_start = aligned_pf[0]["value"]
         pf_end = aligned_pf[-1]["value"]
-        portfolio_return = (
-            ((pf_end - pf_start) / pf_start) * 100 if pf_start and pf_start > 0 else 0.0
-        )
+        if pf_start is not None and pf_start > 0:
+            portfolio_return = ((pf_end - pf_start) / pf_start) * 100
+        else:
+            # A zero/negative-value start has no meaningful period return —
+            # report it as insufficient rather than fabricating 0.0.
+            insufficient = True
+            pf_start = None
 
-    # Build normalized data points (both starting at 100)
+    # Build normalized data points (both starting at 100).
+    # Index portfolio values by date once — the per-day linear scan was
+    # O(days x points).
+    pf_by_date = {p["date"]: p["value"] for p in portfolio_daily_values}
     data_points = []
     for d_str, close in benchmark_closes:
         normalized_bench = (close / bench_start) * 100
-        # Find matching portfolio value for the day (if any)
-        pf_val = next((p["value"] for p in portfolio_daily_values if p["date"] == d_str), None)
+        pf_val = pf_by_date.get(d_str)
         normalized_pf = (
-            (pf_val / pf_start) * 100 if (pf_val and pf_start and pf_start > 0) else None
+            (pf_val / pf_start) * 100
+            if (pf_val is not None and pf_start is not None and pf_start > 0)
+            else None
         )
         data_points.append({
             "date": d_str,
             "benchmark_value": round(normalized_bench, 2),
-            "portfolio_value": round(normalized_pf, 2) if normalized_pf else None,
+            "portfolio_value": (
+                round(normalized_pf, 2) if normalized_pf is not None else None
+            ),
         })
 
     alpha = (
@@ -140,3 +149,69 @@ async def compare_with_benchmark(
         data_points=data_points,
         insufficient_history=insufficient,
     )
+
+
+# ---------------------------------------------------------------------------
+# Shared index-window fetch (used here and by the what-if simulator)
+# ---------------------------------------------------------------------------
+
+async def fetch_index_window(
+    name_or_symbol: str,
+    start: date,
+    end: date,
+) -> dict | None:
+    """Fetch an index's closing-price window between two dates (inclusive).
+
+    ``name_or_symbol`` may be a benchmark name from :data:`BENCHMARKS`
+    (e.g. ``"NIFTY50"``) or a raw yfinance index symbol (e.g. ``"^NSEI"``).
+
+    Fetches with a few days of padding on each side (markets close on
+    weekends/holidays), then clips: the start close is the first trading day
+    ON OR AFTER ``start`` and the end close is the last trading day ON OR
+    BEFORE ``end``.
+
+    Returns ``{symbol, start_date, end_date, start_close, end_close,
+    return_pct}`` or ``None`` when the window cannot be resolved (unknown
+    benchmark, no data in range, fetch failure/timeout).
+    """
+    symbol = BENCHMARKS.get(name_or_symbol) or (
+        name_or_symbol if name_or_symbol.startswith("^") else None
+    )
+    if not symbol:
+        return None
+
+    fetch_start = start - timedelta(days=7)
+    fetch_end = end + timedelta(days=3)
+
+    def _fetch_sync():
+        t = yf.Ticker(symbol)
+        return t.history(start=fetch_start.isoformat(), end=fetch_end.isoformat())
+
+    try:
+        hist = await asyncio.wait_for(asyncio.to_thread(_fetch_sync), timeout=15.0)
+        if hist.empty:
+            return None
+
+        hist.index = hist.index.tz_localize(None) if hist.index.tz else hist.index
+
+        start_mask = hist.index.date >= start
+        end_mask = hist.index.date <= end
+        if not start_mask.any() or not end_mask.any():
+            return None
+
+        start_close = float(hist[start_mask].iloc[0]["Close"])
+        end_close = float(hist[end_mask].iloc[-1]["Close"])
+        if start_close <= 0:
+            return None
+
+        return {
+            "symbol": symbol,
+            "start_date": hist[start_mask].index[0].date(),
+            "end_date": hist[end_mask].index[-1].date(),
+            "start_close": start_close,
+            "end_close": end_close,
+            "return_pct": ((end_close - start_close) / start_close) * 100,
+        }
+    except Exception:
+        logger.warning("Index window fetch failed for %s", name_or_symbol)
+        return None

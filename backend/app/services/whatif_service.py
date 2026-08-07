@@ -8,7 +8,7 @@ from datetime import date, timedelta
 
 import yfinance as yf
 
-from app.services.benchmark_service import BENCHMARKS
+from app.services.benchmark_service import fetch_index_window
 from app.services.market_data_service import _ticker_symbol
 
 logger = logging.getLogger(__name__)
@@ -148,45 +148,18 @@ async def simulate(
 async def _fetch_benchmark_return(
     benchmark_name: str, start: date, end: date
 ) -> dict | None:
-    """Fetch benchmark index return for the same period."""
-    bench_symbol = BENCHMARKS.get(benchmark_name)
-    if not bench_symbol:
+    """Fetch benchmark index return for the same period.
+
+    Delegates the padded fetch + date clipping to
+    :func:`app.services.benchmark_service.fetch_index_window`.
+    """
+    window = await fetch_index_window(benchmark_name, start, end)
+    if window is None:
         return None
 
-    try:
-        fetch_start = start - timedelta(days=7)
-        fetch_end = end + timedelta(days=3)
-
-        def _fetch_bench_sync():
-            t = yf.Ticker(bench_symbol)
-            return t.history(start=fetch_start.isoformat(), end=fetch_end.isoformat())
-
-        hist = await asyncio.wait_for(asyncio.to_thread(_fetch_bench_sync), timeout=15.0)
-        if hist.empty:
-            return None
-
-        hist.index = hist.index.tz_localize(None) if hist.index.tz else hist.index
-
-        start_mask = hist.index.date >= start
-        end_mask = hist.index.date <= end
-
-        if not start_mask.any() or not end_mask.any():
-            return None
-
-        bench_start_price = float(hist[start_mask].iloc[0]["Close"])
-        bench_end_price = float(hist[end_mask].iloc[-1]["Close"])
-
-        if bench_start_price <= 0:
-            return None
-
-        bench_return = ((bench_end_price - bench_start_price) / bench_start_price) * 100
-
-        return {
-            "benchmark_name": benchmark_name,
-            "benchmark_start_price": round(bench_start_price, 4),
-            "benchmark_end_price": round(bench_end_price, 4),
-            "benchmark_return_pct": round(bench_return, 2),
-        }
-    except Exception:
-        logger.warning("Benchmark data fetch failed for %s", benchmark_name)
-        return None
+    return {
+        "benchmark_name": benchmark_name,
+        "benchmark_start_price": round(window["start_close"], 4),
+        "benchmark_end_price": round(window["end_close"], 4),
+        "benchmark_return_pct": round(window["return_pct"], 2),
+    }

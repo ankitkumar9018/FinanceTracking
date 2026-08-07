@@ -156,7 +156,7 @@ async def upload_excel(
             detail="No valid data rows found in the uploaded file",
         )
 
-    summary = await import_to_portfolio(parsed, portfolio_id, db)
+    summary = await import_to_portfolio(parsed, portfolio_id, db, source="EXCEL")
     return {"status": "success", "rows_parsed": len(parsed), **summary}
 
 
@@ -268,7 +268,7 @@ async def upload_csv(
             detail="No valid data rows found in the uploaded file",
         )
 
-    summary = await import_to_portfolio(parsed, portfolio_id, db)
+    summary = await import_to_portfolio(parsed, portfolio_id, db, source="CSV")
     return {"status": "success", "rows_parsed": len(parsed), **summary}
 
 
@@ -447,7 +447,7 @@ async def import_ofx_statement(
             detail="No valid rows found in the OFX file",
         )
 
-    summary = await import_statement(parsed, portfolio_id, db)
+    summary = await import_statement(parsed, portfolio_id, db, source="OFX")
     return {"status": "success", "rows_parsed": len(parsed), **summary}
 
 
@@ -476,7 +476,7 @@ async def import_qif_statement(
             detail="No valid rows found in the QIF file",
         )
 
-    summary = await import_statement(parsed, portfolio_id, db)
+    summary = await import_statement(parsed, portfolio_id, db, source="QIF")
     return {"status": "success", "rows_parsed": len(parsed), **summary}
 
 

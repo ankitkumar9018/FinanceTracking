@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   Target,
   Plus,
@@ -16,7 +16,9 @@ import {
   Calculator,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
+import { useApiData } from "@/hooks/use-api-data";
 import { usePortfolioStore } from "@/stores/portfolio-store";
+import { ErrorState } from "@/components/shared/error-state";
 import toast from "react-hot-toast";
 import { formatCurrency } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
@@ -810,8 +812,10 @@ function SipCalculatorSection() {
 
 export default function GoalsPage() {
   const { portfolios, fetchPortfolios } = usePortfolioStore();
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [loading, setLoading] = useState(true);
+  // A failed load now surfaces as a real error state instead of a fake
+  // "no goals yet" empty state.
+  const { data: goalsData, loading, error, reload: loadGoals } = useApiData<Goal[]>("/goals");
+  const goals = goalsData ?? [];
   const [modalOpen, setModalOpen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [saving, setSaving] = useState(false);
@@ -820,22 +824,6 @@ export default function GoalsPage() {
   useEffect(() => {
     fetchPortfolios();
   }, [fetchPortfolios]);
-
-  const loadGoals = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await api.get<Goal[]>("/goals");
-      setGoals(data);
-    } catch {
-      setGoals([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadGoals();
-  }, [loadGoals]);
 
   async function handleCreateOrUpdate(formData: GoalFormData) {
     setSaving(true);
@@ -937,6 +925,8 @@ export default function GoalsPage() {
             />
           ))}
         </div>
+      ) : error ? (
+        <ErrorState message={error} onRetry={loadGoals} />
       ) : goals.length > 0 ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {goals.map((goal, i) => {

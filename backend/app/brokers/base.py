@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
+from typing import ClassVar
 
 
 @dataclass
@@ -53,6 +54,11 @@ class BrokerAdapter(ABC):
     """
 
     BROKER_NAME: str = ""
+
+    #: ``True`` on placeholder adapters that are not implemented yet. The API
+    #: layer uses this flag to mark brokers as "coming soon" (previously it
+    #: inspected each adapter's source code for ``NotImplementedError``).
+    is_stub: ClassVar[bool] = False
 
     @abstractmethod
     async def connect(self, api_key: str, api_secret: str, **kwargs) -> dict:
@@ -137,3 +143,49 @@ class BrokerAdapter(ABC):
         streaming or polling live quotes.
         """
         return None
+
+
+class StubBroker(BrokerAdapter):
+    """Placeholder adapter for brokers whose integration is not built yet.
+
+    Replaces six byte-identical ~50-line stub classes. Every operation raises
+    ``NotImplementedError`` (the API layer maps that to HTTP 501), except
+    ``is_connected()`` which honestly reports ``False`` — a health check on a
+    non-existent integration is not an error, it's just never connected.
+    Concrete stubs only set ``BROKER_NAME``.
+    """
+
+    is_stub: ClassVar[bool] = True
+
+    def _not_implemented(self) -> NotImplementedError:
+        return NotImplementedError(f"{self.BROKER_NAME} integration coming soon")
+
+    async def connect(self, api_key: str, api_secret: str, **kwargs) -> dict:
+        raise self._not_implemented()
+
+    async def disconnect(self) -> None:
+        raise self._not_implemented()
+
+    async def get_holdings(self) -> list[BrokerHolding]:
+        raise self._not_implemented()
+
+    async def get_positions(self) -> list[BrokerPosition]:
+        raise self._not_implemented()
+
+    async def get_orders(
+        self, from_date: datetime | None = None, to_date: datetime | None = None
+    ) -> list[BrokerOrder]:
+        raise self._not_implemented()
+
+    async def get_historical_data(
+        self,
+        symbol: str,
+        exchange: str,
+        from_date: datetime,
+        to_date: datetime,
+        interval: str = "day",
+    ) -> list[dict]:
+        raise self._not_implemented()
+
+    def is_connected(self) -> bool:
+        return False

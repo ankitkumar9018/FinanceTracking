@@ -18,7 +18,7 @@ from app.schemas.dividend import DividendCreate
 from app.schemas.forex import ConversionRequest
 from app.schemas.mutual_fund import MutualFundCreate, MutualFundUpdate
 from app.schemas.tax import TaxRecordCreate, TaxSummary
-from app.services.forex_service import _infer_currency_from_exchange
+from app.services.forex_service import EXCHANGE_CURRENCY_MAP
 from app.services.tax_service import (
     GERMANY_CHURCH_RATE,
     GERMANY_DEFAULT_FREIBETRAG,
@@ -376,40 +376,46 @@ class TestCalculateGermanTax:
 # ============================================================================
 
 
-class TestInferCurrencyFromExchange:
-    """Tests for _infer_currency_from_exchange()."""
+class TestExchangeCurrencyMap:
+    """Exchange -> currency mapping (EXCHANGE_CURRENCY_MAP, aliasing
+    ``app.core.markets.CURRENCY``; the old ``_infer_currency_from_exchange``
+    helper was ``MAP.get(exchange.upper(), "USD")``)."""
+
+    @staticmethod
+    def _infer(exchange: str) -> str:
+        return EXCHANGE_CURRENCY_MAP.get(exchange.upper(), "USD")
 
     def test_nse_returns_inr(self):
         """NSE maps to INR."""
-        assert _infer_currency_from_exchange("NSE") == "INR"
+        assert self._infer("NSE") == "INR"
 
     def test_bse_returns_inr(self):
         """BSE maps to INR."""
-        assert _infer_currency_from_exchange("BSE") == "INR"
+        assert self._infer("BSE") == "INR"
 
     def test_xetra_returns_eur(self):
         """XETRA maps to EUR."""
-        assert _infer_currency_from_exchange("XETRA") == "EUR"
+        assert self._infer("XETRA") == "EUR"
 
     def test_nyse_returns_usd(self):
         """NYSE maps to USD."""
-        assert _infer_currency_from_exchange("NYSE") == "USD"
+        assert self._infer("NYSE") == "USD"
 
     def test_nasdaq_returns_usd(self):
         """NASDAQ maps to USD."""
-        assert _infer_currency_from_exchange("NASDAQ") == "USD"
+        assert self._infer("NASDAQ") == "USD"
 
     def test_lowercase_input_normalised(self):
-        """Exchange names are normalised to uppercase internally."""
-        assert _infer_currency_from_exchange("nse") == "INR"
-        assert _infer_currency_from_exchange("xetra") == "EUR"
-        assert _infer_currency_from_exchange("nyse") == "USD"
+        """Exchange names are normalised to uppercase before lookup."""
+        assert self._infer("nse") == "INR"
+        assert self._infer("xetra") == "EUR"
+        assert self._infer("nyse") == "USD"
 
     def test_unknown_exchange_defaults_to_usd(self):
         """Unknown exchanges default to USD."""
-        assert _infer_currency_from_exchange("LSE") == "USD"
-        assert _infer_currency_from_exchange("TSE") == "USD"
-        assert _infer_currency_from_exchange("UNKNOWN") == "USD"
+        assert self._infer("LSE") == "USD"
+        assert self._infer("TSE") == "USD"
+        assert self._infer("UNKNOWN") == "USD"
 
 
 # ============================================================================

@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback } from "react";
 import {
   Layers,
-  ChevronDown,
   Shield,
   Scale,
   Flame,
@@ -17,8 +16,10 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { api } from "@/lib/api-client";
+import { formatPercent } from "@/lib/utils";
 import toast from "react-hot-toast";
 import { usePortfolioStore } from "@/stores/portfolio-store";
+import { PortfolioSelector } from "@/components/shared/portfolio-selector";
 import { motion } from "framer-motion";
 
 /* Recharts is heavy (~100kB gz) — load the charts lazily */
@@ -97,37 +98,18 @@ const RISK_OPTIONS: {
   },
 ];
 
-function formatPercent(value: number): string {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
-}
-
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
 export default function OptimizerPage() {
-  const { portfolios, activePortfolioId, setActivePortfolio } = usePortfolioStore();
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const { activePortfolioId } = usePortfolioStore();
   const [riskTolerance, setRiskTolerance] = useState<RiskTolerance>("moderate");
-
-  // Close the portfolio dropdown on an outside click (mirrors risk/visualizations).
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false);
-      }
-    }
-    if (dropdownOpen) document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [dropdownOpen]);
   const [result, setResult] = useState<OptimizationResult | null>(null);
   const [suggestions, setSuggestions] = useState<RebalanceSuggestion[]>([]);
   const [loading, setLoading] = useState(false);
 
-  function handlePortfolioChange(id: number) {
-    setActivePortfolio(id);
-    setDropdownOpen(false);
+  function handlePortfolioChange() {
     setResult(null);
     setSuggestions([]);
   }
@@ -155,8 +137,6 @@ export default function OptimizerPage() {
     }
   }, [activePortfolioId, riskTolerance]);
 
-  const activePortfolio = portfolios.find((p) => p.id === activePortfolioId);
-
   return (
     <div className="space-y-6">
       {/* ---- Header ---- */}
@@ -169,38 +149,7 @@ export default function OptimizerPage() {
         </div>
 
         {/* Portfolio Selector */}
-        <div className="relative" ref={dropdownRef}>
-          <button
-            onClick={() => setDropdownOpen(!dropdownOpen)}
-            className="inline-flex items-center gap-2 rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-4 py-2 text-sm font-medium hover:bg-[hsl(var(--accent))] transition-colors"
-          >
-            <Layers className="h-4 w-4 text-[hsl(var(--primary))]" />
-            {activePortfolio?.name || "Select Portfolio"}
-            <ChevronDown className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
-          </button>
-          {dropdownOpen && (
-            <div className="absolute right-0 z-10 mt-1 w-56 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] py-1 shadow-lg">
-              {portfolios.map((portfolio) => (
-                <button
-                  key={portfolio.id}
-                  onClick={() => handlePortfolioChange(portfolio.id)}
-                  className={`w-full px-4 py-2 text-left text-sm transition-colors ${
-                    portfolio.id === activePortfolioId
-                      ? "bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]"
-                      : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]"
-                  }`}
-                >
-                  {portfolio.name}
-                  {portfolio.is_default && (
-                    <span className="ml-2 text-xs text-[hsl(var(--muted-foreground))]">
-                      (default)
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <PortfolioSelector icon={Layers} onSelect={handlePortfolioChange} />
       </div>
 
       {/* ---- Risk Tolerance Selector ---- */}

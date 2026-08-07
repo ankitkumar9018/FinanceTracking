@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
+from app.services.valuation import market_value
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +28,9 @@ DEFAULT_DRIFT_THRESHOLD: float = 5.0
 # ---------------------------------------------------------------------------
 
 def _market_value(holding: Holding) -> float:
-    """Return the current market value of a holding."""
-    price = (
-        float(holding.current_price)
-        if holding.current_price is not None
-        else float(holding.average_price)
-    )
-    return float(holding.cumulative_quantity) * price
+    """Current market value via the shared valuation helper (0.0 if unknown)."""
+    mv = market_value(holding)
+    return mv if mv is not None else 0.0
 
 
 # ---------------------------------------------------------------------------

@@ -3,14 +3,19 @@
 Uses Starlette's synchronous ``TestClient`` for WebSocket testing because
 httpx.AsyncClient + ASGITransport does not support the WebSocket protocol.
 
-The WS ``_authenticate`` helper now loads the user from the database and
-rejects tokens for missing / deactivated accounts (and honours password-change
-revocation), so a real, active user row is required — ``valid_ws_token``
-registers one and returns its access token.
+The shared WS auth helper (``app.api.ws.auth.authenticate_ws``) loads the user
+from the database and rejects tokens for missing / deactivated accounts (and
+honours password-change revocation), so a real, active user row is required —
+``valid_ws_token`` registers one and returns its access token.
+
+Auth failures are surfaced as an ACCEPTED handshake followed by an immediate
+close with code 4001: closing an unaccepted socket would be rejected by uvicorn
+as HTTP 403 and the 4001 frame would never reach a real client.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import tempfile
@@ -25,6 +30,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import Session as SyncSession
 from sqlalchemy.pool import NullPool
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from app.database import Base, get_db
 from app.main import app
@@ -148,19 +154,23 @@ class TestPriceStream:
     """Tests for the /ws/prices WebSocket endpoint."""
 
     def test_price_stream_no_auth(self, ws_client: TestClient) -> None:
-        """Connecting without a token closes the socket with code 4001."""
-        with pytest.raises(Exception) as exc_info:
-            with ws_client.websocket_connect("/ws/prices"):
-                pass  # pragma: no cover
-        # WebSocketDisconnect stores the code in .code attribute
-        assert getattr(exc_info.value, "code", None) == 4001
+        """Without a token the handshake is accepted, then closed with 4001.
+
+        The accept-then-close order is deliberate: a close() on an unaccepted
+        socket is rejected by uvicorn as HTTP 403 and the 4001 frame never
+        reaches a real client.
+        """
+        with ws_client.websocket_connect("/ws/prices") as ws:
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_json()
+            assert exc_info.value.code == 4001
 
     def test_price_stream_invalid_token(self, ws_client: TestClient) -> None:
-        """Connecting with a garbage token closes the socket with code 4001."""
-        with pytest.raises(Exception) as exc_info:
-            with ws_client.websocket_connect("/ws/prices?token=not-a-real-jwt"):
-                pass  # pragma: no cover
-        assert getattr(exc_info.value, "code", None) == 4001
+        """A garbage token yields an accepted handshake then a 4001 close."""
+        with ws_client.websocket_connect("/ws/prices?token=not-a-real-jwt") as ws:
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_json()
+            assert exc_info.value.code == 4001
 
     def test_price_stream_subscribe(
         self, ws_client: TestClient, valid_ws_token: str
@@ -222,11 +232,11 @@ class TestAlertStream:
     """Tests for the /ws/alerts WebSocket endpoint."""
 
     def test_alert_stream_no_auth(self, ws_client: TestClient) -> None:
-        """Connecting without a token closes the socket with code 4001."""
-        with pytest.raises(Exception) as exc_info:
-            with ws_client.websocket_connect("/ws/alerts"):
-                pass  # pragma: no cover
-        assert getattr(exc_info.value, "code", None) == 4001
+        """Without a token the handshake is accepted, then closed with 4001."""
+        with ws_client.websocket_connect("/ws/alerts") as ws:
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_json()
+            assert exc_info.value.code == 4001
 
     def test_alert_stream_ack(
         self, ws_client: TestClient, valid_ws_token: str
@@ -240,3 +250,64 @@ class TestAlertStream:
 
             assert data["type"] == "ack_confirmed"
             assert data["alert_id"] == 1
+
+
+# ---------------------------------------------------------------------------
+# ConnectionManager — failed sends must close the socket, not just drop it
+# ---------------------------------------------------------------------------
+
+
+class _FakeWebSocket:
+    """Minimal stand-in for a starlette WebSocket in manager unit tests."""
+
+    def __init__(self, *, send_error: Exception | None = None) -> None:
+        self.client_state = WebSocketState.CONNECTED
+        self.send_error = send_error
+        self.sent: list[dict] = []
+        self.closed_with: int | None = None
+
+    async def send_json(self, data: dict) -> None:
+        if self.send_error is not None:
+            raise self.send_error
+        self.sent.append(data)
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.closed_with = code
+
+
+async def test_fan_out_failed_send_disconnects_and_closes_socket() -> None:
+    """A send that raises drops the client AND schedules a socket close, so
+    the client's receive loop ends and its reconnect logic fires (previously
+    the socket lingered as a zombie whose subscribes silently no-op'd)."""
+    from app.api.ws.connection_manager import ConnectionInfo, ConnectionManager
+
+    mgr = ConnectionManager()
+    bad = _FakeWebSocket(send_error=RuntimeError("boom"))
+    good = _FakeWebSocket()
+    mgr._connections[bad] = ConnectionInfo(user_id=1)  # type: ignore[index]
+    mgr._connections[good] = ConnectionInfo(user_id=2)  # type: ignore[index]
+
+    await mgr._fan_out([bad, good], {"type": "price_update"})  # type: ignore[list-item]
+
+    # Failed client is out of the registry; healthy client is untouched.
+    assert bad not in mgr._connections
+    assert good in mgr._connections
+    assert good.sent == [{"type": "price_update"}]
+
+    # The best-effort close was scheduled as a task; let it run.
+    if mgr._close_tasks:
+        await asyncio.gather(*mgr._close_tasks, return_exceptions=True)
+    assert bad.closed_with == 1011
+    assert good.closed_with is None
+
+
+async def test_close_quietly_swallows_close_errors() -> None:
+    """_close_quietly never propagates — the socket may already be dead."""
+    from app.api.ws.connection_manager import ConnectionManager
+
+    class _ExplodingWS:
+        async def close(self, code: int = 1000, reason: str | None = None) -> None:
+            raise RuntimeError("already closed")
+
+    # Must not raise.
+    await ConnectionManager._close_quietly(_ExplodingWS())  # type: ignore[arg-type]

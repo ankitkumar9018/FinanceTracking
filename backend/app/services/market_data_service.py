@@ -6,6 +6,7 @@ import asyncio
 import logging
 import math
 from datetime import UTC, datetime
+from functools import partial
 
 import pandas as pd
 import yfinance as yf
@@ -16,8 +17,15 @@ from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.price_history import PriceHistory
 from app.services.alert_service import determine_action_needed
+from app.utils.concurrency import gather_bounded
 
 logger = logging.getLogger(__name__)
+
+# Cap concurrent per-holding refresh pipelines: unbounded gather over a large
+# portfolio floods the thread pool, and queue time then counts against each
+# fetch's timeout. gather_bounded applies the semaphore *outside* the work so
+# each holding's own timeouts start only once it actually runs.
+_MAX_CONCURRENT_FETCHES = 8
 
 # ---------------------------------------------------------------------------
 # Exchange suffix mapping
@@ -344,11 +352,14 @@ async def refresh_all_prices(
     if not holdings:
         return {"updated": 0, "failed": 0, "total": 0}
 
-    # ── Parallel fetch: all external API calls run concurrently ──────
-    fetch_tasks = [
-        _fetch_holding_data(h.stock_symbol, h.exchange) for h in holdings
-    ]
-    fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+    # ── Parallel fetch: bounded concurrency, timers start on slot acquire ──
+    fetch_results = await gather_bounded(
+        [
+            partial(_fetch_holding_data, h.stock_symbol, h.exchange)
+            for h in holdings
+        ],
+        limit=_MAX_CONCURRENT_FETCHES,
+    )
 
     # ── Sequential DB writes ─────────────────────────────────────────
     updated = 0

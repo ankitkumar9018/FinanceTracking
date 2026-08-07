@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import io
 import logging
-from datetime import date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +13,8 @@ from app.models.dividend import Dividend
 from app.models.holding import Holding
 from app.models.mutual_fund import MutualFund
 from app.models.tax_record import TaxRecord
+from app.utils.dates import parse_date
+from app.utils.numbers import parse_number
 
 logger = logging.getLogger(__name__)
 
@@ -50,89 +51,11 @@ _TAX_RECORD_COLUMNS = [
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _parse_date(value: object) -> date | None:
-    """Parse a date from string, datetime, or date object."""
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if value is None:
-        return None
-    s = str(value).strip()
-    if not s or s in ("-", "N/A", ""):
-        return None
-    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%b %d, %Y"):
-        try:
-            return datetime.strptime(s, fmt).date()
-        except ValueError:
-            continue
-    return None
-
-
-def _normalize_numeric_str(s: str) -> str:
-    """Normalize a numeric string to a Python-parseable form, handling both
-    US (``1,234.56``) and European (``1.234,56`` / ``1234,56``) conventions.
-
-    Rules:
-    - Both ``.`` and ``,`` present → the *last* one is the decimal separator:
-      ``1.234,56`` (European) → ``1234.56``; ``1,234.56`` (US) → ``1234.56``.
-    - Only ``,`` present → a single trailing group of not-3 digits is treated as
-      a decimal comma (``1234,56`` → ``1234.56``, ``1,5`` → ``1.5``); otherwise
-      commas are thousands separators and dropped (``1,234`` → ``1234``).
-    - Only ``.`` present → multiple dots are thousands separators and dropped
-      (``1.234.567`` → ``1234567``); a single dot stays a US decimal point so
-      existing ``1234.56`` parsing is unaffected.
-    """
-    s = s.strip()
-    has_dot = "." in s
-    has_comma = "," in s
-
-    if has_dot and has_comma:
-        if s.rfind(",") > s.rfind("."):
-            # European: dot = thousands, comma = decimal
-            s = s.replace(".", "").replace(",", ".")
-        else:
-            # US: comma = thousands, dot = decimal
-            s = s.replace(",", "")
-    elif has_comma:
-        parts = s.split(",")
-        # Single comma with a non-3-digit tail → decimal comma; otherwise the
-        # comma(s) are thousands separators and dropped.
-        decimal_comma = len(parts) == 2 and len(parts[1]) != 3
-        s = s.replace(",", ".") if decimal_comma else s.replace(",", "")
-    elif has_dot and s.count(".") > 1:
-        # Multiple dots → thousands separators (European grouping)
-        s = s.replace(".", "")
-
-    return s
-
-
-def _safe_float(value: object) -> float | None:
-    """Convert value to float, return None on failure.
-
-    Strips common currency symbols and understands both US and European
-    number formatting (see ``_normalize_numeric_str``).
-    """
-    if value is None:
-        return None
-    if isinstance(value, int | float):
-        return float(value)
-    try:
-        s = (
-            str(value)
-            .replace("₹", "")
-            .replace("$", "")
-            .replace("€", "")
-            .replace("£", "")
-            .replace("\xa0", "")  # non-breaking space (common thousands sep)
-            .replace(" ", "")
-            .strip()
-        )
-        if not s:
-            return None
-        return float(_normalize_numeric_str(s))
-    except (ValueError, TypeError):
-        return None
+# Date/number parsing now lives in the shared utils (they were ported from
+# this module verbatim); the local names are kept for compatibility with
+# existing imports and call sites.
+_parse_date = parse_date
+_safe_float = parse_number
 
 
 def _parse_bool(value: object) -> bool:
@@ -296,12 +219,29 @@ def parse_csv_dividends(file_bytes: bytes) -> list[dict]:
 async def import_dividends(
     parsed_data: list[dict], portfolio_id: int, db: AsyncSession
 ) -> dict:
-    """Import dividend records, looking up holdings by symbol+exchange."""
+    """Import dividend records, looking up holdings by symbol+exchange.
+
+    Re-importing the same file must not double-count: rows matching an
+    existing dividend on (holding, ex_date, total_amount) are skipped and
+    reported via ``dividends_skipped``.
+    """
     result = await db.execute(
         select(Holding).where(Holding.portfolio_id == portfolio_id)
     )
     holdings = result.scalars().all()
     holding_map = {f"{h.stock_symbol}|{h.exchange}": h for h in holdings}
+
+    # Preload existing dividend fingerprints for this portfolio's holdings so
+    # a re-import of the same CSV skips instead of inserting duplicates.
+    seen: set[tuple[int, object, float]] = set()
+    if holdings:
+        existing = await db.execute(
+            select(Dividend).where(
+                Dividend.holding_id.in_([h.id for h in holdings])
+            )
+        )
+        for d in existing.scalars().all():
+            seen.add((d.holding_id, d.ex_date, round(float(d.total_amount), 4)))
 
     created = 0
     skipped = 0
@@ -313,6 +253,16 @@ async def import_dividends(
             logger.warning("No holding found for %s, skipping dividend", key)
             skipped += 1
             continue
+
+        fingerprint = (
+            holding.id,
+            row["ex_date"],
+            round(float(row["total_amount"]), 4),
+        )
+        if fingerprint in seen:
+            skipped += 1
+            continue
+        seen.add(fingerprint)
 
         div = Dividend(
             holding_id=holding.id,

@@ -235,6 +235,17 @@ def _parse_date_str(s: str | None) -> date | None:
         return None
 
 
+def _round4(value: object) -> float | None:
+    """Round a numeric to 4 decimals for natural-key comparison (Numeric
+    columns store scale-4 values); None stays None."""
+    if value is None:
+        return None
+    try:
+        return round(float(value), 4)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 async def import_portfolio_json(
     data: dict,
     user_id: int,
@@ -242,7 +253,14 @@ async def import_portfolio_json(
 ) -> dict:
     """Import a full portfolio from a JSON backup.
 
-    Creates a new portfolio with " (Imported)" suffix.
+    Creates a new portfolio with " (Imported)" suffix. Portfolio-scoped data
+    (holdings, transactions, dividends, mutual funds, F&O) is created fresh
+    under the new portfolio, but *user-level* data embedded in every backup
+    (goals, assets, tax records) is deduplicated against the user's existing
+    rows by natural key — otherwise restoring (or restoring twice) multiplies
+    it. Skipped rows are reported via ``goals_skipped`` / ``assets_skipped`` /
+    ``tax_records_skipped``.
+
     Returns a summary dict with counts.
     """
     if data.get("format") != "financetracker_backup":
@@ -257,6 +275,7 @@ async def import_portfolio_json(
         "holdings": 0, "transactions": 0, "dividends": 0,
         "mutual_funds": 0, "fno_positions": 0,
         "goals": 0, "assets": 0, "tax_records": 0,
+        "goals_skipped": 0, "assets_skipped": 0, "tax_records_skipped": 0,
     }
 
     # Create portfolio
@@ -362,8 +381,25 @@ async def import_portfolio_json(
         db.add(fno)
         counts["fno_positions"] += 1
 
-    # Goals (user-level)
+    # ── User-level data: dedup by natural key against existing rows ────
+    # Every per-portfolio backup embeds ALL of the user's goals/assets/tax
+    # records; re-inserting them unconditionally multiplies user-level data
+    # on each restore.
+
+    # Goals (natural key: name + target_amount)
+    existing_goals = (
+        await db.execute(select(Goal).where(Goal.user_id == user_id))
+    ).scalars().all()
+    goal_keys: set[tuple[str, float | None]] = {
+        (g.name, _round4(g.target_amount)) for g in existing_goals
+    }
+
     for g_data in data.get("goals", []):
+        goal_key = (str(g_data["name"]), _round4(g_data["target_amount"]))
+        if goal_key in goal_keys:
+            counts["goals_skipped"] += 1
+            continue
+        goal_keys.add(goal_key)
         goal = Goal(
             user_id=user_id,
             name=g_data["name"],
@@ -378,8 +414,20 @@ async def import_portfolio_json(
         db.add(goal)
         counts["goals"] += 1
 
-    # Assets (user-level)
+    # Assets (natural key: asset_type + name)
+    existing_assets = (
+        await db.execute(select(Asset).where(Asset.user_id == user_id))
+    ).scalars().all()
+    asset_keys: set[tuple[str, str]] = {
+        (a.asset_type, a.name) for a in existing_assets
+    }
+
     for a_data in data.get("assets", []):
+        asset_key = (str(a_data["asset_type"]), str(a_data["name"]))
+        if asset_key in asset_keys:
+            counts["assets_skipped"] += 1
+            continue
+        asset_keys.add(asset_key)
         asset = Asset(
             user_id=user_id,
             asset_type=a_data["asset_type"],
@@ -396,14 +444,42 @@ async def import_portfolio_json(
         db.add(asset)
         counts["assets"] += 1
 
-    # Tax records (user-level)
+    # Tax records (natural key: financial_year + sale_date + purchase_date +
+    # purchase_price + gain_amount — the model has no quantity column, so the
+    # aggregated cost basis stands in for it).
+    existing_tax = (
+        await db.execute(select(TaxRecord).where(TaxRecord.user_id == user_id))
+    ).scalars().all()
+    tax_keys: set[tuple[str, date | None, date, float | None, float | None]] = {
+        (
+            tr.financial_year,
+            tr.sale_date,
+            tr.purchase_date,
+            _round4(tr.purchase_price),
+            _round4(tr.gain_amount),
+        )
+        for tr in existing_tax
+    }
+
     for tr_data in data.get("tax_records", []):
+        purchase_date = _parse_date_str(tr_data["purchase_date"]) or date.today()
+        tax_key = (
+            str(tr_data["financial_year"]),
+            _parse_date_str(tr_data.get("sale_date")),
+            purchase_date,
+            _round4(tr_data["purchase_price"]),
+            _round4(tr_data.get("gain_amount")),
+        )
+        if tax_key in tax_keys:
+            counts["tax_records_skipped"] += 1
+            continue
+        tax_keys.add(tax_key)
         tr = TaxRecord(
             user_id=user_id,
             financial_year=tr_data["financial_year"],
             tax_jurisdiction=tr_data["tax_jurisdiction"],
             gain_type=tr_data["gain_type"],
-            purchase_date=_parse_date_str(tr_data["purchase_date"]) or date.today(),
+            purchase_date=purchase_date,
             sale_date=_parse_date_str(tr_data.get("sale_date")),
             purchase_price=float(tr_data["purchase_price"]),
             sale_price=tr_data.get("sale_price"),

@@ -37,6 +37,9 @@ class ConnectionManager:
 
     def __init__(self) -> None:
         self._connections: dict[WebSocket, ConnectionInfo] = {}
+        # Strong references to in-flight best-effort close tasks so they are
+        # not garbage-collected mid-flight (each removes itself when done).
+        self._close_tasks: set[asyncio.Task] = set()
 
     # -- connection lifecycle ------------------------------------------------
 
@@ -142,6 +145,25 @@ class ConnectionManager:
         for ws, result in zip(targets, results):
             if result is not True:
                 self.disconnect(ws)
+                # Dropping the registry entry alone leaves a zombie: the
+                # client's receive loop keeps running, its subscribes silently
+                # no-op, and it never reconnects. Best-effort close the socket
+                # so the client's reconnect logic fires.
+                task = asyncio.create_task(self._close_quietly(ws))
+                self._close_tasks.add(task)
+                task.add_done_callback(self._close_tasks.discard)
+
+    @staticmethod
+    async def _close_quietly(websocket: WebSocket) -> None:
+        """Best-effort close of a dropped socket (1011 = internal error).
+
+        The socket may already be closed or mid-teardown; any error here is
+        irrelevant because the connection is already out of the registry.
+        """
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            logger.debug("Ignoring error while closing a dropped WebSocket")
 
     @staticmethod
     async def _safe_send(websocket: WebSocket, data: dict) -> bool:

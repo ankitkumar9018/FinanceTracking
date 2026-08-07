@@ -26,6 +26,23 @@ except ImportError:
     logger.info("PyTorch not installed — price prediction disabled")
 
 
+def next_trading_days(start: date, count: int) -> list[date]:
+    """Return the next ``count`` weekdays strictly after ``start``.
+
+    A single cursor advances one calendar day per step and skips Saturdays and
+    Sundays, so every prediction gets its own distinct trading day. (The old
+    per-step ``today + i`` + roll-past-weekend logic collapsed horizons that
+    crossed a weekend onto duplicate Mondays.)
+    """
+    days: list[date] = []
+    cursor = start
+    while len(days) < count:
+        cursor += timedelta(days=1)
+        if cursor.weekday() < 5:
+            days.append(cursor)
+    return days
+
+
 @dataclass
 class PredictionResult:
     symbol: str
@@ -215,6 +232,7 @@ async def predict_prices(
     # Predict future
     last_sequence = torch.FloatTensor(x[-1:])
     predictions = []
+    pred_dates = next_trading_days(date.today(), days_ahead)
 
     with torch.no_grad():
         current_seq = last_sequence.clone()
@@ -223,14 +241,9 @@ async def predict_prices(
             # Denormalize
             pred_price = pred_normalized * ranges[3] + mins[3]
 
-            pred_date = date.today() + timedelta(days=i + 1)
-            # Skip weekends
-            while pred_date.weekday() >= 5:
-                pred_date += timedelta(days=1)
-
             predictions.append(
                 {
-                    "date": pred_date.isoformat(),
+                    "date": pred_dates[i].isoformat(),
                     "predicted_price": round(pred_price, 2),
                     "confidence": max(0.0, min(1.0, r_squared - (i * 0.05))),
                 }

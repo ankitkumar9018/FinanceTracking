@@ -48,6 +48,12 @@ class Settings(BaseSettings):
 
     # ── Redis (optional) ─────────────────────────────────────────────────
     redis_url: str = "redis://localhost:6379"
+    # Opt-in Celery mode (env USE_CELERY). When False (the default) background
+    # jobs always run on in-process APScheduler — the mode every standard
+    # deployment (desktop sidecar, run.sh, uvicorn) uses. Set True ONLY when
+    # you actually run `celery worker` + `celery beat` yourself; a merely
+    # reachable Redis is NOT evidence a worker exists (see tasks/scheduler.py).
+    use_celery: bool = False
 
     # ── Notifications ────────────────────────────────────────────────────
     # Email (SendGrid)
@@ -71,6 +77,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4"
     anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-4-20250514"
     google_api_key: str = ""
 
     # ── Broker API Keys ─────────────────────────────────────────────────

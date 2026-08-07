@@ -8,23 +8,18 @@ from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
-
-try:
-    import pandas_ta as ta  # noqa: F401
-
-    HAS_PANDAS_TA = True
-except ImportError:
-    HAS_PANDAS_TA = False
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ml.common import (
+    TRADING_DAYS_PER_YEAR,
+    max_drawdown_from_returns,
+    sharpe,
+)
+from app.ml.technical_indicators import calculate_rsi
 from app.models.price_history import PriceHistory
 
 logger = logging.getLogger(__name__)
-
-TRADING_DAYS_PER_YEAR = 252
-RISK_FREE_RATE_ANNUAL = 0.07
 
 
 # ---------------------------------------------------------------------------
@@ -72,18 +67,11 @@ def rsi_strategy(
 
     if "rsi_14" in prices_df.columns:
         rsi = prices_df["rsi_14"]
-    elif HAS_PANDAS_TA and "close" in prices_df.columns:
-        rsi = prices_df.ta.rsi(length=14)
     else:
-        # Fallback: compute RSI manually
-        delta = prices_df["close"].diff()
-        gain = delta.where(delta > 0, 0.0).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0.0)).rolling(window=14).mean()
-        rs = gain / loss.replace(0, np.nan)
-        rsi = 100 - (100 / (1 + rs))
-
-    if rsi is None:
-        return signals
+        # Same Wilder-smoothed RSI (with all-gain/all-loss edge handling) as
+        # everywhere else in the app — the old local rolling-SMA fallback
+        # diverged from technical_indicators.calculate_rsi.
+        rsi = calculate_rsi(prices_df["close"], period=14)
 
     signals[rsi < buy_threshold] = 1
     signals[rsi > sell_threshold] = -1
@@ -202,21 +190,15 @@ def _compute_backtest_metrics(
     else:
         annualized = 0.0
 
-    # Sharpe ratio from daily returns
+    # Sharpe + max drawdown from daily returns (shared app.ml.common helpers;
+    # the wealth path in max_drawdown_from_returns includes the implicit
+    # starting point, matching a peak/trough sweep over the raw equity curve)
     equity_series = pd.Series(equity_curve)
     daily_returns = equity_series.pct_change().dropna()
-    sharpe = None
-    if len(daily_returns) > 1 and daily_returns.std() > 0:
-        daily_rf = (1 + RISK_FREE_RATE_ANNUAL) ** (1 / TRADING_DAYS_PER_YEAR) - 1
-        excess = daily_returns - daily_rf
-        sharpe = float(
-            excess.mean() / excess.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
-        )
+    sharpe_val = sharpe(daily_returns)
 
-    # Max drawdown
-    peak = equity_series.cummax()
-    drawdown = (equity_series - peak) / peak
-    max_drawdown = float(drawdown.min()) * 100 if len(drawdown) > 0 else 0.0
+    max_dd, _ = max_drawdown_from_returns(daily_returns)
+    max_drawdown = max_dd * 100 if max_dd is not None else 0.0
 
     # Win rate — count round-trips, not individual legs. A buy and its
     # matching sell are ONE trade; only the closing (sell) leg carries pnl, so
@@ -230,7 +212,7 @@ def _compute_backtest_metrics(
     return BacktestResult(
         total_return=round(total_return, 2),
         annualized_return=round(annualized, 2),
-        sharpe_ratio=round(sharpe, 4) if sharpe is not None else None,
+        sharpe_ratio=round(sharpe_val, 4) if sharpe_val is not None else None,
         max_drawdown=round(max_drawdown, 2),
         total_trades=total_trades,
         win_rate=round(win_rate, 2),

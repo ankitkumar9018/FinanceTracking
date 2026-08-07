@@ -87,10 +87,15 @@ async def connect_broker(
     encrypted_access_token = _encrypt(access_token) if access_token else None
 
     if existing:
-        # Update existing connection
+        # Update existing connection. Only overwrite the stored access token
+        # when this connect actually produced one: a step-1 (login-URL) connect
+        # returns access_token=None, and unconditionally assigning it would
+        # wipe a working stored token just because the user clicked Connect
+        # again.
         existing.encrypted_api_key = encrypted_key
         existing.encrypted_api_secret = encrypted_secret
-        existing.access_token_encrypted = encrypted_access_token
+        if encrypted_access_token is not None:
+            existing.access_token_encrypted = encrypted_access_token
         existing.is_active = True
         await db.flush()
         await db.refresh(existing)
@@ -307,6 +312,9 @@ async def get_connection_status(
             adapter = await _establish_adapter(connection)
             is_connected = adapter.is_connected()
         except Exception:
+            # Includes the "Broker session expired" ValueError raised when the
+            # broker rejects the stored token: the status must honestly report
+            # is_connected=False instead of claiming a live session.
             logger.debug(
                 "Connection health check failed for id=%d", connection_id, exc_info=True
             )
@@ -329,23 +337,28 @@ async def _establish_adapter(connection: BrokerConnection) -> BrokerAdapter:
 
     Decrypts the stored credentials and, when an access token is present,
     re-injects it via ``adapter.restore_session`` so ``is_connected()`` becomes
-    ``True`` and data calls (``get_holdings`` etc.) work — the previous code
-    only re-ran ``connect()`` without the token, leaving the adapter
-    unauthenticated. Falls back to a plain ``connect()`` when no token is
-    stored or the adapter doesn't support token restore.
+    ``True`` and data calls (``get_holdings`` etc.) work.
+
+    When a token IS stored but ``restore_session`` reports failure, the broker
+    rejected it (Zerodha tokens expire daily) — raise ``ValueError`` so routes
+    surface a clear 400 "session expired" instead of a raw 500, and so
+    ``get_connection_status`` reports ``is_connected=False``. A plain
+    ``connect()`` fallback would be useless here anyway: without a fresh OAuth
+    ``request_token`` it only returns a login URL, never an authenticated
+    session. Falls back to ``connect()`` only when no token is stored at all.
     """
     api_key = _decrypt(connection.encrypted_api_key)
     api_secret = _decrypt(connection.encrypted_api_secret)
     adapter = get_broker(connection.broker_name)
 
-    restored = False
     if connection.access_token_encrypted:
         access_token = _decrypt(connection.access_token_encrypted)
         restored = await adapter.restore_session(api_key, api_secret, access_token)
+        if not restored:
+            raise ValueError("Broker session expired — please reconnect")
+        return adapter
 
-    if not restored:
-        await adapter.connect(api_key, api_secret)
-
+    await adapter.connect(api_key, api_secret)
     return adapter
 
 

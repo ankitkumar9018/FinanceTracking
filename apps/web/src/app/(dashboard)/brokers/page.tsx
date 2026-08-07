@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useState } from "react";
 import {
   Link2,
   Plus,
@@ -16,6 +16,8 @@ import {
   Unplug,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api-client";
+import { useApiData } from "@/hooks/use-api-data";
+import { ErrorState } from "@/components/shared/error-state";
 import toast from "react-hot-toast";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -45,9 +47,18 @@ interface ConnectedBroker {
 /* ------------------------------------------------------------------ */
 
 export default function BrokersPage() {
-  const [available, setAvailable] = useState<AvailableBroker[]>([]);
-  const [connected, setConnected] = useState<ConnectedBroker[]>([]);
-  const [loading, setLoading] = useState(true);
+  // A failed load now surfaces as a real error state instead of a fake
+  // "no brokers available" empty state.
+  const availableApi = useApiData<AvailableBroker[]>("/broker/available");
+  const connectedApi = useApiData<ConnectedBroker[]>("/broker");
+  const available = availableApi.data ?? [];
+  const connected = connectedApi.data ?? [];
+  const loading = availableApi.loading || connectedApi.loading;
+  const loadError = availableApi.error || connectedApi.error;
+  const reloadAll = () => {
+    availableApi.reload();
+    connectedApi.reload();
+  };
   const [syncing, setSyncing] = useState<number | null>(null);
   const [disconnecting, setDisconnecting] = useState<number | null>(null);
 
@@ -62,26 +73,6 @@ export default function BrokersPage() {
   /* Step-2 OAuth state: set when the broker returns a login_url */
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
   const [requestToken, setRequestToken] = useState("");
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [avail, conn] = await Promise.all([
-        api.get<AvailableBroker[]>("/broker/available"),
-        api.get<ConnectedBroker[]>("/broker"),
-      ]);
-      setAvailable(avail);
-      setConnected(conn);
-    } catch (err) {
-      console.error("Failed to load broker data:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
 
   /* ---- Connect broker ---- */
   function openConnectForm(broker: AvailableBroker) {
@@ -136,7 +127,7 @@ export default function BrokersPage() {
       }
       toast.success(`${connectBroker.display_name || connectBroker.name} connected`);
       closeConnectForm();
-      await loadData();
+      reloadAll();
     } catch (err: unknown) {
       handleConnectError(err);
     } finally {
@@ -158,7 +149,7 @@ export default function BrokersPage() {
       });
       toast.success(`${connectBroker.display_name || connectBroker.name} connected`);
       closeConnectForm();
-      await loadData();
+      reloadAll();
     } catch (err: unknown) {
       handleConnectError(err);
     } finally {
@@ -171,7 +162,7 @@ export default function BrokersPage() {
     setSyncing(brokerId);
     try {
       await api.post(`/broker/${brokerId}/sync`);
-      await loadData();
+      connectedApi.reload();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to sync broker");
     } finally {
@@ -184,7 +175,7 @@ export default function BrokersPage() {
     setDisconnecting(brokerId);
     try {
       await api.delete(`/broker/${brokerId}`);
-      setConnected((prev) => prev.filter((b) => b.id !== brokerId));
+      connectedApi.reload();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to disconnect broker");
     } finally {
@@ -306,6 +297,8 @@ export default function BrokersPage() {
               />
             ))}
           </div>
+        ) : loadError ? (
+          <ErrorState message={loadError} onRetry={reloadAll} />
         ) : available.length === 0 ? (
           <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-[hsl(var(--border))] py-16">
             <Link2 className="h-12 w-12 text-[hsl(var(--muted-foreground))]/30" />

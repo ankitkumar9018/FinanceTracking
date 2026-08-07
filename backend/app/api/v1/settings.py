@@ -158,10 +158,11 @@ async def test_email(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="sendgrid package not installed",
         )
-    except Exception as exc:
+    except Exception:
+        logger.exception("Test email send failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to send test email: {exc}",
+            detail="Failed to send test email",
         )
 
 
@@ -210,10 +211,11 @@ async def test_telegram(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="httpx package not installed",
         )
-    except Exception as exc:
+    except Exception:
+        logger.exception("Test Telegram send failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to send Telegram message: {exc}",
+            detail="Failed to send Telegram message",
         )
 
 
@@ -260,10 +262,11 @@ async def test_llm(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="httpx package not installed",
             )
-        except Exception as exc:
+        except Exception:
+            logger.exception("Ollama connection test failed")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Ollama connection failed: {exc}",
+                detail="Ollama connection failed",
             )
 
     elif provider == "openai":

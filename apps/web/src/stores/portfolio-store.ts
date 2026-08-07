@@ -52,8 +52,15 @@ interface PortfolioState {
   updateHoldingPrice: (symbol: string, price: number) => void;
 }
 
-// In-flight guard so concurrent callers (layout + pages) don't duplicate the request
-let portfoliosFetchInFlight = false;
+// In-flight promise cache so concurrent callers (layout + pages) don't
+// duplicate the request AND `await fetchPortfolios()` genuinely waits for
+// the fetch that is already running.
+let portfoliosFetchPromise: Promise<void> | null = null;
+
+// Monotonic sequence for fetchHoldings: only the latest request may commit its
+// result, so a slow response for a previously-selected portfolio can never
+// overwrite the holdings of the currently-selected one.
+let holdingsFetchSeq = 0;
 
 export const usePortfolioStore = create<PortfolioState>((set, get) => ({
   portfolios: [],
@@ -63,34 +70,36 @@ export const usePortfolioStore = create<PortfolioState>((set, get) => ({
   hasLoadedPortfolios: false,
   error: null,
 
-  fetchPortfolios: async () => {
-    if (portfoliosFetchInFlight) return;
-    portfoliosFetchInFlight = true;
-    set({ isLoading: true, error: null });
-    try {
-      const data = await api.get<Portfolio[]>("/portfolios");
-      const currentActive = get().activePortfolioId;
-      const defaultPortfolio = data.find((p) => p.is_default) || data[0];
-      // Preserve user's selection if they already picked a portfolio
-      const targetId = currentActive ?? defaultPortfolio?.id ?? null;
-      set({
-        portfolios: data,
-        activePortfolioId: targetId,
-        isLoading: false,
-        hasLoadedPortfolios: true,
-      });
-      if (targetId && targetId !== currentActive) {
-        get().fetchHoldings(targetId);
+  fetchPortfolios: () => {
+    if (portfoliosFetchPromise) return portfoliosFetchPromise;
+    portfoliosFetchPromise = (async () => {
+      set({ isLoading: true, error: null });
+      try {
+        const data = await api.get<Portfolio[]>("/portfolios");
+        const currentActive = get().activePortfolioId;
+        const defaultPortfolio = data.find((p) => p.is_default) || data[0];
+        // Preserve user's selection if they already picked a portfolio
+        const targetId = currentActive ?? defaultPortfolio?.id ?? null;
+        set({
+          portfolios: data,
+          activePortfolioId: targetId,
+          isLoading: false,
+          hasLoadedPortfolios: true,
+        });
+        if (targetId && targetId !== currentActive) {
+          get().fetchHoldings(targetId);
+        }
+      } catch (err: unknown) {
+        set({
+          error: err instanceof Error ? err.message : "Failed to fetch portfolios",
+          isLoading: false,
+          hasLoadedPortfolios: true,
+        });
+      } finally {
+        portfoliosFetchPromise = null;
       }
-    } catch (err: unknown) {
-      set({
-        error: err instanceof Error ? err.message : "Failed to fetch portfolios",
-        isLoading: false,
-        hasLoadedPortfolios: true,
-      });
-    } finally {
-      portfoliosFetchInFlight = false;
-    }
+    })();
+    return portfoliosFetchPromise;
   },
 
   setActivePortfolio: (id) => {
@@ -99,11 +108,16 @@ export const usePortfolioStore = create<PortfolioState>((set, get) => ({
   },
 
   fetchHoldings: async (portfolioId) => {
+    const seq = ++holdingsFetchSeq;
     set({ isLoading: true, error: null });
     try {
       const data = await api.get<{ holdings: Holding[] }>(`/portfolios/${portfolioId}/summary`);
+      // Bail if a newer fetch started or the user switched portfolios while
+      // this response was in flight — last-started wins, not last-landed.
+      if (seq !== holdingsFetchSeq || portfolioId !== get().activePortfolioId) return;
       set({ holdings: data.holdings || [], isLoading: false });
     } catch (err: unknown) {
+      if (seq !== holdingsFetchSeq || portfolioId !== get().activePortfolioId) return;
       set({ error: err instanceof Error ? err.message : "Failed to fetch holdings", isLoading: false });
     }
   },

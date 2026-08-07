@@ -7,6 +7,7 @@ clear error telling the user to install it.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from datetime import datetime
@@ -107,18 +108,30 @@ class ICICIDirectBroker(BrokerAdapter):
     ) -> bool:
         """Rebuild the Breeze client from a stored session token.
 
-        Re-generates the Breeze session using the persisted ``session_token``
-        so ``is_connected()`` becomes ``True`` again without another interactive
-        login. Returns ``False`` if the SDK is unavailable or no token was
-        supplied, telling the caller to fall back to ``connect()``.
+        No separate validation call is needed here: Breeze's
+        ``generate_session`` itself hits the authenticated customer-details
+        endpoint, so a dead/expired ``session_token`` surfaces as an exception
+        from this very call — which we translate to ``False`` (broad
+        ``Exception`` on purpose: the optional SDK's exception types can't be
+        imported when it isn't installed). Returns ``False`` if the SDK is
+        unavailable, no token was supplied, or the token was rejected.
         """
         if not _BREEZE_AVAILABLE or not access_token:
             return False
-        self._breeze = BreezeConnect(api_key=api_key)
-        self._breeze.generate_session(
-            api_secret=api_secret,
-            session_token=access_token,
-        )
+        breeze = BreezeConnect(api_key=api_key)
+        try:
+            await asyncio.to_thread(
+                breeze.generate_session,
+                api_secret=api_secret,
+                session_token=access_token,
+            )
+        except Exception:
+            logger.info(
+                "ICICI Direct stored token rejected for api_key=%s — session expired",
+                api_key[:6],
+            )
+            return False
+        self._breeze = breeze
         self._session_token = access_token
         logger.info("ICICI Direct session restored for api_key=%s", api_key[:6])
         return True

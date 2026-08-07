@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
 import { CalendarDays, TrendingUp, TrendingDown, ArrowUpRight, Clock, CheckCircle2, RefreshCw } from "lucide-react";
 import { motion } from "framer-motion";
-import { api } from "@/lib/api-client";
+import { useApiData } from "@/hooks/use-api-data";
 
 type IpoStatus = "upcoming" | "open" | "listed";
 
@@ -25,27 +25,12 @@ interface Ipo {
 
 export default function IpoPage() {
   const [tab, setTab] = useState<IpoStatus>("upcoming");
-  const [ipos, setIpos] = useState<Ipo[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchIpos = useCallback(async (status: IpoStatus) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await api.get<{ ipos: Ipo[]; count: number }>(`/ipo?status=${status}`);
-      setIpos(res.ipos || []);
-    } catch {
-      setError("Failed to load IPO data");
-      setIpos([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchIpos(tab);
-  }, [tab, fetchIpos]);
+  // useApiData carries the stale-response guard, so a slow response for a
+  // previously-selected tab can never overwrite the current tab's data.
+  const { data, loading, error, reload } = useApiData<{ ipos: Ipo[]; count: number }>(
+    `/ipo?status=${tab}`
+  );
+  const ipos = data?.ipos ?? [];
 
   return (
     <div className="space-y-6">
@@ -53,7 +38,7 @@ export default function IpoPage() {
         <div className="flex items-center gap-2">
           <h1 className="text-2xl font-bold tracking-tight">IPO Tracker</h1>
           <button
-            onClick={() => fetchIpos(tab)}
+            onClick={reload}
             className="rounded-md p-1.5 hover:bg-[hsl(var(--accent))] transition-colors"
             title="Refresh"
           >
@@ -95,7 +80,7 @@ export default function IpoPage() {
         <div className="flex flex-col items-center justify-center py-16">
           <p className="text-sm text-[hsl(var(--destructive))]">{error}</p>
           <button
-            onClick={() => fetchIpos(tab)}
+            onClick={reload}
             className="mt-2 text-xs text-[hsl(var(--muted-foreground))] underline"
           >
             Retry

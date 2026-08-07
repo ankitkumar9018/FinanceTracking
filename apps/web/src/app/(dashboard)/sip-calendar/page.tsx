@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { usePortfolioStore } from "@/stores/portfolio-store";
-import { api } from "@/lib/api-client";
+import { useApiData } from "@/hooks/use-api-data";
 import { formatCurrency } from "@/lib/utils";
 import { ChevronLeft, ChevronRight, CalendarRange } from "lucide-react";
 import { motion } from "framer-motion";
@@ -46,39 +46,21 @@ export default function SipCalendarPage() {
   const now = new Date();
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [year, setYear] = useState(now.getFullYear());
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!activePortfolioId) return;
-    // Guard against a slow earlier response overwriting newer month/portfolio data.
-    let active = true;
-    loadCalendar(() => active);
-    return () => {
-      active = false;
-    };
-  }, [activePortfolioId, month, year]);
-
-  async function loadCalendar(isActive: () => boolean = () => true) {
-    if (!activePortfolioId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.get<CalendarData>(
-        `/analytics/calendar/${activePortfolioId}?month=${month}&year=${year}`
-      );
-      if (!isActive()) return;
-      setEvents(data.events || []);
-    } catch (err) {
-      if (!isActive()) return;
-      setEvents([]);
-      setError(err instanceof Error ? err.message : "Failed to load calendar data");
-    } finally {
-      if (isActive()) setLoading(false);
-    }
-  }
+  // useApiData carries the stale-response guard, so a slow response for a
+  // previous month/portfolio can never overwrite the current view.
+  const {
+    data: calendarData,
+    loading,
+    error,
+    reload: loadCalendar,
+  } = useApiData<CalendarData>(
+    activePortfolioId
+      ? `/analytics/calendar/${activePortfolioId}?month=${month}&year=${year}`
+      : null
+  );
+  const events = calendarData?.events ?? [];
 
   function navigateMonth(direction: -1 | 1) {
     let newMonth = month + direction;

@@ -7,6 +7,7 @@ clear error telling the user to install it.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from datetime import datetime
@@ -103,15 +104,28 @@ class ZerodhaBroker(BrokerAdapter):
     ) -> bool:
         """Rebuild the Kite client from a stored access token.
 
-        Re-injects the persisted access token via ``kite.set_access_token`` so
-        ``is_connected()`` becomes ``True`` again without a fresh OAuth
-        round-trip. Returns ``False`` if the SDK is unavailable or no token was
-        supplied, telling the caller to fall back to ``connect()``.
+        Re-injects the persisted access token via ``kite.set_access_token``,
+        then validates it with ONE cheap authenticated call
+        (``kite.profile()``) — Zerodha access tokens expire daily, and merely
+        injecting a dead token would report a healthy connection and blow up
+        with a raw 500 on the first data call. Returns ``False`` if the SDK is
+        unavailable, no token was supplied, or the token fails validation.
         """
         if not _KITE_AVAILABLE or not access_token:
             return False
-        self._kite = KiteConnect(api_key=api_key)
-        self._kite.set_access_token(access_token)
+        kite = KiteConnect(api_key=api_key)
+        kite.set_access_token(access_token)
+        try:
+            # Broad Exception on purpose: kiteconnect's exceptions module is
+            # part of the optional SDK, so we can't import a narrower type.
+            await asyncio.to_thread(kite.profile)
+        except Exception:
+            logger.info(
+                "Zerodha stored token rejected for api_key=%s — session expired",
+                api_key[:6],
+            )
+            return False
+        self._kite = kite
         self._access_token = access_token
         logger.info("Zerodha session restored for api_key=%s", api_key[:6])
         return True

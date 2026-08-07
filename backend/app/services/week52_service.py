@@ -10,7 +10,6 @@ and computes:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 import yfinance as yf
@@ -19,8 +18,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.holding import Holding
 from app.services.market_data_service import _safe_float, _ticker_symbol
+from app.utils.concurrency import bounded_thread_map
 
 logger = logging.getLogger(__name__)
+
+# Cap concurrent yfinance calls; the per-fetch timeout starts only after a
+# semaphore slot is acquired (see bounded_thread_map), so queued fetches are
+# not spuriously timed out behind a full pool.
+_MAX_CONCURRENCY = 8
+_FETCH_TIMEOUT = 10.0
 
 
 def _sync_fetch_52week(ticker_str: str) -> tuple[float | None, float | None, float | None]:
@@ -87,15 +93,13 @@ async def get_52week_proximity(
 
     proximity_data: list[dict] = []
 
-    # ── Parallel fetch: all 52-week data concurrently ────────────────
-    fetch_tasks = [
-        asyncio.wait_for(
-            asyncio.to_thread(_sync_fetch_52week, _ticker_symbol(h.stock_symbol, h.exchange)),
-            timeout=10.0,
-        )
-        for h in holdings
-    ]
-    fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+    # ── Parallel fetch: bounded 52-week data (failures become None) ──
+    fetch_results = await bounded_thread_map(
+        _sync_fetch_52week,
+        [_ticker_symbol(h.stock_symbol, h.exchange) for h in holdings],
+        limit=_MAX_CONCURRENCY,
+        timeout=_FETCH_TIMEOUT,
+    )
 
     for h, fetch_result in zip(holdings, fetch_results):
         current_price = (
@@ -105,7 +109,7 @@ async def get_52week_proximity(
         week52_high: float | None = None
         week52_low: float | None = None
 
-        if isinstance(fetch_result, BaseException):
+        if fetch_result is None:
             logger.warning("yfinance 52-week fetch failed for %s", h.stock_symbol)
         else:
             w_high, w_low, price_fallback = fetch_result
