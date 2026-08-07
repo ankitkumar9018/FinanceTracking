@@ -12,6 +12,10 @@ NC='\033[0m'
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_DIR="$PROJECT_DIR/.pids"
 
+# Shared helpers: stop_by_pidfile (TERM, grace, KILL fallback, rm pidfile)
+# (this script lives in scripts/, next to the library)
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
 echo -e "${BLUE}Stopping FinanceTracker services...${NC}"
 
 stop_service() {
@@ -19,16 +23,12 @@ stop_service() {
     local pid_file="$PID_DIR/$name.pid"
     if [ -f "$pid_file" ]; then
         local pid
-        pid=$(cat "$pid_file")
-        if kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null
-            sleep 1
-            kill -9 "$pid" 2>/dev/null || true
+        pid=$(cat "$pid_file" 2>/dev/null)
+        if stop_by_pidfile "$pid_file" 1; then
             echo -e "  ${GREEN}✓${NC} Stopped $name (PID $pid)"
         else
             echo -e "  ${GREEN}✓${NC} $name was not running"
         fi
-        rm -f "$pid_file"
     fi
 }
 

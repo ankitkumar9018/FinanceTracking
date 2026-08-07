@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.database import get_db
 from app.models.user import User
-from app.models.user_preferences import UserPreferences
+from app.services.preferences_service import get_or_create_preferences
 
 router = APIRouter()
 
@@ -47,7 +46,7 @@ async def list_columns(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """List all available columns (built-in + custom) and current display order."""
-    prefs = await _get_or_create_prefs(user.id, db)
+    prefs = await get_or_create_preferences(user.id, db)
     custom_columns = prefs.custom_columns or []
     column_order = prefs.column_order or [c["name"] for c in BUILT_IN_COLUMNS]
 
@@ -72,7 +71,7 @@ async def create_custom_column(
             400, detail=f"Column name '{body.name}' conflicts with a built-in column"
         )
 
-    prefs = await _get_or_create_prefs(user.id, db)
+    prefs = await get_or_create_preferences(user.id, db)
     custom = list(prefs.custom_columns or [])
 
     if any(c["name"] == body.name for c in custom):
@@ -98,7 +97,7 @@ async def delete_custom_column(
     db: AsyncSession = Depends(get_db),
 ):
     """Remove a custom column."""
-    prefs = await _get_or_create_prefs(user.id, db)
+    prefs = await get_or_create_preferences(user.id, db)
     custom = list(prefs.custom_columns or [])
 
     original_len = len(custom)
@@ -121,20 +120,7 @@ async def update_column_order(
     db: AsyncSession = Depends(get_db),
 ):
     """Update the display order of columns."""
-    prefs = await _get_or_create_prefs(user.id, db)
+    prefs = await get_or_create_preferences(user.id, db)
     prefs.column_order = body.column_order
     await db.flush()
     return {"column_order": body.column_order}
-
-
-async def _get_or_create_prefs(user_id: int, db: AsyncSession) -> UserPreferences:
-    """Get or create UserPreferences record."""
-    result = await db.execute(
-        select(UserPreferences).where(UserPreferences.user_id == user_id)
-    )
-    prefs = result.scalar_one_or_none()
-    if prefs is None:
-        prefs = UserPreferences(user_id=user_id)
-        db.add(prefs)
-        await db.flush()
-    return prefs

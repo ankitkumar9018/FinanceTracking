@@ -2,8 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ChevronDown, FileText, Database, FileJson, Landmark, Banknote, Receipt } from "lucide-react";
-import { api } from "@/lib/api-client";
-import { getApiBaseAsync } from "@/lib/tauri-port";
+import { api, download } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
@@ -201,18 +200,8 @@ export default function ImportPage() {
     const endpoint = getTemplateEndpoint(dataType);
     if (!endpoint) return;
     try {
-      const apiBase = await getApiBaseAsync();
-      const res = await fetch(`${apiBase}${endpoint}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("ft-access-token") || ""}` },
-      });
-      if (!res.ok) throw new Error("Download failed");
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${dataType}_template.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      // Shared helper: authenticated fetch with refresh-on-401, then blob download.
+      await download(endpoint, `${dataType}_template.csv`);
     } catch {
       setError("Failed to download template");
       setStatus("error");

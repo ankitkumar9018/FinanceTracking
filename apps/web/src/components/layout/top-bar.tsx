@@ -4,10 +4,11 @@ import { useAuthStore } from "@/stores/auth-store";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { useTheme } from "@/components/providers/theme-provider";
 import { api, ApiError } from "@/lib/api-client";
-import { Menu, Moon, Sun, RefreshCw, LogOut, User, Plus, X, Loader2 } from "lucide-react";
+import { Menu, Moon, Sun, RefreshCw, LogOut, User, Plus, Loader2 } from "lucide-react";
 import { NotificationCenter } from "@/components/layout/notification-center";
-import { motion, AnimatePresence } from "framer-motion";
-import { useState, useEffect } from "react";
+import { Modal } from "@/components/shared/modal";
+import { useDisplayCurrency } from "@/hooks/use-display-currency";
+import { useState } from "react";
 import toast from "react-hot-toast";
 
 interface NewPortfolioForm {
@@ -22,12 +23,6 @@ const EMPTY_PORTFOLIO_FORM: NewPortfolioForm = {
   is_default: false,
 };
 
-// Global "display currency" — an opt-in, client-side preference used to show
-// converted totals across pages. Persisted in localStorage; changes are
-// broadcast via a custom event so already-mounted pages can react in-tab
-// (the native `storage` event only fires in *other* tabs).
-const DISPLAY_CURRENCY_KEY = "ft-display-currency";
-const DISPLAY_CURRENCY_EVENT = "ft-display-currency-change";
 const DISPLAY_CURRENCIES = ["INR", "EUR", "USD"] as const;
 
 interface TopBarProps {
@@ -46,24 +41,9 @@ export function TopBar({ onMenuClick }: TopBarProps) {
 
   // Stored display-currency override (null until the user picks one). The
   // effective selection falls back to the user's preferred currency, then INR.
-  const [displayCurrency, setDisplayCurrency] = useState<string | null>(null);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    setDisplayCurrency(localStorage.getItem(DISPLAY_CURRENCY_KEY));
-    const sync = () => setDisplayCurrency(localStorage.getItem(DISPLAY_CURRENCY_KEY));
-    window.addEventListener("storage", sync);
-    return () => window.removeEventListener("storage", sync);
-  }, []);
+  const [displayCurrency, setDisplayCurrency] = useDisplayCurrency();
 
   const effectiveCurrency = displayCurrency ?? user?.preferred_currency ?? "INR";
-
-  function handleDisplayCurrencyChange(next: string) {
-    setDisplayCurrency(next);
-    if (typeof window !== "undefined") {
-      localStorage.setItem(DISPLAY_CURRENCY_KEY, next);
-      window.dispatchEvent(new CustomEvent(DISPLAY_CURRENCY_EVENT, { detail: next }));
-    }
-  }
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -134,7 +114,7 @@ export function TopBar({ onMenuClick }: TopBarProps) {
 
         <select
           value={effectiveCurrency}
-          onChange={(e) => handleDisplayCurrencyChange(e.target.value)}
+          onChange={(e) => setDisplayCurrency(e.target.value)}
           aria-label="Select display currency"
           title="Display currency — convert totals for viewing"
           className="shrink-0 rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
@@ -202,101 +182,77 @@ export function TopBar({ onMenuClick }: TopBarProps) {
       </div>
 
       {/* Create Portfolio Modal */}
-      <AnimatePresence>
-        {showCreateModal && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-            onClick={() => setShowCreateModal(false)}
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-sm rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-xl"
-              onClick={(e) => e.stopPropagation()}
+      <Modal
+        open={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        title="New Portfolio"
+        maxWidth="max-w-sm"
+      >
+        <form onSubmit={handleCreatePortfolio} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Name *</label>
+            <input
+              type="text"
+              required
+              autoFocus
+              placeholder="e.g., India Long Term"
+              value={createForm.name}
+              onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+              className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Currency</label>
+            <select
+              value={createForm.currency}
+              onChange={(e) => setCreateForm({ ...createForm, currency: e.target.value })}
+              className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
             >
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-bold">New Portfolio</h2>
-                <button
-                  onClick={() => setShowCreateModal(false)}
-                  aria-label="Close dialog"
-                  className="rounded-md p-1 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
+              <option value="INR">INR (₹)</option>
+              <option value="EUR">EUR (€)</option>
+              <option value="USD">USD ($)</option>
+            </select>
+          </div>
 
-              <form onSubmit={handleCreatePortfolio} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Name *</label>
-                  <input
-                    type="text"
-                    required
-                    autoFocus
-                    placeholder="e.g., India Long Term"
-                    value={createForm.name}
-                    onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
-                    className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
-                  />
-                </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={createForm.is_default}
+              onChange={(e) => setCreateForm({ ...createForm, is_default: e.target.checked })}
+              className="h-4 w-4 rounded border-[hsl(var(--input))] accent-[hsl(var(--primary))]"
+            />
+            Set as default portfolio
+          </label>
 
-                <div>
-                  <label className="block text-sm font-medium mb-1">Currency</label>
-                  <select
-                    value={createForm.currency}
-                    onChange={(e) => setCreateForm({ ...createForm, currency: e.target.value })}
-                    className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
-                  >
-                    <option value="INR">INR (₹)</option>
-                    <option value="EUR">EUR (€)</option>
-                    <option value="USD">USD ($)</option>
-                  </select>
-                </div>
-
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={createForm.is_default}
-                    onChange={(e) => setCreateForm({ ...createForm, is_default: e.target.checked })}
-                    className="h-4 w-4 rounded border-[hsl(var(--input))] accent-[hsl(var(--primary))]"
-                  />
-                  Set as default portfolio
-                </label>
-
-                <div className="flex justify-end gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowCreateModal(false)}
-                    className="rounded-md border border-[hsl(var(--border))] px-4 py-2 text-sm font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={creating}
-                    className="inline-flex items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 transition-colors disabled:opacity-50"
-                  >
-                    {creating ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Creating...
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="h-4 w-4" />
-                        Create
-                      </>
-                    )}
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          <div className="flex justify-end gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setShowCreateModal(false)}
+              className="rounded-md border border-[hsl(var(--border))] px-4 py-2 text-sm font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={creating}
+              className="inline-flex items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 transition-colors disabled:opacity-50"
+            >
+              {creating ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  <Plus className="h-4 w-4" />
+                  Create
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </header>
   );
 }

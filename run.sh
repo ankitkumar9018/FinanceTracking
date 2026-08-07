@@ -18,26 +18,15 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$PROJECT_ROOT/backend"
 LOGS_DIR="$PROJECT_ROOT/logs"
 
+# Shared helpers: find_free_port, wait_for_url, stop_by_pidfile
+# (run.sh lives at the repo root; the library lives in scripts/)
+source "$PROJECT_ROOT/scripts/lib.sh"
+
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "\n${CYAN}▶ $1${NC}"; }
-
-# Pick a free TCP port: try each preferred port in order, else let the OS assign
-# a free ephemeral one. Never grabs a port another app is already listening on.
-find_free_port() {
-    python3 - "$@" <<'PY'
-import socket, sys
-for p in sys.argv[1:]:
-    s = socket.socket()
-    try:
-        s.bind(("127.0.0.1", int(p))); s.close(); print(p); raise SystemExit(0)
-    except OSError:
-        s.close()
-s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()
-PY
-}
 
 # -----------------------------------------------------------------------------
 # STOP function
@@ -45,23 +34,19 @@ PY
 do_stop() {
     echo -e "${YELLOW}Stopping FinanceTracker...${NC}"
 
-    # Kill by PID files
+    # Kill by PID files (stop_by_pidfile: TERM, grace, KILL fallback, rm pidfile)
     if [ -f "$LOGS_DIR/backend.pid" ]; then
         PID=$(cat "$LOGS_DIR/backend.pid")
-        if kill -0 $PID 2>/dev/null; then
-            kill $PID 2>/dev/null
+        if stop_by_pidfile "$LOGS_DIR/backend.pid" 1; then
             log_success "Backend stopped (PID: $PID)"
         fi
-        rm -f "$LOGS_DIR/backend.pid"
     fi
 
     if [ -f "$LOGS_DIR/frontend.pid" ]; then
         PID=$(cat "$LOGS_DIR/frontend.pid")
-        if kill -0 $PID 2>/dev/null; then
-            kill $PID 2>/dev/null
+        if stop_by_pidfile "$LOGS_DIR/frontend.pid" 1; then
             log_success "Frontend stopped (PID: $PID)"
         fi
-        rm -f "$LOGS_DIR/frontend.pid"
     fi
 
     # We only ever stop our OWN processes (via the PID files above) — we never
@@ -208,12 +193,9 @@ do_start() {
     for svc in backend frontend; do
         if [ -f "$LOGS_DIR/$svc.pid" ]; then
             OLDPID=$(cat "$LOGS_DIR/$svc.pid")
-            if kill -0 "$OLDPID" 2>/dev/null; then
-                kill "$OLDPID" 2>/dev/null || true
+            if stop_by_pidfile "$LOGS_DIR/$svc.pid" 1; then
                 log_warn "Stopped previous $svc (PID: $OLDPID)"
-                sleep 1
             fi
-            rm -f "$LOGS_DIR/$svc.pid"
         fi
     done
     log_success "Ready to start (other apps left untouched)"
@@ -269,7 +251,7 @@ EOF
     # Do NOT hide a failed migration behind the pipe or `|| true`: starting the
     # backend on a broken/partial schema causes confusing runtime errors. Capture
     # alembic's output AND its real exit code, and abort startup on failure.
-    if migration_output=$(uv run alembic upgrade head 2>&1); then
+    if migration_output=$(uv run python -c "from app.__main__ import _run_migrations; _run_migrations()" 2>&1); then
         echo "$migration_output" | grep -E "^(Running|INFO)" | head -3 || true
         log_success "Database ready"
     else
@@ -301,14 +283,11 @@ EOF
     BACKEND_PID=$!
     echo $BACKEND_PID > "$LOGS_DIR/backend.pid"
 
-    for i in {1..40}; do
-        if curl -s "http://localhost:$BACKEND_PORT/health" > /dev/null 2>&1; then
-            log_success "Backend running on port $BACKEND_PORT (PID: $BACKEND_PID)"
-            break
-        fi
-        [ $i -eq 40 ] && log_warn "Backend still starting on port $BACKEND_PORT..."
-        sleep 0.5
-    done
+    if wait_for_url "http://localhost:$BACKEND_PORT/health" 40 0.5; then
+        log_success "Backend running on port $BACKEND_PORT (PID: $BACKEND_PID)"
+    else
+        log_warn "Backend still starting on port $BACKEND_PORT..."
+    fi
 
     # Frontend — on the chosen port; pointed at the backend we just started
     cd "$PROJECT_ROOT"
@@ -320,14 +299,11 @@ EOF
     FRONTEND_PID=$!
     echo $FRONTEND_PID > "$LOGS_DIR/frontend.pid"
 
-    for i in {1..40}; do
-        if curl -s "http://localhost:$FRONTEND_PORT" > /dev/null 2>&1; then
-            log_success "Frontend running on port $FRONTEND_PORT (PID: $FRONTEND_PID)"
-            break
-        fi
-        [ $i -eq 40 ] && log_warn "Frontend still starting on port $FRONTEND_PORT..."
-        sleep 0.5
-    done
+    if wait_for_url "http://localhost:$FRONTEND_PORT" 40 0.5; then
+        log_success "Frontend running on port $FRONTEND_PORT (PID: $FRONTEND_PID)"
+    else
+        log_warn "Frontend still starting on port $FRONTEND_PORT..."
+    fi
 
     # -------------------------------------------------------------------------
     # Step 6: Done!

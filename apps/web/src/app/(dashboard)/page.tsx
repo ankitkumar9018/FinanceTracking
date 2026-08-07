@@ -8,12 +8,9 @@ import { PortfolioTable } from "@/components/dashboard/portfolio-table";
 import { XirrBenchmarkCards } from "@/components/dashboard/xirr-benchmark-cards";
 import { ContextualHelp } from "@/components/shared/contextual-help";
 import { api } from "@/lib/api-client";
+import { useDisplayCurrency } from "@/hooks/use-display-currency";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import toast from "react-hot-toast";
-
-// Keep in sync with the top-bar's display-currency preference.
-const DISPLAY_CURRENCY_KEY = "ft-display-currency";
-const DISPLAY_CURRENCY_EVENT = "ft-display-currency-change";
 
 // Additive convenience fields the summary endpoint returns when a display
 // currency conversion actually applies (native fields are always present too).
@@ -30,25 +27,13 @@ export default function DashboardPage() {
   const { fetchPortfolios, holdings, isLoading, error, activePortfolioId } = usePortfolioStore();
   const { user } = useAuthStore();
 
-  const [displayCurrency, setDisplayCurrency] = useState<string | null>(null);
+  // Chosen display currency (localStorage + in-tab/other-tab events).
+  const [displayCurrency] = useDisplayCurrency();
   const [converted, setConverted] = useState<ConvertedSummary | null>(null);
 
   useEffect(() => {
     fetchPortfolios();
   }, [fetchPortfolios]);
-
-  // Track the chosen display currency (localStorage + in-tab/other-tab events).
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const sync = () => setDisplayCurrency(localStorage.getItem(DISPLAY_CURRENCY_KEY));
-    sync();
-    window.addEventListener(DISPLAY_CURRENCY_EVENT, sync);
-    window.addEventListener("storage", sync);
-    return () => {
-      window.removeEventListener(DISPLAY_CURRENCY_EVENT, sync);
-      window.removeEventListener("storage", sync);
-    };
-  }, []);
 
   const effectiveCurrency = displayCurrency ?? user?.preferred_currency ?? "INR";
 

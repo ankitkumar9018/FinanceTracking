@@ -10,7 +10,11 @@ from sqlalchemy import select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import (
+    get_current_user,
+    verify_holding_ownership,
+    verify_portfolio_ownership,
+)
 from app.database import get_db
 from app.models.alert import Alert
 from app.models.holding import Holding
@@ -27,51 +31,6 @@ router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-async def _verify_portfolio_ownership(
-    portfolio_id: int,
-    user: User,
-    db: AsyncSession,
-) -> Portfolio:
-    """Ensure the portfolio exists and belongs to the user."""
-    result = await db.execute(
-        select(Portfolio).where(
-            Portfolio.id == portfolio_id,
-            Portfolio.user_id == user.id,
-        )
-    )
-    portfolio = result.scalar_one_or_none()
-    if portfolio is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Portfolio not found or does not belong to the current user",
-        )
-    return portfolio
-
-
-async def _get_user_holding(
-    holding_id: int,
-    user: User,
-    db: AsyncSession,
-) -> Holding:
-    """Fetch a holding, verifying it belongs to one of the user's portfolios."""
-    result = await db.execute(
-        select(Holding)
-        .join(Portfolio, Holding.portfolio_id == Portfolio.id)
-        .where(Holding.id == holding_id, Portfolio.user_id == user.id)
-    )
-    holding = result.scalar_one_or_none()
-    if holding is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Holding not found",
-        )
-    return holding
-
-
-# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -83,13 +42,17 @@ async def list_holdings(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[Holding]:
-    """List holdings, optionally filtered by portfolio_id."""
+    """List holdings, optionally filtered by portfolio_id.
+
+    A filter on a missing / other-user portfolio is a 404, not an empty list.
+    """
     stmt = (
         select(Holding)
         .join(Portfolio, Holding.portfolio_id == Portfolio.id)
         .where(Portfolio.user_id == user.id)
     )
     if portfolio_id is not None:
+        await verify_portfolio_ownership(portfolio_id, user, db)
         stmt = stmt.where(Holding.portfolio_id == portfolio_id)
 
     stmt = stmt.order_by(Holding.stock_symbol).offset(skip).limit(limit)
@@ -104,7 +67,7 @@ async def create_holding(
     db: AsyncSession = Depends(get_db),
 ) -> Holding:
     """Add a stock manually with all range levels."""
-    await _verify_portfolio_ownership(body.portfolio_id, user, db)
+    await verify_portfolio_ownership(body.portfolio_id, user, db)
 
     symbol = body.stock_symbol.upper().strip()
     exchange = body.exchange.upper().strip()
@@ -229,7 +192,7 @@ async def get_holding(
     db: AsyncSession = Depends(get_db),
 ) -> Holding:
     """Get a single holding by ID."""
-    return await _get_user_holding(holding_id, user, db)
+    return await verify_holding_ownership(holding_id, user, db)
 
 
 @router.patch("/{holding_id}", response_model=HoldingResponse)
@@ -240,7 +203,7 @@ async def patch_holding(
     db: AsyncSession = Depends(get_db),
 ) -> Holding:
     """Inline edit any field: range levels, notes, custom_fields, etc."""
-    holding = await _get_user_holding(holding_id, user, db)
+    holding = await verify_holding_ownership(holding_id, user, db)
 
     update_data = body.model_dump(exclude_unset=True)
     for key, value in update_data.items():
@@ -261,7 +224,7 @@ async def delete_holding(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete a holding and all its transactions (cascade)."""
-    holding = await _get_user_holding(holding_id, user, db)
+    holding = await verify_holding_ownership(holding_id, user, db)
     # Deactivate any alerts linked to this holding before deletion
     # (ondelete="SET NULL" would leave them orphaned and active)
     await db.execute(

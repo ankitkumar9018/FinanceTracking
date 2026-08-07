@@ -13,7 +13,6 @@
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
-    "@finance-tracker/ui": "workspace:*",
     "@tauri-apps/api": "^2.10.1",
     "clsx": "^2.1.1",
     "framer-motion": "^11.15.0",

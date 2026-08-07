@@ -23,10 +23,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
-
-// Keep in sync with the top-bar's display-currency preference.
-const DISPLAY_CURRENCY_KEY = "ft-display-currency";
-const DISPLAY_CURRENCY_EVENT = "ft-display-currency-change";
+import { useDisplayCurrency } from "@/hooks/use-display-currency";
 
 /* Recharts is heavy (~100kB gz) — load the donut chart lazily */
 const AllocationDonut = dynamic(() => import("@/components/charts/allocation-donut"), {
@@ -568,18 +565,7 @@ export default function NetWorthPage() {
   const [deleting, setDeleting] = useState<number | null>(null);
 
   // Chosen display currency (localStorage override → user preference → INR).
-  const [displayCurrency, setDisplayCurrency] = useState<string | null>(null);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const sync = () => setDisplayCurrency(localStorage.getItem(DISPLAY_CURRENCY_KEY));
-    sync();
-    window.addEventListener(DISPLAY_CURRENCY_EVENT, sync);
-    window.addEventListener("storage", sync);
-    return () => {
-      window.removeEventListener(DISPLAY_CURRENCY_EVENT, sync);
-      window.removeEventListener("storage", sync);
-    };
-  }, []);
+  const [displayCurrency] = useDisplayCurrency();
 
   const effectiveCurrency = displayCurrency ?? user?.preferred_currency ?? "INR";
   const overrideActive = !!user && effectiveCurrency !== user.preferred_currency;

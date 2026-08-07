@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, verify_portfolio_ownership
+from app.api.errors import map_value_error
 from app.database import get_db
 from app.models.user import User
 from app.schemas.mutual_fund import (
@@ -39,7 +40,12 @@ async def list_mutual_funds_endpoint(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list:
-    """List mutual funds for the current user, optionally filtered by portfolio_id."""
+    """List mutual funds for the current user, optionally filtered by portfolio_id.
+
+    A filter on a missing / other-user portfolio is a 404, not an empty list.
+    """
+    if portfolio_id is not None:
+        await verify_portfolio_ownership(portfolio_id, user, db)
     return await list_mutual_funds(portfolio_id=portfolio_id, user_id=user.id, db=db)
 
 
@@ -57,10 +63,7 @@ async def create_mutual_fund_endpoint(
     try:
         return await create_mutual_fund(data=body, user_id=user.id, db=db)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        )
+        raise map_value_error(exc) from exc
 
 
 @router.put("/{fund_id}", response_model=MutualFundResponse)
@@ -76,10 +79,7 @@ async def update_mutual_fund_endpoint(
             fund_id=fund_id, user_id=user.id, data=body, db=db
         )
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        )
+        raise map_value_error(exc) from exc
 
 
 @router.delete("/{fund_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -92,10 +92,7 @@ async def delete_mutual_fund_endpoint(
     try:
         await delete_mutual_fund(fund_id=fund_id, user_id=user.id, db=db)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        )
+        raise map_value_error(exc) from exc
 
 
 @router.get("/summary", response_model=MutualFundSummary)

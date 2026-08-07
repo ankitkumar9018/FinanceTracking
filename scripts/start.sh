@@ -18,6 +18,10 @@ BACKEND_DIR="$PROJECT_DIR/backend"
 WEB_DIR="$PROJECT_DIR/apps/web"
 PID_DIR="$PROJECT_DIR/.pids"
 
+# Shared helpers: find_free_port, wait_for_url, stop_by_pidfile
+# (this script lives in scripts/, next to the library)
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
 mkdir -p "$PID_DIR"
 
 echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
@@ -60,33 +64,16 @@ kill_if_running() {
     local pid_file="$PID_DIR/$name.pid"
     if [ -f "$pid_file" ]; then
         local pid
-        pid=$(cat "$pid_file")
-        if kill -0 "$pid" 2>/dev/null; then
+        pid=$(cat "$pid_file" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
             echo -e "  Stopping $name (PID $pid)..."
-            kill "$pid" 2>/dev/null || true
-            sleep 1
-            kill -9 "$pid" 2>/dev/null || true
         fi
-        rm -f "$pid_file"
+        stop_by_pidfile "$pid_file" 1 || true
     fi
     # NOTE: we deliberately do NOT `pkill -f "$name"` — a bare name like
     # "uvicorn" or "celery" would kill those processes for OTHER apps too. We
-    # only ever stop the exact PID we started (recorded in the PID file).
-}
-
-# Pick a free TCP port: try each preferred port in order, else an OS-assigned
-# ephemeral one. Never grabs a port another app is already listening on.
-find_free_port() {
-    python3 - "$@" <<'PY'
-import socket, sys
-for p in sys.argv[1:]:
-    s = socket.socket()
-    try:
-        s.bind(("127.0.0.1", int(p))); s.close(); print(p); raise SystemExit(0)
-    except OSError:
-        s.close()
-s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()
-PY
+    # only ever stop the exact PID we started (recorded in the PID file);
+    # stop_by_pidfile enforces exactly that (TERM, grace, KILL fallback).
 }
 
 # ── Step 1: Check Prerequisites ─────────────────────────────────────────────
@@ -207,7 +194,7 @@ if [ -f "alembic.ini" ]; then
     # Capture alembic's output AND its real exit code — a bare `... | tail -1`
     # masks a failed migration (the pipe reports tail's success), which would
     # start the backend on a broken/partial schema. Abort on failure instead.
-    if migration_output=$(uv run alembic upgrade head 2>&1); then
+    if migration_output=$(uv run python -c "from app.__main__ import _run_migrations; _run_migrations()" 2>&1); then
         echo "$migration_output" | tail -1
         echo -e "  ${GREEN}✓${NC} Database migrations applied"
     else
@@ -298,15 +285,15 @@ fi
 
 echo ""
 echo -e "${YELLOW}[6/6] Running health check...${NC}"
-sleep 3
 
 echo ""
 echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
 echo -e "${BLUE}  Service Status${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
 
-# Backend
-if curl -s "http://localhost:$BACKEND_PORT/health" &>/dev/null; then
+# Backend (same overall wait budget as the old `sleep 3` + single probe,
+# but reports success as soon as the backend answers)
+if wait_for_url "http://localhost:$BACKEND_PORT/health" 6 0.5; then
     echo -e "  Backend:   ${GREEN}Running ✓${NC}  http://localhost:$BACKEND_PORT"
 else
     echo -e "  Backend:   ${YELLOW}Starting...${NC}  http://localhost:$BACKEND_PORT"

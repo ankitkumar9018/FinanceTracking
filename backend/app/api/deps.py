@@ -1,4 +1,4 @@
-"""Shared API dependencies: authentication, authorization."""
+"""Shared API dependencies: authentication, authorization, ownership checks."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.holding import Holding
+from app.models.portfolio import Portfolio
 from app.models.user import User
 from app.utils.security import decode_token
 
@@ -86,3 +88,57 @@ async def get_current_user(
         raise credentials_exception
 
     return user
+
+
+# ---------------------------------------------------------------------------
+# Shared ownership checks
+# ---------------------------------------------------------------------------
+
+async def verify_portfolio_ownership(
+    portfolio_id: int,
+    user: User,
+    db: AsyncSession,
+) -> Portfolio:
+    """Fetch a portfolio, ensuring it exists and belongs to ``user``.
+
+    Raises HTTP 404 otherwise — this is the single canonical ownership check
+    shared by every route family (holdings, analytics, tax, exports, F&O, …)
+    so a missing / other-user portfolio always yields the same response.
+    """
+    result = await db.execute(
+        select(Portfolio).where(
+            Portfolio.id == portfolio_id,
+            Portfolio.user_id == user.id,
+        )
+    )
+    portfolio = result.scalar_one_or_none()
+    if portfolio is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Portfolio not found or does not belong to the current user",
+        )
+    return portfolio
+
+
+async def verify_holding_ownership(
+    holding_id: int,
+    user: User,
+    db: AsyncSession,
+) -> Holding:
+    """Fetch a holding, verifying it belongs to one of ``user``'s portfolios.
+
+    Raises HTTP 404 otherwise — canonical counterpart of
+    :func:`verify_portfolio_ownership` for holding-scoped routes.
+    """
+    result = await db.execute(
+        select(Holding)
+        .join(Portfolio, Holding.portfolio_id == Portfolio.id)
+        .where(Holding.id == holding_id, Portfolio.user_id == user.id)
+    )
+    holding = result.scalar_one_or_none()
+    if holding is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Holding not found or does not belong to the current user",
+        )
+    return holding

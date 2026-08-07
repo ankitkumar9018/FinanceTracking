@@ -12,9 +12,9 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, verify_portfolio_ownership
+from app.api.errors import map_value_error
 from app.database import get_db
-from app.models.portfolio import Portfolio
 from app.models.user import User
 from app.services.account_aggregator import (
     AAProvider,
@@ -73,25 +73,6 @@ _EXCEL_CONTENT_TYPE = (
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _verify_portfolio_ownership(
-    portfolio_id: int, user: User, db: AsyncSession,
-) -> Portfolio:
-    """Ensure the portfolio exists and belongs to the user."""
-    result = await db.execute(
-        select(Portfolio).where(
-            Portfolio.id == portfolio_id,
-            Portfolio.user_id == user.id,
-        )
-    )
-    portfolio = result.scalar_one_or_none()
-    if portfolio is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Portfolio not found or does not belong to the current user",
-        )
-    return portfolio
-
-
 async def _read_upload(file: UploadFile, allowed_exts: tuple[str, ...]) -> bytes:
     """Read and validate an uploaded file.
 
@@ -138,7 +119,7 @@ async def upload_excel(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Upload and parse an Excel file, creating holdings and transactions."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     file_bytes = await _read_upload(file, (".xlsx",))
 
     try:
@@ -167,11 +148,11 @@ async def export_excel(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """Export a portfolio's holdings and transactions to an Excel file."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     try:
         excel_bytes = await export_portfolio(portfolio_id, db)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise map_value_error(exc) from exc
 
     return Response(
         content=excel_bytes,
@@ -197,11 +178,11 @@ async def export_xlsx_workbook(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """Export a multi-sheet workbook (Holdings, Transactions, Dividends, Summary)."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     try:
         workbook_bytes = await export_workbook_xlsx(portfolio_id, db)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise map_value_error(exc) from exc
 
     return Response(
         content=workbook_bytes,
@@ -221,12 +202,12 @@ async def export_bundle(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """Export everything (CSVs, JSON backup, HTML report, XLSX, best-effort PDF) as a ZIP."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     user_name = user.display_name or user.email
     try:
         zip_bytes = await export_everything_zip(portfolio_id, user_name, db)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise map_value_error(exc) from exc
 
     return Response(
         content=zip_bytes,
@@ -250,7 +231,7 @@ async def upload_csv(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Upload a CSV file to import holdings and transactions."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     file_bytes = await _read_upload(file, (".csv",))
 
     try:
@@ -289,11 +270,11 @@ async def export_csv(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """Export portfolio holdings as a CSV file."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     try:
         csv_content = await export_holdings_csv(portfolio_id, db)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise map_value_error(exc) from exc
 
     return Response(
         content=csv_content,
@@ -309,11 +290,11 @@ async def export_transactions_csv_route(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """Export all transactions for a portfolio as a CSV file."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     try:
         csv_content = await export_transactions_csv(portfolio_id, db)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise map_value_error(exc) from exc
 
     return Response(
         content=csv_content,
@@ -333,7 +314,7 @@ async def upload_csv_dividends(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Upload a CSV file to import dividend records."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     file_bytes = await _read_upload(file, (".csv",))
 
     parsed = parse_csv_dividends(file_bytes)
@@ -354,7 +335,7 @@ async def upload_csv_mutual_funds(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Upload a CSV file to import mutual fund records."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     file_bytes = await _read_upload(file, (".csv",))
 
     parsed = parse_csv_mutual_funds(file_bytes)
@@ -429,7 +410,7 @@ async def import_ofx_statement(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Import an OFX/QFX broker or bank statement into a portfolio."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     file_bytes = await _read_upload(file, (".ofx", ".qfx"))
 
     try:
@@ -458,7 +439,7 @@ async def import_qif_statement(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Import a QIF statement into a portfolio."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     file_bytes = await _read_upload(file, (".qif",))
 
     try:
@@ -491,7 +472,7 @@ async def import_cas_statement(
     Requires the optional ``casparser`` package (``mf`` extra). Missing package
     → 501; parse/decrypt failures → 400.
     """
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     file_bytes = await _read_upload(file, (".pdf",))
 
     # casparser is optional — keep the import function-local so the app boots
@@ -532,12 +513,12 @@ async def export_json(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """Export a full portfolio backup as JSON (includes all related data)."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
 
     try:
         data = await export_portfolio_json(portfolio_id, user.id, db)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise map_value_error(exc) from exc
 
     content = json.dumps(data, indent=2, ensure_ascii=False)
     return Response(
@@ -571,7 +552,7 @@ async def upload_json(
     try:
         summary = await import_portfolio_json(data, user.id, db)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise map_value_error(exc) from exc
 
     return {"status": "success", **summary}
 
@@ -587,7 +568,7 @@ async def export_pdf(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """Export a portfolio report as a PDF file."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     user_name = user.display_name or user.email
 
     try:
@@ -600,7 +581,7 @@ async def export_pdf(
             detail="PDF export requires xhtml2pdf. Install with: pip install xhtml2pdf",
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise map_value_error(exc) from exc
 
     return Response(
         content=pdf_bytes,
@@ -624,13 +605,13 @@ async def export_report(
     db: AsyncSession = Depends(get_db),
 ) -> HTMLResponse:
     """Generate a styled HTML portfolio report (can be printed to PDF in browser)."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     user_name = user.display_name or user.email
 
     try:
         html = await generate_portfolio_report_html(portfolio_id, user_name, db)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise map_value_error(exc) from exc
 
     return HTMLResponse(content=html)
 

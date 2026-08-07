@@ -5,7 +5,6 @@ const nextConfig: NextConfig = {
   ...(process.env.STATIC_EXPORT === "true"
     ? { output: "export", trailingSlash: true }
     : {}),
-  transpilePackages: ["@finance-tracker/ui"],
   experimental: {
     optimizePackageImports: ["lucide-react", "recharts", "framer-motion"],
   },

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.errors import map_value_error
 from app.brokers import BROKER_REGISTRY
 from app.database import get_db
 from app.models.user import User
@@ -70,10 +71,7 @@ async def connect_new_broker(
             additional_params=body.additional_params,
         )
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
+        raise map_value_error(exc) from exc
     except NotImplementedError as exc:
         # Stub adapters (Groww, Upstox, …) — a clear 501, not a generic 500
         raise HTTPException(
@@ -103,10 +101,7 @@ async def sync_broker_holdings(
             db=db,
         )
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
+        raise map_value_error(exc) from exc
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -130,10 +125,7 @@ async def broker_connection_status(
             db=db,
         )
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
+        raise map_value_error(exc) from exc
 
     return status_info
 
@@ -152,10 +144,7 @@ async def disconnect_broker_connection(
             db=db,
         )
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
+        raise map_value_error(exc) from exc
 
 
 @router.get("/available", response_model=list[dict])

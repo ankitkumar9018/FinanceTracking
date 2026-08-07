@@ -246,7 +246,7 @@ ENVIRONMENT=development
     }
 
     Write-Info "Running database migrations..."
-    uv run alembic upgrade head 2>&1 | Select-Object -Last 3
+    uv run python -c "from app.__main__ import _run_migrations; _run_migrations()" 2>&1 | Select-Object -Last 3
     Write-Ok "Database ready"
     Pop-Location
 

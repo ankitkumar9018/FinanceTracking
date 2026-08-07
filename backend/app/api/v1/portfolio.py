@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import date
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, verify_portfolio_ownership
 from app.database import get_db
-from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.user import User
 from app.schemas.portfolio import (
@@ -24,34 +20,13 @@ from app.schemas.portfolio import (
 )
 from app.services.benchmark_service import compare_with_benchmark
 from app.services.portfolio_service import get_portfolio_summary
-from app.services.xirr_service import CashFlow, xirr
+from app.services.portfolio_stats_service import (
+    build_daily_value_series,
+    build_xirr_cashflows,
+)
+from app.services.xirr_service import xirr
 
 router = APIRouter()
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-async def _get_user_portfolio(
-    portfolio_id: int,
-    user: User,
-    db: AsyncSession,
-) -> Portfolio:
-    """Fetch a portfolio ensuring it belongs to the current user."""
-    result = await db.execute(
-        select(Portfolio).where(
-            Portfolio.id == portfolio_id,
-            Portfolio.user_id == user.id,
-        )
-    )
-    portfolio = result.scalar_one_or_none()
-    if portfolio is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Portfolio not found",
-        )
-    return portfolio
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +85,7 @@ async def get_portfolio(
     db: AsyncSession = Depends(get_db),
 ) -> Portfolio:
     """Get a single portfolio by ID."""
-    return await _get_user_portfolio(portfolio_id, user, db)
+    return await verify_portfolio_ownership(portfolio_id, user, db)
 
 
 @router.get("/{portfolio_id}/summary", response_model=PortfolioSummaryResponse)
@@ -136,7 +111,7 @@ async def get_portfolio_summary_endpoint(
     the native response — existing fields are never altered.
     """
     # Verify ownership
-    await _get_user_portfolio(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
 
     try:
         summary = await get_portfolio_summary(
@@ -166,7 +141,7 @@ async def update_portfolio(
     db: AsyncSession = Depends(get_db),
 ) -> Portfolio:
     """Update portfolio details."""
-    portfolio = await _get_user_portfolio(portfolio_id, user, db)
+    portfolio = await verify_portfolio_ownership(portfolio_id, user, db)
 
     update_data = body.model_dump(exclude_unset=True)
 
@@ -197,7 +172,7 @@ async def delete_portfolio(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete a portfolio and all its holdings / transactions (cascade)."""
-    portfolio = await _get_user_portfolio(portfolio_id, user, db)
+    portfolio = await verify_portfolio_ownership(portfolio_id, user, db)
     await db.delete(portfolio)
     await db.flush()
 
@@ -214,48 +189,19 @@ async def get_portfolio_xirr(
 ):
     """Calculate XIRR for a portfolio based on all buy/sell transactions + current value."""
     # Verify ownership
-    await _get_user_portfolio(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
 
-    # Get all holdings for this portfolio with their transactions
-    result = await db.execute(
-        select(Holding)
-        .options(selectinload(Holding.transactions))
-        .where(Holding.portfolio_id == portfolio_id)
-    )
-    holdings = result.scalars().all()
-
-    if not holdings:
+    # Build cash flows (BUY -> negative, SELL -> positive, current value as
+    # the terminal positive flow) in the stats service.
+    try:
+        flows = await build_xirr_cashflows(portfolio_id, db)
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No holdings found in this portfolio",
-        )
+            detail=str(exc),
+        ) from exc
 
-    # Build cash flows: BUY -> negative, SELL -> positive
-    cash_flows: list[CashFlow] = []
-    total_current_value = 0.0
-    used_stale_prices = False
-
-    for h in holdings:
-        for tx in h.transactions:
-            amount = float(tx.quantity) * float(tx.price)
-            if tx.transaction_type == "BUY":
-                cash_flows.append(CashFlow(date=tx.date, amount=-amount))
-            elif tx.transaction_type == "SELL":
-                cash_flows.append(CashFlow(date=tx.date, amount=amount))
-
-        # Add current portfolio value as final positive cash flow (today's
-        # date). Fall back to average price for never-refreshed holdings —
-        # otherwise they'd contribute no terminal value at all and drag the
-        # computed return toward a total loss.
-        terminal_price = h.current_price if h.current_price is not None else h.average_price
-        if h.current_price is None:
-            used_stale_prices = True
-        if terminal_price is not None and h.cumulative_quantity:
-            total_current_value += float(terminal_price) * float(h.cumulative_quantity)
-
-    if total_current_value > 0:
-        cash_flows.append(CashFlow(date=date.today(), amount=total_current_value))
-
+    cash_flows = flows.cash_flows
     if len(cash_flows) < 2:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -268,9 +214,9 @@ async def get_portfolio_xirr(
         "portfolio_id": portfolio_id,
         "xirr": round(result_xirr * 100, 2) if result_xirr is not None else None,
         "xirr_decimal": result_xirr,
-        "total_current_value": round(total_current_value, 2),
+        "total_current_value": round(flows.total_current_value, 2),
         "num_cash_flows": len(cash_flows),
-        "used_stale_prices": used_stale_prices,
+        "used_stale_prices": flows.used_stale_prices,
         "status": "calculated" if result_xirr is not None else "failed_to_converge",
     }
 
@@ -289,58 +235,22 @@ async def compare_benchmark(
 ):
     """Compare portfolio performance against a benchmark index."""
     # Verify ownership
-    await _get_user_portfolio(portfolio_id, user, db)
-
-    # Get all holdings for this portfolio
-    result = await db.execute(
-        select(Holding).where(Holding.portfolio_id == portfolio_id)
-    )
-    holdings = result.scalars().all()
-
-    if not holdings:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No holdings found in this portfolio",
-        )
+    await verify_portfolio_ownership(portfolio_id, user, db)
 
     # Build a genuine dated market-value series over the SAME window as the
-    # benchmark from stored PriceHistory: value_on_day = sum over holdings of
-    # (current quantity * that day's close). Comparing this real series against
-    # the benchmark's windowed return yields an honest alpha, unlike the old
-    # two-point [invested, current] series which compared all-time unrealized
-    # P&L against an N-day benchmark return (a fabricated alpha).
-    from datetime import timedelta
-
-    from app.models.price_history import PriceHistory
-
-    end_date = date.today()
-    start_date = end_date - timedelta(days=days)
-
-    # Aggregate quantity per (symbol, exchange) so multiple lots collapse.
-    qty_by_symbol: dict[tuple[str, str], float] = {}
-    for h in holdings:
-        key = (h.stock_symbol, h.exchange)
-        qty_by_symbol[key] = qty_by_symbol.get(key, 0.0) + float(h.cumulative_quantity)
-
-    ph_result = await db.execute(
-        select(PriceHistory).where(
-            PriceHistory.date >= start_date,
-            PriceHistory.date <= end_date,
+    # benchmark from stored PriceHistory (see the stats service): comparing
+    # this real series against the benchmark's windowed return yields an
+    # honest alpha, unlike a two-point [invested, current] series which would
+    # compare all-time unrealized P&L against an N-day benchmark return.
+    try:
+        portfolio_daily_values = await build_daily_value_series(
+            portfolio_id, days, db
         )
-    )
-    price_rows = ph_result.scalars().all()
-
-    daily_totals: dict[date, float] = {}
-    for row in price_rows:
-        qty = qty_by_symbol.get((row.stock_symbol, row.exchange))
-        if qty is None:
-            continue
-        daily_totals[row.date] = daily_totals.get(row.date, 0.0) + qty * float(row.close)
-
-    portfolio_daily_values = [
-        {"date": d.isoformat(), "value": v}
-        for d, v in sorted(daily_totals.items())
-    ]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
 
     comparison = await compare_with_benchmark(
         portfolio_daily_values=portfolio_daily_values,

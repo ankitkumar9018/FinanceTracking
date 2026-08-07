@@ -2,8 +2,7 @@
 
 import { useState } from "react";
 import { usePortfolioStore } from "@/stores/portfolio-store";
-import { getToken, tryRefresh } from "@/lib/api-client";
-import { getApiBaseAsync } from "@/lib/tauri-port";
+import { download, fetchWithAuth } from "@/lib/api-client";
 import { FileText, Download, FileSpreadsheet, FileJson, Database, FileOutput, Receipt, FileArchive } from "lucide-react";
 import toast from "react-hot-toast";
 
@@ -13,45 +12,6 @@ function currentIndianFY(): string {
   // Indian FY runs April–March; before April we're still in the prior FY.
   const start = now.getMonth() >= 3 ? y : y - 1;
   return `${start}-${String(start + 1).slice(-2)}`;
-}
-
-async function fetchWithAuth(path: string): Promise<Response> {
-  const apiBase = await getApiBaseAsync();
-  const url = `${apiBase}${path}`;
-  const token = await getToken();
-  const headers: Record<string, string> = {};
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-
-  let response = await fetch(url, { headers });
-
-  if (response.status === 401) {
-    const refreshed = await tryRefresh();
-    if (refreshed) {
-      const newToken = await getToken();
-      const retryHeaders: Record<string, string> = {};
-      if (newToken) retryHeaders["Authorization"] = `Bearer ${newToken}`;
-      response = await fetch(url, { headers: retryHeaders });
-    } else {
-      window.location.href = "/login";
-      throw new Error("Session expired");
-    }
-  }
-
-  return response;
-}
-
-async function downloadBlob(path: string, filename: string) {
-  const res = await fetchWithAuth(path);
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `Download failed (${res.status})`);
-  }
-  const blob = await res.blob();
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(a.href);
 }
 
 export default function ReportsPage() {
@@ -72,7 +32,7 @@ export default function ReportsPage() {
     await run(key, async () => {
       const path = `/tax/report/${encodeURIComponent(fy)}?jurisdiction=${taxJurisdiction}&format=${format}`;
       const ext = format === "csv" ? "csv" : "html";
-      await downloadBlob(path, `tax_report_${fy}_${taxJurisdiction}.${ext}`);
+      await download(path, `tax_report_${fy}_${taxJurisdiction}.${ext}`);
       toast.success(`Tax report (${format.toUpperCase()}) downloaded!`);
     });
   }
@@ -113,7 +73,7 @@ export default function ReportsPage() {
       actionLabel: "Download Excel",
       needsPortfolio: true,
       action: () => run("excel", async () => {
-        await downloadBlob(`/import-export/export/excel/${pid}`, `portfolio_${pid}.xlsx`);
+        await download(`/import-export/export/excel/${pid}`, `portfolio_${pid}.xlsx`);
         toast.success("Excel file downloaded!");
       }),
     },
@@ -125,7 +85,7 @@ export default function ReportsPage() {
       actionLabel: "Download Workbook",
       needsPortfolio: true,
       action: () => run("xlsx-workbook", async () => {
-        await downloadBlob(`/import-export/export/xlsx/${pid}`, `portfolio_${pid}_workbook.xlsx`);
+        await download(`/import-export/export/xlsx/${pid}`, `portfolio_${pid}_workbook.xlsx`);
         toast.success("Excel workbook downloaded!");
       }),
     },
@@ -137,7 +97,7 @@ export default function ReportsPage() {
       actionLabel: "Download ZIP",
       needsPortfolio: true,
       action: () => run("bundle", async () => {
-        await downloadBlob(`/import-export/export/bundle/${pid}`, `portfolio_${pid}_export.zip`);
+        await download(`/import-export/export/bundle/${pid}`, `portfolio_${pid}_export.zip`);
         toast.success("Full export archive downloaded!");
       }),
     },
@@ -149,7 +109,7 @@ export default function ReportsPage() {
       actionLabel: "Download PDF",
       needsPortfolio: true,
       action: () => run("pdf", async () => {
-        await downloadBlob(`/import-export/export/pdf/${pid}`, `portfolio_${pid}_report.pdf`);
+        await download(`/import-export/export/pdf/${pid}`, `portfolio_${pid}_report.pdf`);
         toast.success("PDF downloaded!");
       }),
     },
@@ -161,7 +121,7 @@ export default function ReportsPage() {
       actionLabel: "Download CSV",
       needsPortfolio: true,
       action: () => run("csv-holdings", async () => {
-        await downloadBlob(`/import-export/export/csv/${pid}`, `holdings_${pid}.csv`);
+        await download(`/import-export/export/csv/${pid}`, `holdings_${pid}.csv`);
         toast.success("Holdings CSV downloaded!");
       }),
     },
@@ -173,7 +133,7 @@ export default function ReportsPage() {
       actionLabel: "Download CSV",
       needsPortfolio: true,
       action: () => run("csv-tx", async () => {
-        await downloadBlob(`/import-export/export/csv/${pid}/transactions`, `transactions_${pid}.csv`);
+        await download(`/import-export/export/csv/${pid}/transactions`, `transactions_${pid}.csv`);
         toast.success("Transactions CSV downloaded!");
       }),
     },
@@ -185,7 +145,7 @@ export default function ReportsPage() {
       actionLabel: "Export CSV",
       needsPortfolio: true,
       action: () => run("sheets", async () => {
-        await downloadBlob(`/analytics/export/sheets/${pid}`, `portfolio_${pid}_sheets.csv`);
+        await download(`/analytics/export/sheets/${pid}`, `portfolio_${pid}_sheets.csv`);
         toast.success("Google Sheets CSV downloaded!");
       }),
     },
@@ -197,7 +157,7 @@ export default function ReportsPage() {
       actionLabel: "Download JSON",
       needsPortfolio: true,
       action: () => run("json", async () => {
-        await downloadBlob(`/import-export/export/json/${pid}`, `portfolio_${pid}_backup.json`);
+        await download(`/import-export/export/json/${pid}`, `portfolio_${pid}_backup.json`);
         toast.success("JSON backup downloaded!");
       }),
     },
@@ -210,7 +170,7 @@ export default function ReportsPage() {
       needsPortfolio: false,
       action: () => run("sqlite", async () => {
         const ts = new Date().toISOString().replace(/[:-]/g, "").split(".")[0];
-        await downloadBlob(`/import-export/export/backup/sqlite`, `finance_tracker_backup_${ts}.db`);
+        await download(`/import-export/export/backup/sqlite`, `finance_tracker_backup_${ts}.db`);
         toast.success("Database backup downloaded!");
       }),
     },

@@ -27,9 +27,6 @@ importers:
 
   apps/web:
     dependencies:
-      '@finance-tracker/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
       '@tauri-apps/api':
         specifier: ^2.10.1
         version: 2.10.1

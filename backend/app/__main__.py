@@ -23,18 +23,30 @@ import uvicorn
 def _run_migrations() -> None:
     """Run Alembic migrations (upgrade head) programmatically.
 
-    Handles three scenarios:
+    Handles four scenarios:
     1. **Fresh install** – no DB exists. Alembic creates all tables via migrations.
     2. **Upgrade** – DB exists with alembic_version. Only pending migrations run.
     3. **Legacy DB** – DB created by create_all() with no alembic_version table.
        Stamp it at ``head`` so future upgrades apply correctly.
+    4. **Schema ahead of stamp** – the schema already has columns a pending
+       migration would add (e.g. a DB that was additively reconciled while
+       stamped at an older revision). Replaying collides with "duplicate
+       column"; recover by stamping head and letting the additive reconcile
+       below fill any genuinely-missing pieces.
     """
     from alembic.config import Config
     from sqlalchemy import create_engine, inspect
+    from sqlalchemy.exc import OperationalError
 
     from alembic import command
 
-    db_url = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./finance.db")
+    # Resolve through app settings (which read backend/.env) rather than raw
+    # os.environ, so scripts and `python -m app` migrate the SAME database the
+    # app will actually open. A --db-path override lands in os.environ before
+    # this import, and pydantic-settings gives env vars precedence over .env.
+    from app.config import settings
+
+    db_url = settings.database_url
     # Alembic needs a synchronous driver
     sync_url = db_url.replace("+aiosqlite", "")
 
@@ -79,8 +91,24 @@ def _run_migrations() -> None:
         command.stamp(cfg, "head")
     else:
         print("[migrate] Running alembic upgrade head...")
-        command.upgrade(cfg, "head")
-        print("[migrate] Migrations complete.")
+        try:
+            command.upgrade(cfg, "head")
+            print("[migrate] Migrations complete.")
+        except OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                # Scenario 4: the schema is ahead of the stamp. The pending
+                # migration's ADD COLUMN/CREATE collided with what's already
+                # there, so replaying can never succeed. Stamp head — the
+                # additive reconcile below adds anything genuinely missing.
+                print(
+                    "[migrate] Schema is ahead of the alembic stamp "
+                    f"({exc.orig if exc.orig else exc}). Stamping head and "
+                    "reconciling additively."
+                )
+                command.stamp(cfg, "head")
+            else:
+                raise
 
     # Safety net for upgrades: stamping a legacy DB at head claims newer
     # migrations already ran, so columns they would have added are missing.

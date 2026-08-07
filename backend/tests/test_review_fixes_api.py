@@ -103,7 +103,9 @@ async def test_create_goal_with_other_users_portfolio_rejected(
         },
         headers=auth_headers,
     )
-    assert resp.status_code == 400
+    # The shared ValueError mapper returns 404 for "not found" resource
+    # references (previously miscoded as 400).
+    assert resp.status_code == 404
 
 
 async def test_create_goal_with_own_portfolio_succeeds(

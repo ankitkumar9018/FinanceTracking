@@ -12,13 +12,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import get_current_user
+from app.api.deps import (
+    get_current_user,
+    verify_holding_ownership,
+    verify_portfolio_ownership,
+)
 from app.database import get_db
 from app.models.holding import Holding
-from app.models.portfolio import Portfolio
 from app.models.tax_record import TaxRecord
 from app.models.user import User
-from app.models.user_preferences import UserPreferences
 from app.schemas.tax import (
     TaxHarvestingSuggestion,
     TaxRecordResponse,
@@ -28,6 +30,7 @@ from app.services.export_service import (
     export_tax_report_csv,
     generate_tax_report_html,
 )
+from app.services.preferences_service import get_or_create_preferences
 from app.services.tax_service import (
     EXCHANGE_JURISDICTION_MAP,
     INDIA_LTCG_RATE,
@@ -119,19 +122,6 @@ async def _get_user_tax_record(
             detail="Tax record not found",
         )
     return record
-
-
-async def _get_or_create_prefs(user_id: int, db: AsyncSession) -> UserPreferences:
-    """Fetch (or lazily create) the user's UserPreferences row."""
-    result = await db.execute(
-        select(UserPreferences).where(UserPreferences.user_id == user_id)
-    )
-    prefs = result.scalar_one_or_none()
-    if prefs is None:
-        prefs = UserPreferences(user_id=user_id)
-        db.add(prefs)
-        await db.flush()
-    return prefs
 
 
 # ---------------------------------------------------------------------------
@@ -320,17 +310,7 @@ async def portfolio_vorabpauschale(
     Uses current holding values as a proxy for the start/end values (exact fund
     values are not stored), so the result is an ESTIMATE (``is_estimate=True``).
     """
-    port_result = await db.execute(
-        select(Portfolio).where(
-            Portfolio.id == portfolio_id,
-            Portfolio.user_id == user.id,
-        )
-    )
-    if port_result.scalar_one_or_none() is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Portfolio not found",
-        )
+    await verify_portfolio_ownership(portfolio_id, user, db)
     return await estimate_portfolio_vorabpauschale(
         portfolio_id=portfolio_id, db=db, year=year
     )
@@ -354,17 +334,7 @@ async def holding_period_timer(
     eligibility carry a best-effort ``potential_tax_saving`` = unrealized gain ×
     (20 % − 12.5 %) — the tax saved by waiting for LTCG treatment.
     """
-    port_result = await db.execute(
-        select(Portfolio).where(
-            Portfolio.id == portfolio_id,
-            Portfolio.user_id == user.id,
-        )
-    )
-    if port_result.scalar_one_or_none() is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Portfolio not found",
-        )
+    await verify_portfolio_ownership(portfolio_id, user, db)
 
     indian_exchanges = [
         ex for ex, jur in EXCHANGE_JURISDICTION_MAP.items() if jur == "IN"
@@ -446,7 +416,7 @@ async def update_tax_settings(
 
     Only the fields provided are changed; others are preserved.
     """
-    prefs = await _get_or_create_prefs(user.id, db)
+    prefs = await get_or_create_preferences(user.id, db)
     # Reassign a new dict so SQLAlchemy detects the JSON column change.
     settings = dict(prefs.tax_settings or {})
     if body.filing is not None:
@@ -466,20 +436,7 @@ async def update_holding_fund_type(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Set a holding's fund class (used for German Teilfreistellung)."""
-    result = await db.execute(
-        select(Holding)
-        .join(Portfolio, Holding.portfolio_id == Portfolio.id)
-        .where(
-            Holding.id == holding_id,
-            Portfolio.user_id == user.id,
-        )
-    )
-    holding = result.scalar_one_or_none()
-    if holding is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Holding not found",
-        )
+    holding = await verify_holding_ownership(holding_id, user, db)
     holding.fund_type = body.fund_type
     await db.flush()
     return {"holding_id": holding_id, "fund_type": body.fund_type}

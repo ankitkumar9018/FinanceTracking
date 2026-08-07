@@ -4,7 +4,6 @@ import { useState } from "react";
 import {
   Link2,
   Plus,
-  X,
   RefreshCw,
   CheckCircle2,
   Clock,
@@ -18,8 +17,9 @@ import {
 import { api, ApiError } from "@/lib/api-client";
 import { useApiData } from "@/hooks/use-api-data";
 import { ErrorState } from "@/components/shared/error-state";
+import { Modal } from "@/components/shared/modal";
 import toast from "react-hot-toast";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -381,46 +381,28 @@ export default function BrokersPage() {
       </div>
 
       {/* ---- Connect Broker Modal ---- */}
-      <AnimatePresence>
-        {showConnectForm && connectBroker && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-            onClick={closeConnectForm}
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              onClick={(e) => e.stopPropagation()}
-              className="mx-4 w-full max-w-md rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-lg"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[hsl(var(--primary))]/10">
-                    <Link2 className="h-5 w-5 text-[hsl(var(--primary))]" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-semibold">
-                      Connect {connectBroker.display_name || connectBroker.name}
-                    </h2>
-                    <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                      {loginUrl
-                        ? "Authorize with your broker to finish"
-                        : "Enter your API credentials"}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={closeConnectForm}
-                  className="rounded-md p-1 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
+      <Modal
+        open={showConnectForm && !!connectBroker}
+        onClose={closeConnectForm}
+        maxWidth="max-w-md"
+        title={
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[hsl(var(--primary))]/10">
+              <Link2 className="h-5 w-5 text-[hsl(var(--primary))]" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold">
+                Connect {connectBroker?.display_name || connectBroker?.name}
+              </h2>
+              <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                {loginUrl
+                  ? "Authorize with your broker to finish"
+                  : "Enter your API credentials"}
+              </p>
+            </div>
+          </div>
+        }
+      >
               {loginUrl ? (
                 /* ---- Step 2: OAuth authorization ---- */
                 <div className="mt-5 space-y-4">
@@ -549,10 +531,7 @@ export default function BrokersPage() {
                 </button>
               </div>
               )}
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      </Modal>
     </div>
   );
 }

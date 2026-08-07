@@ -21,6 +21,10 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_DIR="$PROJECT_ROOT/backend"
 PID_DIR="$PROJECT_ROOT/.pids"
 LOGS_DIR="$PROJECT_ROOT/logs"
+
+# Shared helpers: wait_for_url (single-probe mode: tries=1)
+# (this script lives in scripts/, next to the library)
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 BPORT=$(cat "$PID_DIR/backend.port" "$LOGS_DIR/backend.port" 2>/dev/null | head -1)
 BPORT=${BPORT:-8420}
 FPORT=$(cat "$PID_DIR/frontend.port" "$LOGS_DIR/frontend.port" 2>/dev/null | head -1)
@@ -34,7 +38,7 @@ else
 fi
 
 # Web App (on the actual chosen frontend port, not a hard-coded 3000)
-if curl -s "http://localhost:$FPORT" &>/dev/null; then
+if wait_for_url "http://localhost:$FPORT" 1 0; then
     echo -e "  Web App:         ${GREEN}Running ✓${NC}  http://localhost:$FPORT"
 else
     echo -e "  Web App:         ${RED}Down ✗${NC}"
@@ -48,7 +52,7 @@ else
 fi
 
 # Ollama
-if curl -s http://localhost:11434/api/tags &>/dev/null; then
+if wait_for_url "http://localhost:11434/api/tags" 1 0; then
     MODELS=$(curl -s http://localhost:11434/api/tags | python3 -c "import sys,json; tags=json.load(sys.stdin); print(', '.join(m['name'] for m in tags.get('models',[])))" 2>/dev/null || echo "unknown")
     echo -e "  Ollama:          ${GREEN}Running ✓${NC}  Models: $MODELS"
 else

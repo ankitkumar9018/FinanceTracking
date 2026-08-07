@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, verify_holding_ownership
 from app.database import get_db
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
@@ -23,26 +23,6 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-async def _verify_holding_ownership(
-    holding_id: int,
-    user: User,
-    db: AsyncSession,
-) -> Holding:
-    """Ensure the holding exists and belongs to one of the user's portfolios."""
-    result = await db.execute(
-        select(Holding)
-        .join(Portfolio, Holding.portfolio_id == Portfolio.id)
-        .where(Holding.id == holding_id, Portfolio.user_id == user.id)
-    )
-    holding = result.scalar_one_or_none()
-    if holding is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Holding not found or does not belong to the current user",
-        )
-    return holding
-
 
 async def _get_user_transaction(
     transaction_id: int,
@@ -81,7 +61,7 @@ async def backfill_transaction(
     transaction tracking was added.  It is idempotent — calling it when
     transactions already exist is a no-op.
     """
-    holding = await _verify_holding_ownership(holding_id, user, db)
+    holding = await verify_holding_ownership(holding_id, user, db)
     count_result = await db.execute(
         select(func.count()).select_from(Transaction).where(Transaction.holding_id == holding_id)
     )
@@ -112,7 +92,10 @@ async def list_transactions(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[Transaction]:
-    """List transactions, optionally filtered by holding_id."""
+    """List transactions, optionally filtered by holding_id.
+
+    A filter on a missing / other-user holding is a 404, not an empty list.
+    """
 
     stmt = (
         select(Transaction)
@@ -121,6 +104,7 @@ async def list_transactions(
         .where(Portfolio.user_id == user.id)
     )
     if holding_id is not None:
+        await verify_holding_ownership(holding_id, user, db)
         stmt = stmt.where(Transaction.holding_id == holding_id)
 
     stmt = stmt.order_by(Transaction.date.desc(), Transaction.id.desc()).offset(skip).limit(limit)
@@ -139,7 +123,7 @@ async def create_transaction(
     Automatically recalculates the holding's cumulative_quantity and
     average_price after the transaction is recorded.
     """
-    holding = await _verify_holding_ownership(body.holding_id, user, db)
+    holding = await verify_holding_ownership(body.holding_id, user, db)
 
     # For SELL, validate that the user isn't selling more than they hold
     if body.transaction_type == "SELL":

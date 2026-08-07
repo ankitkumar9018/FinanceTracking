@@ -109,7 +109,7 @@ if ((-not (Test-Path ".env")) -and (Test-Path ".env.example")) {
 }
 
 if (Test-Path "alembic.ini") {
-    uv run alembic upgrade head 2>&1 | Select-Object -Last 1
+    uv run python -c "from app.__main__ import _run_migrations; _run_migrations()" 2>&1 | Select-Object -Last 1
     Write-Host "  [OK] Database migrations applied" -ForegroundColor Green
 }
 Pop-Location

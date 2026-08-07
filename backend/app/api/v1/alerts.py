@@ -6,11 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, verify_holding_ownership
 from app.database import get_db
 from app.models.alert import Alert
 from app.models.holding import Holding
-from app.models.portfolio import Portfolio
 from app.models.user import User
 from app.models.watchlist import WatchlistItem
 from app.schemas.alert import (
@@ -81,16 +80,7 @@ async def create_alert(
     """
     # Validate holding ownership if provided
     if body.holding_id is not None:
-        result = await db.execute(
-            select(Holding)
-            .join(Portfolio, Holding.portfolio_id == Portfolio.id)
-            .where(Holding.id == body.holding_id, Portfolio.user_id == user.id)
-        )
-        if result.scalar_one_or_none() is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Holding not found or does not belong to the current user",
-            )
+        await verify_holding_ownership(body.holding_id, user, db)
 
     # Validate watchlist item ownership if provided
     if body.watchlist_item_id is not None:

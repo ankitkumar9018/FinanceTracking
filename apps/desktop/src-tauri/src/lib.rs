@@ -1,5 +1,6 @@
 use std::net::TcpListener;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::Manager;
@@ -7,7 +8,11 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandChild;
 
 struct AppState {
-    api_port: u16,
+    /// The port the backend is ACTUALLY serving on. Starts as the pre-found
+    /// free port, but the stdout line pump updates it if the backend announces
+    /// it had to move (see the "serving on free port" parsing in `run()`), so
+    /// every reader must load it fresh rather than capture it once.
+    api_port: Arc<AtomicU16>,
     sidecar_child: Mutex<Option<CommandChild>>,
 }
 
@@ -30,8 +35,13 @@ fn find_port() -> u16 {
 }
 
 /// Wait for the backend health endpoint to respond.
-fn wait_for_backend(port: u16, timeout_secs: u64) -> bool {
-    let url = format!("http://127.0.0.1:{}/health", port);
+///
+/// Re-reads the CURRENT port on every iteration: `find_port()` runs before the
+/// onefile sidecar spends 40-120s extracting, so another process can take the
+/// pre-found port in that window. The backend self-heals onto the next free
+/// port (announcing it on stdout, which updates `port`), and this poll follows
+/// it there instead of spinning forever on the stolen port.
+fn wait_for_backend(port: &Arc<AtomicU16>, timeout_secs: u64) -> bool {
     let start = Instant::now();
     let timeout = Duration::from_secs(timeout_secs);
     let client = reqwest::blocking::Client::builder()
@@ -40,6 +50,7 @@ fn wait_for_backend(port: u16, timeout_secs: u64) -> bool {
         .expect("failed to build HTTP client");
 
     while start.elapsed() < timeout {
+        let url = format!("http://127.0.0.1:{}/health", port.load(Ordering::SeqCst));
         if let Ok(resp) = client.get(&url).send() {
             if resp.status().is_success() {
                 return true;
@@ -52,34 +63,40 @@ fn wait_for_backend(port: u16, timeout_secs: u64) -> bool {
 
 #[tauri::command]
 fn get_api_port(state: tauri::State<'_, AppState>) -> u16 {
-    state.api_port
+    state.api_port.load(Ordering::SeqCst)
 }
 
 fn kill_sidecar(state: &AppState) {
-    if let Ok(mut guard) = state.sidecar_child.lock() {
-        if let Some(child) = guard.take() {
-            let pid = child.pid();
-            // Graceful first: ask the backend to shut down so its lifespan
-            // handler runs — stops the scheduler, disposes DB connections, and
-            // checkpoints the SQLite WAL. Then hard-kill only if it lingers.
-            #[cfg(not(target_os = "windows"))]
-            {
-                let _ = std::process::Command::new("kill")
-                    .args(["-TERM", &pid.to_string()])
-                    .output();
-                std::thread::sleep(Duration::from_millis(1500));
-            }
-            #[cfg(target_os = "windows")]
-            {
-                use std::os::windows::process::CommandExt;
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/PID", &pid.to_string(), "/T"])
-                    .creation_flags(0x08000000)
-                    .output();
-                std::thread::sleep(Duration::from_millis(1500));
-            }
-            let _ = child.kill(); // SIGKILL / force fallback if still alive
+    // A poisoned mutex must NOT skip the kill — that would leak the sidecar
+    // process (and its port) past app exit. Recover the inner value instead:
+    // the Option<CommandChild> is valid regardless of where the poisoning
+    // panic happened.
+    let mut guard = state
+        .sidecar_child
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(child) = guard.take() {
+        let pid = child.pid();
+        // Graceful first: ask the backend to shut down so its lifespan
+        // handler runs — stops the scheduler, disposes DB connections, and
+        // checkpoints the SQLite WAL. Then hard-kill only if it lingers.
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .output();
+            std::thread::sleep(Duration::from_millis(1500));
         }
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T"])
+                .creation_flags(0x08000000)
+                .output();
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+        let _ = child.kill(); // SIGKILL / force fallback if still alive
     }
 
     // Co-running safety (HARD REQUIREMENT): we deliberately do NOT perform any
@@ -114,6 +131,16 @@ pub fn run() {
             let port = find_port();
             println!("Backend port: {}, DB: {:?}", port, db_path);
 
+            // TOCTOU guard: find_port() releases the port immediately, and the
+            // onefile sidecar takes 40-120s to extract before uvicorn binds —
+            // another process can grab the port in that window. The backend
+            // self-heals (auto-advances to the next free port and prints
+            // "[startup] Port {req} is in use — serving on free port {port}
+            // instead."), so the ACTUAL port lives in this shared cell: the
+            // stdout pump updates it, and the health poll / navigation /
+            // get_api_port all read it fresh instead of trusting `port`.
+            let api_port = Arc::new(AtomicU16::new(port));
+
             let is_first_launch = !db_path.exists();
             println!("DB path: {:?}, exists: {}, first_launch: {}", db_path, db_path.exists(), is_first_launch);
 
@@ -141,12 +168,37 @@ pub fn run() {
             // (there is no backend to reach, so the poll would never succeed).
             let (child, spawn_error): (Option<CommandChild>, Option<String>) = match sidecar_result {
                 Ok((mut rx, child)) => {
+                    let pump_port = Arc::clone(&api_port);
                     tauri::async_runtime::spawn(async move {
                         use tauri_plugin_shell::process::CommandEvent;
                         while let Some(event) = rx.recv().await {
                             match event {
                                 CommandEvent::Stdout(line) => {
-                                    println!("[backend] {}", String::from_utf8_lossy(&line));
+                                    let text = String::from_utf8_lossy(&line);
+                                    println!("[backend] {}", text);
+                                    // The backend announces a port move as:
+                                    //   "[startup] Port {req} is in use — serving
+                                    //    on free port {port} instead."
+                                    // Follow it: publish the real port so the
+                                    // health poll and navigation catch up.
+                                    if let Some(rest) =
+                                        text.split("serving on free port ").nth(1)
+                                    {
+                                        let digits: String = rest
+                                            .chars()
+                                            .take_while(|c| c.is_ascii_digit())
+                                            .collect();
+                                        if let Ok(new_port) = digits.parse::<u16>() {
+                                            let old =
+                                                pump_port.swap(new_port, Ordering::SeqCst);
+                                            if old != new_port {
+                                                println!(
+                                                    "[desktop] port {} was taken during startup; following backend to port {}",
+                                                    old, new_port
+                                                );
+                                            }
+                                        }
+                                    }
                                 }
                                 CommandEvent::Stderr(line) => {
                                     eprintln!("[backend] {}", String::from_utf8_lossy(&line));
@@ -168,7 +220,7 @@ pub fn run() {
             };
 
             app.manage(AppState {
-                api_port: port,
+                api_port: Arc::clone(&api_port),
                 sidecar_child: Mutex::new(child),
             });
 
@@ -209,12 +261,18 @@ pub fn run() {
                     "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888;background:#09090b\"><div style=\"text-align:center;max-width:460px;padding:24px\"><h2 style=\"color:#fafafa;margin:0 0 12px\">Could not start the local server</h2><p>The FinanceTracker backend failed to launch on this machine. Please reinstall or reopen the app; if it keeps happening, check the application logs.</p></div></div>';"
                 );
             } else {
+            let nav_port = Arc::clone(&api_port);
             std::thread::spawn(move || {
-                let url = format!("http://localhost:{}/#ftport={}", port, port);
                 // Onefile PyInstaller extracts the whole bundle on every launch;
                 // a cold start (or an antivirus scan on Windows) can take well
                 // over 30s, so wait generously before declaring failure.
-                if wait_for_backend(port, 120) {
+                //
+                // The URL (including the #ftport= hash) is built AFTER the wait
+                // from the CURRENT port value: if the backend had to move ports
+                // during extraction, we navigate to where it actually is.
+                if wait_for_backend(&nav_port, 120) {
+                    let port = nav_port.load(Ordering::SeqCst);
+                    let url = format!("http://localhost:{}/#ftport={}", port, port);
                     println!("Backend ready -- navigating window to {}", url);
                     let _ = window.eval(&format!("window.location.replace('{}');", url));
                 } else {
@@ -223,6 +281,9 @@ pub fn run() {
                     // webview and navigates as soon as the backend comes up —
                     // a plain reload would return to the static shell with no
                     // monitor thread left to navigate, stranding the user.
+                    // Baked with the LATEST known port (the backend may have
+                    // announced a move while we were waiting).
+                    let port = nav_port.load(Ordering::SeqCst);
                     let recovery = format!(
                         "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888;background:#09090b\"><div style=\"text-align:center\"><h2 style=\"color:#fafafa\">Backend is taking longer than expected</h2><p id=\"ft-status\">Still trying to reach the local server\\u2026</p><button onclick=\"window.__ftCheck&&window.__ftCheck()\" style=\"margin-top:16px;padding:8px 24px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px\">Retry now</button></div></div>';\
                         window.__ftCheck = function() {{\

@@ -116,6 +116,55 @@ async function _doRefresh(): Promise<boolean> {
   }
 }
 
+/** Authenticated fetch that returns the raw Response (for blob/text bodies).
+ * Reuses the same machinery as `request`: bearer token, one retry after a
+ * successful token refresh on 401, and redirect to /login when the refresh
+ * fails. Non-401 errors are NOT thrown — callers inspect `response.ok`. */
+export async function fetchWithAuth(
+  path: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const apiBase = await getApiBaseAsync();
+  const token = await getToken();
+  const headers: Record<string, string> = {
+    ...((options.headers as Record<string, string>) || {}),
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  let response = await fetch(`${apiBase}${path}`, { ...options, headers });
+
+  if (response.status === 401) {
+    const refreshed = await tryRefresh();
+    if (!refreshed) {
+      localStorage.removeItem("ft-access-token");
+      localStorage.removeItem("ft-refresh-token");
+      if (typeof window !== "undefined") window.location.href = "/login";
+      throw new ApiError(401, "Session expired");
+    }
+    const newToken = localStorage.getItem("ft-access-token");
+    if (newToken) headers["Authorization"] = `Bearer ${newToken}`;
+    response = await fetch(`${apiBase}${path}`, { ...options, headers });
+  }
+
+  return response;
+}
+
+/** Download an authenticated endpoint as a file: fetch (with the usual
+ * refresh-on-401 handling) → blob → object URL → anchor click → revoke. */
+export async function download(path: string, filename: string): Promise<void> {
+  const response = await fetchWithAuth(path);
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new ApiError(response.status, text || `Download failed (${response.status})`);
+  }
+  const blob = await response.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>

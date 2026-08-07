@@ -2,41 +2,15 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, verify_portfolio_ownership
 from app.database import get_db
-from app.models.portfolio import Portfolio
 from app.models.user import User
 
 router = APIRouter()
-
-
-async def _verify_portfolio_ownership(
-    portfolio_id: int,
-    user: User,
-    db: AsyncSession,
-) -> Portfolio:
-    """Ensure the portfolio exists and belongs to the authenticated user.
-
-    Raises 404 otherwise — matches the behaviour of sibling routes and avoids
-    returning empty metrics with a 200 for a missing / other-user portfolio.
-    """
-    result = await db.execute(
-        select(Portfolio).where(
-            Portfolio.id == portfolio_id,
-            Portfolio.user_id == user.id,
-        )
-    )
-    portfolio = result.scalar_one_or_none()
-    if portfolio is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Portfolio not found or does not belong to the current user",
-        )
-    return portfolio
 
 
 @router.get("/technical/{symbol}")
@@ -66,7 +40,7 @@ async def get_portfolio_risk(
 
     from app.ml.risk_calculator import compute_portfolio_risk
 
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     metrics = await compute_portfolio_risk(
         user.id, portfolio_id, db, days, benchmark
     )
@@ -86,7 +60,7 @@ async def get_holdings_risk(
 
     from app.ml.risk_calculator import compute_holding_risks
 
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     results = await compute_holding_risks(
         user.id, portfolio_id, db, days, benchmark
     )
@@ -110,21 +84,10 @@ async def get_hedge_estimate(
     not a real option price (see ``hedge_service`` for details).
     """
     from app.models.holding import Holding
-    from app.models.portfolio import Portfolio
     from app.services.hedge_service import DEFAULT_INDEX_PRICE, compute_hedge_estimate
 
     # Verify ownership (scoped to the authenticated user).
-    port_result = await db.execute(
-        select(Portfolio).where(
-            Portfolio.id == portfolio_id,
-            Portfolio.user_id == user.id,
-        )
-    )
-    portfolio = port_result.scalar_one_or_none()
-    if portfolio is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Portfolio not found"
-        )
+    await verify_portfolio_ownership(portfolio_id, user, db)
 
     # Portfolio value = sum of holdings (qty * current_price, fall back to avg).
     h_result = await db.execute(

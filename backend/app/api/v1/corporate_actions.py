@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.errors import map_value_error
 from app.database import get_db
 from app.models.user import User
 from app.services.corporate_actions_service import (
@@ -24,17 +25,6 @@ from app.services.corporate_actions_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _map_value_error(exc: ValueError) -> HTTPException:
-    """Translate a service ValueError into a 404 (not found) or 400 (state)."""
-    message = str(exc)
-    code = (
-        status.HTTP_404_NOT_FOUND
-        if "not found" in message.lower()
-        else status.HTTP_400_BAD_REQUEST
-    )
-    return HTTPException(status_code=code, detail=message)
 
 
 @router.post("/detect")
@@ -76,7 +66,7 @@ async def apply_action(
     try:
         return await apply_corporate_action(action_id, user.id, db)
     except ValueError as exc:
-        raise _map_value_error(exc)
+        raise map_value_error(exc) from exc
 
 
 @router.post("/{action_id}/dismiss")
@@ -89,4 +79,4 @@ async def dismiss_action(
     try:
         return await dismiss_corporate_action(action_id, user.id, db)
     except ValueError as exc:
-        raise _map_value_error(exc)
+        raise map_value_error(exc) from exc

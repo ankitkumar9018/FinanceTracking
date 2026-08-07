@@ -7,7 +7,6 @@ import {
   Pencil,
   Trash2,
   RefreshCw,
-  X,
   CheckCircle2,
   Clock,
   CalendarDays,
@@ -19,9 +18,10 @@ import { api } from "@/lib/api-client";
 import { useApiData } from "@/hooks/use-api-data";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { ErrorState } from "@/components/shared/error-state";
+import { Modal } from "@/components/shared/modal";
 import toast from "react-hot-toast";
 import { formatCurrency } from "@/lib/utils";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -173,156 +173,127 @@ function GoalFormModal({
     setForm(initialData);
   }, [initialData]);
 
-  if (!open) return null;
-
   return (
-    <AnimatePresence>
-      <div className="fixed inset-0 z-50 flex items-center justify-center">
-        {/* Backdrop */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="absolute inset-0 bg-black/50"
-          onClick={onClose}
-        />
-        {/* Modal */}
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          transition={{ duration: 0.2 }}
-          className="relative z-10 w-full max-w-md rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-xl"
-        >
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">
-              {initialData.name ? "Edit Goal" : "Add New Goal"}
-            </h2>
-            <button
-              onClick={onClose}
-              aria-label="Close dialog"
-              className="rounded-md p-1 hover:bg-[hsl(var(--accent))] transition-colors"
-            >
-              <X className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
-            </button>
-          </div>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={initialData.name ? "Edit Goal" : "Add New Goal"}
+      maxWidth="max-w-md"
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit(form);
+        }}
+        className="space-y-4"
+      >
+        {/* Name */}
+        <div>
+          <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+            Goal Name
+          </label>
+          <input
+            type="text"
+            required
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
+            placeholder="e.g. Retirement Fund"
+          />
+        </div>
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              onSubmit(form);
-            }}
-            className="space-y-4"
+        {/* Target Amount */}
+        <div>
+          <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+            Target Amount
+          </label>
+          <input
+            type="number"
+            required
+            min="1"
+            step="0.01"
+            value={form.target_amount}
+            onChange={(e) => setForm({ ...form, target_amount: e.target.value })}
+            className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
+            placeholder="1000000"
+          />
+        </div>
+
+        {/* Target Date */}
+        <div>
+          <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+            Target Date
+          </label>
+          <input
+            type="date"
+            required
+            value={form.target_date}
+            onChange={(e) => setForm({ ...form, target_date: e.target.value })}
+            className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
+          />
+        </div>
+
+        {/* Category */}
+        <div>
+          <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+            Category
+          </label>
+          <select
+            value={form.category}
+            onChange={(e) => setForm({ ...form, category: e.target.value as GoalCategory })}
+            className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
           >
-            {/* Name */}
-            <div>
-              <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
-                Goal Name
-              </label>
-              <input
-                type="text"
-                required
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
-                placeholder="e.g. Retirement Fund"
-              />
-            </div>
+            <option value="RETIREMENT">Retirement</option>
+            <option value="HOUSE">House</option>
+            <option value="EDUCATION">Education</option>
+            <option value="EMERGENCY">Emergency Fund</option>
+            <option value="CUSTOM">Custom</option>
+          </select>
+        </div>
 
-            {/* Target Amount */}
-            <div>
-              <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
-                Target Amount
-              </label>
-              <input
-                type="number"
-                required
-                min="1"
-                step="0.01"
-                value={form.target_amount}
-                onChange={(e) => setForm({ ...form, target_amount: e.target.value })}
-                className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
-                placeholder="1000000"
-              />
-            </div>
+        {/* Linked Portfolio */}
+        <div>
+          <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+            Linked Portfolio (optional)
+          </label>
+          <select
+            value={form.linked_portfolio_id}
+            onChange={(e) =>
+              setForm({ ...form, linked_portfolio_id: e.target.value })
+            }
+            className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
+          >
+            <option value="">None</option>
+            {portfolios.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
 
-            {/* Target Date */}
-            <div>
-              <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
-                Target Date
-              </label>
-              <input
-                type="date"
-                required
-                value={form.target_date}
-                onChange={(e) => setForm({ ...form, target_date: e.target.value })}
-                className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
-              />
-            </div>
-
-            {/* Category */}
-            <div>
-              <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
-                Category
-              </label>
-              <select
-                value={form.category}
-                onChange={(e) => setForm({ ...form, category: e.target.value as GoalCategory })}
-                className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
-              >
-                <option value="RETIREMENT">Retirement</option>
-                <option value="HOUSE">House</option>
-                <option value="EDUCATION">Education</option>
-                <option value="EMERGENCY">Emergency Fund</option>
-                <option value="CUSTOM">Custom</option>
-              </select>
-            </div>
-
-            {/* Linked Portfolio */}
-            <div>
-              <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
-                Linked Portfolio (optional)
-              </label>
-              <select
-                value={form.linked_portfolio_id}
-                onChange={(e) =>
-                  setForm({ ...form, linked_portfolio_id: e.target.value })
-                }
-                className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
-              >
-                <option value="">None</option>
-                {portfolios.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Actions */}
-            <div className="flex justify-end gap-3 pt-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded-md px-4 py-2 text-sm font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={saving}
-                className="inline-flex items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:opacity-90 transition-opacity disabled:opacity-50"
-              >
-                {saving && (
-                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                )}
-                {initialData.name ? "Update Goal" : "Create Goal"}
-              </button>
-            </div>
-          </form>
-        </motion.div>
-      </div>
-    </AnimatePresence>
+        {/* Actions */}
+        <div className="flex justify-end gap-3 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md px-4 py-2 text-sm font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:opacity-90 transition-opacity disabled:opacity-50"
+          >
+            {saving && (
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+            )}
+            {initialData.name ? "Update Goal" : "Create Goal"}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

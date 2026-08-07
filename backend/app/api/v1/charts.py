@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, verify_portfolio_ownership
 from app.database import get_db
-from app.models.portfolio import Portfolio
+from app.models.holding import Holding
 from app.models.price_history import PriceHistory
 from app.models.user import User
 from app.schemas.market_data import HistoryResponse, RSIResponse
@@ -107,23 +107,18 @@ async def portfolio_allocation(
     - by_stock: list of {symbol, name, value, percentage}
     - by_sector: list of {sector, value, percentage}
     """
-    result = await db.execute(
-        select(Portfolio)
-        .options(selectinload(Portfolio.holdings))
-        .where(Portfolio.id == portfolio_id, Portfolio.user_id == user.id)
+    await verify_portfolio_ownership(portfolio_id, user, db)
+
+    h_result = await db.execute(
+        select(Holding).where(Holding.portfolio_id == portfolio_id)
     )
-    portfolio = result.scalar_one_or_none()
-    if portfolio is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Portfolio not found",
-        )
+    holdings = h_result.scalars().all()
 
     by_stock: list[dict] = []
     sector_totals: dict[str, float] = {}
     total_value = 0.0
 
-    for h in portfolio.holdings:
+    for h in holdings:
         qty = float(h.cumulative_quantity)
         price = float(h.current_price) if h.current_price is not None else float(h.average_price)
         value = qty * price
@@ -174,19 +169,12 @@ async def portfolio_performance(
 
     Returns a time series of {date, total_value} for the requested period.
     """
-    result = await db.execute(
-        select(Portfolio)
-        .options(selectinload(Portfolio.holdings))
-        .where(Portfolio.id == portfolio_id, Portfolio.user_id == user.id)
-    )
-    portfolio = result.scalar_one_or_none()
-    if portfolio is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Portfolio not found",
-        )
+    portfolio = await verify_portfolio_ownership(portfolio_id, user, db)
 
-    holdings = portfolio.holdings
+    h_result = await db.execute(
+        select(Holding).where(Holding.portfolio_id == portfolio_id)
+    )
+    holdings = h_result.scalars().all()
     if not holdings:
         return {
             "portfolio_id": portfolio_id,
@@ -194,7 +182,8 @@ async def portfolio_performance(
             "data": [],
         }
 
-    # Gather all price history entries for the holdings' symbols
+    # Gather price history for the holdings' symbols, bounded to the requested
+    # window so the query never scans a symbol's entire stored history.
     symbols_exchanges = [(h.stock_symbol, h.exchange) for h in holdings]
     from sqlalchemy import and_, or_
 
@@ -206,9 +195,10 @@ async def portfolio_performance(
         for sym, exch in symbols_exchanges
     ]
 
+    window_start = date.today() - timedelta(days=days)
     ph_result = await db.execute(
         select(PriceHistory)
-        .where(or_(*conditions))
+        .where(PriceHistory.date >= window_start, or_(*conditions))
         .order_by(PriceHistory.date)
     )
     price_rows = ph_result.scalars().all()

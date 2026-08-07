@@ -11,17 +11,17 @@ import logging
 from collections import defaultdict
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, verify_portfolio_ownership
+from app.api.errors import map_value_error
 from app.database import get_db
 from app.models.dividend import Dividend
 from app.models.holding import Holding
-from app.models.portfolio import Portfolio
 from app.models.transaction import Transaction
 from app.models.user import User
 from app.services.concentration_service import analyze_concentration
@@ -71,27 +71,6 @@ async def _gather_histories(
         return_exceptions=True,
     )
     return [[] if isinstance(r, BaseException) else r for r in results]
-
-async def _verify_portfolio_ownership(
-    portfolio_id: int,
-    user: User,
-    db: AsyncSession,
-) -> Portfolio:
-    """Ensure the portfolio exists and belongs to the authenticated user."""
-    result = await db.execute(
-        select(Portfolio).where(
-            Portfolio.id == portfolio_id,
-            Portfolio.user_id == user.id,
-        )
-    )
-    portfolio = result.scalar_one_or_none()
-    if portfolio is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Portfolio not found or does not belong to the current user",
-        )
-    return portfolio
-
 
 def _month_range(start: str, end: str) -> list[str]:
     """Return every ``YYYY-MM`` month from ``start`` to ``end`` inclusive.
@@ -148,7 +127,7 @@ async def get_drift(
     Returns each holding's actual vs target allocation, and flags any
     holdings whose drift exceeds the given threshold (default 5 %).
     """
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     drift_data = await check_drift(portfolio_id, db, threshold=threshold)
     return {
         "portfolio_id": portfolio_id,
@@ -177,10 +156,7 @@ async def set_drift_target(
             db=db,
         )
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        )
+        raise map_value_error(exc) from exc
     return {
         "holding_id": holding.id,
         "stock_symbol": holding.stock_symbol,
@@ -217,7 +193,7 @@ async def get_concentration(
     score with an A-F grade (anchored on the Herfindahl-Hirschman Index), and
     human-readable warnings for each flagged concentration.
     """
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     analysis = await analyze_concentration(
         portfolio_id,
         db,
@@ -238,7 +214,7 @@ async def sector_rotation(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Get sector-wise allocation weights and their change vs last month."""
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     return await get_sector_rotation(portfolio_id, db)
 
 
@@ -268,7 +244,7 @@ async def calendar_events(
 
     Aggregates SIP dates, dividend payment dates, and upcoming earnings.
     """
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
 
     today = date.today()
     if month is None:
@@ -307,7 +283,7 @@ async def recurring_transactions(
     Identifies holdings with regular BUY transactions of similar amounts
     at roughly monthly intervals.
     """
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     patterns = await detect_recurring(portfolio_id, db)
     return {
         "portfolio_id": portfolio_id,
@@ -331,7 +307,7 @@ async def week52_proximity(
     Shows how close each stock's current price is to its 52-week high
     and low, and flags stocks that are near either extreme.
     """
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     proximity = await get_52week_proximity(portfolio_id, db)
     return {
         "portfolio_id": portfolio_id,
@@ -354,7 +330,7 @@ async def data_freshness(
     A holding is stale if its price data is older than 30 minutes during
     market hours, or older than 1 day outside market hours.
     """
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     freshness = await get_data_freshness(portfolio_id, db)
 
     stale_count = sum(1 for f in freshness if f["is_stale"])
@@ -381,15 +357,12 @@ async def export_sheets_csv(
     The CSV includes a holdings summary, full transaction history, and
     dividend history with proper headers and date formatting.
     """
-    portfolio = await _verify_portfolio_ownership(portfolio_id, user, db)
+    portfolio = await verify_portfolio_ownership(portfolio_id, user, db)
 
     try:
         csv_content = await generate_portfolio_csv(portfolio_id, db)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        )
+        raise map_value_error(exc) from exc
 
     # Sanitise portfolio name for the filename
     safe_name = "".join(
@@ -424,7 +397,7 @@ async def get_correlation_matrix(
     Uses daily close returns over the specified period. Requires numpy.
     Returns an empty matrix if insufficient data.
     """
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
 
     result = await db.execute(
         select(Holding).where(Holding.portfolio_id == portfolio_id)
@@ -494,7 +467,7 @@ async def get_monthly_returns(
     when full daily portfolio valuation isn't available. Falls back to
     aggregate price change of all holdings.
     """
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
 
     result = await db.execute(
         select(Holding).where(Holding.portfolio_id == portfolio_id)
@@ -589,7 +562,7 @@ async def get_drawdown(
 
     Returns date+drawdown_pct pairs for charting.
     """
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
 
     result = await db.execute(
         select(Holding).where(Holding.portfolio_id == portfolio_id)
@@ -670,7 +643,7 @@ async def economic_calendar(
     ``region``; macro events also carry an ``importance``. Events are sorted by
     date. yfinance failures degrade gracefully.
     """
-    await _verify_portfolio_ownership(portfolio_id, user, db)
+    await verify_portfolio_ownership(portfolio_id, user, db)
     feed = await get_economic_calendar(portfolio_id, db)
     return {"portfolio_id": portfolio_id, **feed}
 
@@ -701,7 +674,7 @@ async def get_cash_flow(
     net across the contiguous month range. All amounts are in the portfolio's
     currency.
     """
-    portfolio = await _verify_portfolio_ownership(portfolio_id, user, db)
+    portfolio = await verify_portfolio_ownership(portfolio_id, user, db)
 
     # Transactions for every holding in this portfolio
     tx_result = await db.execute(
