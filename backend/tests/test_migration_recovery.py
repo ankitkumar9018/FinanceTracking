@@ -64,3 +64,29 @@ c.commit(); c.close()
     conn.close()
     assert version != "8809e230b920"
     assert email == "ahead@x.com"
+
+
+def test_sidecar_secret_generated_persisted_and_reused(tmp_path, monkeypatch):
+    """Desktop mode must self-provision a strong, stable SECRET_KEY.
+
+    Regression: the fail-closed default-secret check bricked the packaged
+    sidecar (no .env ships with it). The sidecar now generates a per-install
+    secret, persists it beside the DB, and reuses it on every later boot.
+    """
+    from app.__main__ import _ensure_sidecar_secret
+
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    _ensure_sidecar_secret(tmp_path)
+    first = os.environ.get("SECRET_KEY")
+    assert first and len(first) >= 64 and not first.startswith("dev-secret")
+    assert (tmp_path / "secret.key").read_text().strip() == first
+
+    # A later boot reuses the SAME key (sessions survive restarts/upgrades).
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    _ensure_sidecar_secret(tmp_path)
+    assert os.environ.get("SECRET_KEY") == first
+
+    # An explicit env var always wins over the stored file.
+    monkeypatch.setenv("SECRET_KEY", "explicit-operator-key-0123456789abcdef")
+    _ensure_sidecar_secret(tmp_path)
+    assert os.environ["SECRET_KEY"] == "explicit-operator-key-0123456789abcdef"

@@ -369,6 +369,8 @@ The sidecar sets `CORS_ORIGINS=*` because:
 
 Installing a newer version replaces **only the application**; it never touches this folder. So the upgrade path is simply: **run the new installer over your old version, and your data carries forward.** Hand someone the installer, they run it over the version they already have, and their accounts, portfolios, holdings, and transactions are all still there.
 
+The same folder also holds `secret.key` — a strong per-install JWT signing key the app generates on first launch (file mode 0600). Because it lives beside the database and survives upgrades, existing logins keep working after installing a new version. Deleting it is safe but signs everyone out. An explicit `SECRET_KEY` environment variable overrides it.
+
 **The schema is upgraded automatically.** On every launch the backend runs Alembic migrations (`alembic upgrade head`) and then an additive schema-reconciliation pass (`_run_migrations` → `_reconcile_schema` in `app/__main__.py`). A database created by an *older* build — even one that's months old — is brought up to the current schema automatically:
 
 - New tables and new columns are **added**

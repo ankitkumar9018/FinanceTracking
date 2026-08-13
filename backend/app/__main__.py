@@ -13,6 +13,7 @@ require the exact port instead. (Prefer this entry point over a bare
 
 import argparse
 import asyncio
+import contextlib
 import os
 import sys
 from pathlib import Path
@@ -239,6 +240,44 @@ def _find_free_port(host: str, preferred: int, span: int = 10) -> int:
     return port
 
 
+def _ensure_sidecar_secret(data_dir: Path) -> None:
+    """Guarantee a strong, per-install JWT secret for desktop (sidecar) mode.
+
+    The packaged app has no .env, and ``app.main`` refuses to start on the
+    default development SECRET_KEY (fail closed). Instead of weakening that
+    check, generate a random secret on first run and persist it in the
+    app-data directory (0600), so every install gets its own key and existing
+    sessions survive restarts/upgrades. An explicit SECRET_KEY env var always
+    wins; a corrupt/unreadable file falls back to a fresh in-memory secret
+    (users just get logged out) rather than blocking startup.
+    """
+    if os.environ.get("SECRET_KEY"):
+        return
+    import secrets
+
+    key_file = data_dir / "secret.key"
+    try:
+        if key_file.is_file():
+            stored = key_file.read_text(encoding="utf-8").strip()
+            if len(stored) >= 32:
+                os.environ["SECRET_KEY"] = stored
+                return
+        generated = secrets.token_hex(32)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        key_file.write_text(generated, encoding="utf-8")
+        # Permissions differ on Windows; best-effort only.
+        with contextlib.suppress(OSError):
+            os.chmod(key_file, 0o600)
+        os.environ["SECRET_KEY"] = generated
+        print(f"[startup] Generated per-install SECRET_KEY at {key_file}")
+    except OSError as exc:  # pragma: no cover - unwritable data dir
+        os.environ["SECRET_KEY"] = secrets.token_hex(32)
+        print(
+            f"[startup] Could not persist SECRET_KEY ({exc}); using an "
+            "ephemeral secret for this run (sessions reset on restart)."
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="FinanceTracker Backend")
     parser.add_argument(
@@ -264,6 +303,11 @@ def main() -> None:
         # becomes a literal %20 directory that doesn't exist. Raw spaces work.
         db_posix = Path(args.db_path).as_posix()
         os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{db_posix}"
+        # Sidecar installs ship no .env, and the app fails closed on the
+        # default JWT secret. Give every install a strong, STABLE secret,
+        # persisted next to the DB (stable so logins survive restarts).
+        # Must happen before anything imports app.config.
+        _ensure_sidecar_secret(Path(args.db_path).parent)
 
     # Sidecar mode: allow all origins. The backend binds to 127.0.0.1 only,
     # so this is safe. Avoids CORS mismatches across platform webview engines
