@@ -103,7 +103,7 @@ class OllamaProvider(LLMProvider):
     ) -> ChatResponse:
         formatted = self._openai_messages(messages, system_prompt)
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=settings.ollama_timeout) as client:
             resp = await client.post(
                 f"{self.base_url}/api/chat",
                 json={
@@ -128,7 +128,7 @@ class OllamaProvider(LLMProvider):
         formatted = self._openai_messages(messages, system_prompt)
 
         async with (
-            httpx.AsyncClient(timeout=120.0) as client,
+            httpx.AsyncClient(timeout=settings.ollama_timeout) as client,
             client.stream(
                 "POST",
                 f"{self.base_url}/api/chat",
@@ -459,7 +459,7 @@ async def chat(
     try:
         return await provider.chat(messages, system_prompt=system_prompt)
     except Exception as e:
-        logger.error(f"LLM chat failed with {provider.NAME}: {e}")
+        logger.error(f"LLM chat failed with {provider.NAME}: {e!r}")
         return ChatResponse(
             message=f"I encountered an error processing your request. "
             f"The {provider.NAME} provider returned an error. "

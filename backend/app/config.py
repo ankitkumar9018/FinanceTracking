@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     llm_provider: Literal["ollama", "openai", "anthropic", "google", "none"] = "ollama"
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
+    # Local generation can be slow (CPU-only / busy machines); tune per install.
+    ollama_timeout: float = 300.0
     openai_api_key: str = ""
     openai_model: str = "gpt-4"
     anthropic_api_key: str = ""
