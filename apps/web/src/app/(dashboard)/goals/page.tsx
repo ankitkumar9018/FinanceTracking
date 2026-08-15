@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Target,
   Plus,
@@ -857,15 +857,22 @@ export default function GoalsPage() {
     setModalOpen(true);
   }
 
-  const formInitialData: GoalFormData = editingGoal
-    ? {
-        name: editingGoal.name,
-        target_amount: editingGoal.target_amount.toString(),
-        target_date: editingGoal.target_date.split("T")[0],
-        category: editingGoal.category,
-        linked_portfolio_id: editingGoal.linked_portfolio_id?.toString() || "",
-      }
-    : emptyForm;
+  // Memoized on editingGoal: a fresh object every render would retrigger
+  // GoalFormModal's reset effect (keyed on initialData identity) on every
+  // unrelated re-render (e.g. WS price ticks), wiping the open edit form.
+  const formInitialData: GoalFormData = useMemo(
+    () =>
+      editingGoal
+        ? {
+            name: editingGoal.name,
+            target_amount: editingGoal.target_amount.toString(),
+            target_date: editingGoal.target_date.split("T")[0],
+            category: editingGoal.category,
+            linked_portfolio_id: editingGoal.linked_portfolio_id?.toString() || "",
+          }
+        : emptyForm,
+    [editingGoal]
+  );
 
   return (
     <div className="space-y-6">

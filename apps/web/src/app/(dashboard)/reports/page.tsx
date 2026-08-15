@@ -17,6 +17,7 @@ function currentIndianFY(): string {
 export default function ReportsPage() {
   const { activePortfolioId, portfolios } = usePortfolioStore();
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
+  const [includeAiSummary, setIncludeAiSummary] = useState(false);
   const [taxFy, setTaxFy] = useState<string>(currentIndianFY());
   const [taxJurisdiction, setTaxJurisdiction] = useState<"IN" | "DE">("IN");
   const portfolio = portfolios.find((p) => p.id === activePortfolioId);
@@ -57,7 +58,9 @@ export default function ReportsPage() {
       actionLabel: "View Report",
       needsPortfolio: true,
       action: () => run("report", async () => {
-        const res = await fetchWithAuth(`/import-export/export/report/${pid}`);
+        const res = await fetchWithAuth(
+          `/import-export/export/report/${pid}${includeAiSummary ? "?ai_summary=true" : ""}`
+        );
         if (!res.ok) throw new Error("Failed to generate report");
         const html = await res.text();
         const win = window.open("", "_blank");
@@ -109,7 +112,10 @@ export default function ReportsPage() {
       actionLabel: "Download PDF",
       needsPortfolio: true,
       action: () => run("pdf", async () => {
-        await download(`/import-export/export/pdf/${pid}`, `portfolio_${pid}_report.pdf`);
+        await download(
+          `/import-export/export/pdf/${pid}${includeAiSummary ? "?ai_summary=true" : ""}`,
+          `portfolio_${pid}_report.pdf`
+        );
         toast.success("PDF downloaded!");
       }),
     },
@@ -184,6 +190,22 @@ export default function ReportsPage() {
           Generate reports and export data for{" "}
           {portfolio?.name || "your portfolio"}
         </p>
+      </div>
+
+      <div className="flex items-start gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3">
+        <input
+          id="include-ai-summary"
+          type="checkbox"
+          checked={includeAiSummary}
+          onChange={(e) => setIncludeAiSummary(e.target.checked)}
+          className="mt-0.5 h-4 w-4 accent-[hsl(var(--primary))]"
+        />
+        <label htmlFor="include-ai-summary" className="cursor-pointer select-none">
+          <span className="text-sm font-medium">Include AI summary</span>
+          <span className="block text-xs text-[hsl(var(--muted-foreground))]">
+            Adds an AI-written overview to the HTML report and PDF export. Slower; needs a connected AI model.
+          </span>
+        </label>
       </div>
 
       <div className="space-y-4">

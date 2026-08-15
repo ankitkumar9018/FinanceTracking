@@ -455,9 +455,11 @@ class TestSchedulerModeDecision:
             scheduler = sched.get_scheduler()
             assert scheduler is not None
             assert scheduler.running
-            assert {j.id for j in scheduler.get_jobs()} == {
-                "fetch_prices_job",
-                "check_alerts_job",
+            # Every job in the shared spec is registered. Asserted as a subset
+            # so adding a job to JOBS (e.g. ai_digest_job) doesn't break this
+            # test — what matters is that APScheduler mirrors the spec.
+            assert {"fetch_prices_job", "check_alerts_job"} <= {
+                j.id for j in scheduler.get_jobs()
             }
         finally:
             sched.stop_scheduler()
@@ -495,11 +497,19 @@ class TestSchedulerModeDecision:
     def test_jobs_spec_shared_between_modes(self):
         from app.tasks.celery_app import JOBS
 
-        assert {j.id for j in JOBS} == {"fetch_prices_job", "check_alerts_job"}
-        assert {j.celery_task for j in JOBS} == {
+        # Subset assertions: the spec is the single source of truth for BOTH
+        # APScheduler and celery beat, and new jobs get added to it over time
+        # (ai_digest_job). Pin the core ones plus their celery task paths.
+        assert {"fetch_prices_job", "check_alerts_job"} <= {j.id for j in JOBS}
+        assert {
             "app.tasks.fetch_prices.fetch_prices_celery",
             "app.tasks.check_alerts.check_alerts_celery",
-        }
+        } <= {j.celery_task for j in JOBS}
+        # Every entry must be fully specified, whatever the job.
+        for job in JOBS:
+            assert job.id and job.name and job.celery_task
+            assert job.interval_seconds() > 0
+            assert callable(job.coro_factory)
         for job in JOBS:
             assert job.interval_seconds() > 0
 

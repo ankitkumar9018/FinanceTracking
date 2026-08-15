@@ -129,8 +129,14 @@ async def generate_portfolio_report_html(
     portfolio_id: int,
     user_name: str,
     db: AsyncSession,
+    ai_summary: str | None = None,
 ) -> str:
-    """Generate a portfolio summary report as styled HTML (can be printed to PDF)."""
+    """Generate a portfolio summary report as styled HTML (can be printed to PDF).
+
+    ``ai_summary`` (opt-in) renders a clearly labeled "AI Summary" section near
+    the top of the report; the text is HTML-escaped. When None (the default)
+    the output is byte-identical to the pre-AI report.
+    """
     result = await db.execute(
         select(Portfolio)
         .options(selectinload(Portfolio.holdings))
@@ -218,6 +224,22 @@ async def generate_portfolio_report_html(
     total_pnl_color = "#16a34a" if total_pnl >= 0 else "#dc2626"
     total_pnl_str = f"{total_pnl:+,.2f} ({total_pnl_pct:+.1f}%)"
 
+    # Optional AI Summary section. Styles are inline (not in the <style>
+    # block) so the default output stays byte-identical when ai_summary is
+    # None — the placeholder below then renders as the empty string.
+    ai_summary_html = ""
+    if ai_summary:
+        ai_summary_html = (
+            '<div style="background:#eef4fb;border:1px solid #c7d9ee;'
+            'border-radius:8px;padding:16px 24px;margin-bottom:24px">'
+            '<div style="font-size:12px;font-weight:700;color:#1e3a5f;'
+            'text-transform:uppercase;margin-bottom:8px">AI Summary '
+            '<span style="font-weight:400;text-transform:none;color:#666">'
+            "(AI-generated — educational, not financial advice)</span></div>"
+            f'<p style="margin:0;font-size:13px;line-height:1.5">'
+            f"{_esc(ai_summary)}</p></div>"
+        )
+
     unpriced_note = ""
     if unpriced_count:
         unpriced_note = (
@@ -247,7 +269,7 @@ async def generate_portfolio_report_html(
 <h1>{_esc(portfolio.name)} — Portfolio Report</h1>
 <p class="subtitle">Generated on {now} for {_esc(user_name)}
 | Currency: {_esc(portfolio.currency)}</p>
-<div class="summary">
+{ai_summary_html}<div class="summary">
     <div class="summary-card">
         <div class="label">Total Invested</div>
         <div class="value">{total_invested:,.2f}</div>
@@ -545,15 +567,19 @@ async def generate_tax_report_html(
 
 
 async def generate_portfolio_pdf(
-    portfolio_id: int, user_name: str, db: AsyncSession
+    portfolio_id: int, user_name: str, db: AsyncSession,
+    ai_summary: str | None = None,
 ) -> bytes:
     """Generate a PDF report from the HTML portfolio report.
 
+    ``ai_summary`` is forwarded to the HTML report (opt-in AI section).
     Requires the ``xhtml2pdf`` package. Raises ImportError if not installed.
     """
     from xhtml2pdf import pisa
 
-    html_content = await generate_portfolio_report_html(portfolio_id, user_name, db)
+    html_content = await generate_portfolio_report_html(
+        portfolio_id, user_name, db, ai_summary=ai_summary
+    )
     output = io.BytesIO()
     # xhtml2pdf reports failures on the returned status object (``.err``)
     # instead of raising, so a broken PDF would otherwise be served as valid.

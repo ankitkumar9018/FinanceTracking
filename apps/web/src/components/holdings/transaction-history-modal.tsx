@@ -46,23 +46,31 @@ export function TransactionHistoryModal({ target, onClose, onChanged }: Transact
   const holdingId = target?.holdingId ?? null;
   const currency = target?.currency ?? "INR";
 
-  // Load transactions whenever a target holding is set.
+  // Load transactions whenever a target holding is set. The `active` guard
+  // drops stale responses: opening holding A then quickly holding B must not
+  // let A's slower response paint its rows under B's title.
   useEffect(() => {
     if (holdingId == null) return;
+    let active = true;
     setTransLoading(true);
     (async () => {
       try {
         // Backfill seed transaction for legacy holdings with no transactions
         await api.post(`/transactions/backfill?holding_id=${holdingId}`).catch(() => {});
         const data = await api.get<Transaction[]>(`/transactions?holding_id=${holdingId}`);
+        if (!active) return;
         setTransactions(data);
       } catch {
+        if (!active) return;
         toast.error("Failed to load transactions");
         setTransactions([]);
       } finally {
-        setTransLoading(false);
+        if (active) setTransLoading(false);
       }
     })();
+    return () => {
+      active = false;
+    };
   }, [target, holdingId]);
 
   async function handleAddTransaction(e: React.FormEvent) {

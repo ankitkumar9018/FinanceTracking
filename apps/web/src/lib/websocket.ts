@@ -85,17 +85,34 @@ export class WSConnection {
       // 4001 = auth failure. The access token may simply have expired, so try
       // ONE refresh via the shared api-client mechanism and reconnect if it
       // succeeds. retriedAuth prevents a loop when the refresh token is dead;
-      // it resets in onopen so a later expiry gets a fresh retry.
+      // it resets in onopen so a later expiry gets a fresh retry. When the
+      // refresh doesn't help (refresh fails, or the reconnect is 4001'd
+      // again), emit "auth_failed" so consumers can prompt for a re-login.
       if (event.code === 4001) {
-        if (this.retriedAuth) return;
+        if (this.retriedAuth) {
+          this.emit("auth_failed", {});
+          return;
+        }
         this.retriedAuth = true;
+        // Hold the connecting guard through the async refresh so a concurrent
+        // connect() can't open a second socket meanwhile.
+        this.connecting = true;
         tryRefresh().then((refreshed) => {
-          if (refreshed && !this.intentionalClose) this._resolveAndConnect();
+          if (refreshed && !this.intentionalClose) {
+            this._resolveAndConnect();
+          } else {
+            this.connecting = false;
+            if (!refreshed) this.emit("auth_failed", {});
+          }
         });
         return;
       }
       if (!noReconnectCodes.includes(event.code) && this.reconnectAttempts < this.maxReconnectAttempts) {
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+        // Guard the whole backoff window: a manual connect() while a reconnect
+        // is pending must not open a second socket. disconnect() clears both
+        // the flag and the timer.
+        this.connecting = true;
         this.reconnectTimeout = setTimeout(() => {
           this.reconnectAttempts++;
           // Re-resolve the base each attempt so a dynamic Tauri port is picked up.

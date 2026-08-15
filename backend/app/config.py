@@ -81,6 +81,15 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-20250514"
     google_api_key: str = ""
+    # AI digest / report-summary generation budget (seconds). Applied via
+    # asyncio.wait_for around the provider call; on expiry the numbers-only
+    # digest (or a report without the AI section) is served instead.
+    ai_digest_timeout: float = 120.0
+    # One-sentence AI explanations appended to triggered alert notifications.
+    # Gated + tightly time-boxed so alert delivery is never delayed by a slow
+    # (or absent) LLM provider.
+    ai_alert_explanations: bool = True
+    ai_alert_explain_timeout: float = 20.0
 
     # ── Broker API Keys ─────────────────────────────────────────────────
     zerodha_api_key: str = ""

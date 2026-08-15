@@ -64,6 +64,12 @@ def _check_alerts_coro() -> Coroutine[Any, Any, dict]:
     return check_alerts_task()
 
 
+def _ai_digest_coro() -> Coroutine[Any, Any, dict]:
+    from app.tasks.ai_digest_task import run_scheduled_digests
+
+    return run_scheduled_digests()
+
+
 @dataclass(frozen=True)
 class JobSpec:
     """One periodic background job, mode-agnostic."""
@@ -89,6 +95,15 @@ JOBS: tuple[JobSpec, ...] = (
         celery_task="app.tasks.check_alerts.check_alerts_celery",
         interval_seconds=lambda: settings.alert_check_interval,
         coro_factory=_check_alerts_coro,
+    ),
+    JobSpec(
+        id="ai_digest_job",
+        name="Generate scheduled AI portfolio digests",
+        celery_task="app.tasks.ai_digest_task.run_scheduled_digests_celery",
+        # Daily cadence; the task itself decides per user (daily vs weekly on
+        # Monday vs off) from each user's stored digest frequency.
+        interval_seconds=lambda: 24 * 60 * 60,
+        coro_factory=_ai_digest_coro,
     ),
 )
 

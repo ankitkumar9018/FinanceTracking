@@ -17,8 +17,12 @@ import contextlib
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import uvicorn
+
+if TYPE_CHECKING:
+    from alembic.config import Config
 
 
 def _run_migrations() -> None:
@@ -32,8 +36,9 @@ def _run_migrations() -> None:
     4. **Schema ahead of stamp** – the schema already has columns a pending
        migration would add (e.g. a DB that was additively reconciled while
        stamped at an older revision). Replaying collides with "duplicate
-       column"; recover by stamping head and letting the additive reconcile
-       below fill any genuinely-missing pieces.
+       column"; recover by stepping revision-by-revision, applying every
+       revision that still runs and stamping past only the ones that
+       collide. The additive reconcile below fills any remaining pieces.
     """
     from alembic.config import Config
     from sqlalchemy import create_engine, inspect
@@ -100,14 +105,17 @@ def _run_migrations() -> None:
             if "duplicate column" in msg or "already exists" in msg:
                 # Scenario 4: the schema is ahead of the stamp. The pending
                 # migration's ADD COLUMN/CREATE collided with what's already
-                # there, so replaying can never succeed. Stamp head — the
-                # additive reconcile below adds anything genuinely missing.
+                # there, so replaying THAT revision can never succeed — but
+                # later revisions may still be genuinely pending (unique
+                # constraints, indexes, data backfills). Stamping straight
+                # to head would silently skip them all, so step through the
+                # remaining revisions one at a time instead.
                 print(
                     "[migrate] Schema is ahead of the alembic stamp "
-                    f"({exc.orig if exc.orig else exc}). Stamping head and "
-                    "reconciling additively."
+                    f"({exc.orig if exc.orig else exc}). Stepping "
+                    "revision-by-revision, skipping only collisions."
                 )
-                command.stamp(cfg, "head")
+                _step_past_collisions(cfg, sync_url)
             else:
                 raise
 
@@ -115,6 +123,69 @@ def _run_migrations() -> None:
     # migrations already ran, so columns they would have added are missing.
     # Reconcile additively so an old DB keeps working with a new build.
     _reconcile_schema(sync_url)
+
+
+def _step_past_collisions(cfg: "Config", sync_url: str) -> None:
+    """Recover a schema-ahead-of-stamp DB by stepping one revision at a time.
+
+    Stamping straight to head would mark EVERY pending revision as applied,
+    silently skipping ones whose work is genuinely missing — e.g. a revision
+    that only creates a unique constraint (8809e230b920) or one carrying a
+    data backfill. Instead each pending revision is applied individually via
+    ``upgrade +1``; only a revision whose DDL collides with the existing
+    schema (duplicate column / already exists — provably already present) is
+    stamped past. Any other failure raises.
+
+    Note: ``alembic stamp`` does NOT accept relative revisions ("+1") — as of
+    alembic 1.18 it raises "Can't locate revision identified by '+1'" — so
+    the next revision id is resolved explicitly through ScriptDirectory
+    (``iterate_revisions`` yields head-down, exclusive of the lower bound,
+    making its last element the immediate next step).
+    """
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import OperationalError
+
+    from alembic import command
+
+    script = ScriptDirectory.from_config(cfg)
+    head = script.get_current_head()
+
+    def _current_revision() -> str | None:
+        engine = create_engine(sync_url)
+        try:
+            with engine.connect() as conn:
+                return MigrationContext.configure(conn).get_current_revision()
+        finally:
+            engine.dispose()
+
+    total_revisions = sum(1 for _ in script.walk_revisions())
+    for _ in range(total_revisions + 1):
+        current = _current_revision()
+        if current == head:
+            print("[migrate] Stepping complete — database is at head.")
+            return
+        path = list(script.iterate_revisions("heads", current or "base"))
+        next_rev = path[-1].revision
+        try:
+            command.upgrade(cfg, "+1")
+            print(f"[migrate] Applied pending revision {next_rev}.")
+        except OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                print(
+                    f"[migrate] Revision {next_rev} is already reflected in "
+                    f"the schema ({exc.orig if exc.orig else exc}); "
+                    "stamping past it."
+                )
+                command.stamp(cfg, next_rev)
+            else:
+                raise
+    raise RuntimeError(
+        "[migrate] Revision stepping did not converge to head "
+        f"(stuck at {_current_revision()})."
+    )
 
 
 def _reconcile_schema(sync_url: str) -> None:

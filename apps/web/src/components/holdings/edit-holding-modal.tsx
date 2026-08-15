@@ -118,6 +118,24 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
       return;
     }
 
+    // Validate the optional fields BEFORE any API call: an invalid target %
+    // or stop-loss must abort the save entirely rather than toast an error and
+    // then still close with a success toast.
+    const parsedTarget = editTargetPct.trim() === "" ? null : parseFloat(editTargetPct);
+    if (
+      parsedTarget != null &&
+      !Number.isNaN(parsedTarget) &&
+      (parsedTarget < 0 || parsedTarget > 100)
+    ) {
+      toast.error("Target % must be between 0 and 100");
+      return;
+    }
+    const parsedSl = editStopLoss.trim() === "" ? null : parseFloat(editStopLoss);
+    if (parsedSl != null && !Number.isNaN(parsedSl) && parsedSl <= 0) {
+      toast.error("Stop-loss price must be positive");
+      return;
+    }
+
     setEditingStock(true);
     try {
       const payload = {
@@ -136,23 +154,17 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
       await api.patch(`/holdings/${holdingId}`, payload);
 
       // Save target allocation % via the drift endpoint when it changed
-      const parsedTarget = editTargetPct.trim() === "" ? null : parseFloat(editTargetPct);
+      // (validated above, before any API call)
       if (parsedTarget != null && !Number.isNaN(parsedTarget) && parsedTarget !== initialTargetPct) {
-        if (parsedTarget < 0 || parsedTarget > 100) {
-          toast.error("Target % must be between 0 and 100");
-        } else {
-          await api.put(`/analytics/drift/${holdingId}`, {
-            target_allocation_pct: parsedTarget,
-          });
-        }
+        await api.put(`/analytics/drift/${holdingId}`, {
+          target_allocation_pct: parsedTarget,
+        });
       }
 
       // Save stop-loss: PUT when a positive value is set, DELETE when cleared
-      const parsedSl = editStopLoss.trim() === "" ? null : parseFloat(editStopLoss);
+      // (validated above, before any API call)
       if (parsedSl != null && !Number.isNaN(parsedSl)) {
-        if (parsedSl <= 0) {
-          toast.error("Stop-loss price must be positive");
-        } else if (parsedSl !== initialStopLoss) {
+        if (parsedSl !== initialStopLoss) {
           await api.put(`/comparison/stop-loss/${holdingId}?price=${parsedSl}`);
         }
       } else if (initialStopLoss != null) {

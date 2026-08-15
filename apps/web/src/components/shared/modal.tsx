@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X } from "lucide-react";
 
@@ -33,6 +33,10 @@ export function Modal({
   maxWidth = "max-w-lg",
   cardClassName = "",
 }: ModalProps) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  // Element focused before the modal opened, restored on close.
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
   // Escape-to-close while open.
   useEffect(() => {
     if (!open) return;
@@ -42,6 +46,30 @@ export function Modal({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
+
+  // Body scroll-lock while open (restores the previous value on close so
+  // nested/stacked usage doesn't clobber another lock unnecessarily).
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open]);
+
+  // Minimal focus handling: remember the opener, focus the card on open, and
+  // restore focus when the modal closes.
+  useEffect(() => {
+    if (!open) return;
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    cardRef.current?.focus();
+    return () => {
+      previousFocusRef.current?.focus();
+      previousFocusRef.current = null;
+    };
+  }, [open]);
 
   return (
     <AnimatePresence>
@@ -58,9 +86,11 @@ export function Modal({
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
             transition={{ duration: 0.2 }}
+            ref={cardRef}
             role="dialog"
             aria-modal="true"
-            className={`mx-4 w-full ${maxWidth} rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-xl ${cardClassName}`}
+            tabIndex={-1}
+            className={`mx-4 w-full ${maxWidth} rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-xl outline-none ${cardClassName}`}
             onClick={(e) => e.stopPropagation()}
           >
             {title !== undefined && (

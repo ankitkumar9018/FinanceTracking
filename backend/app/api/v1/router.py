@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     ai_chat,
+    ai_digest,
     alerts,
     analytics,
     auth,
@@ -61,6 +62,7 @@ api_v1_router.include_router(
 )
 api_v1_router.include_router(broker.router, prefix="/broker", tags=["Broker"])
 api_v1_router.include_router(ai_chat.router, prefix="/ai", tags=["AI & ML"])
+api_v1_router.include_router(ai_digest.router, prefix="/ai/digest", tags=["AI"])
 api_v1_router.include_router(goals.router, prefix="/goals", tags=["Goals"])
 api_v1_router.include_router(
     backtest.router, prefix="/backtest", tags=["Backtesting & Optimization"]

@@ -77,6 +77,25 @@ async def check_alerts_task() -> dict:
                     # ── Dispatch notifications via configured channels ────
                     channels = alert_info.get("channels", ["in_app"])
                     message = alert_info.get("message", "Alert triggered")
+
+                    # Best-effort one-sentence AI explanation (gated by
+                    # settings.ai_alert_explanations, time-boxed by
+                    # settings.ai_alert_explain_timeout inside the service).
+                    # Any failure/timeout/no-provider sends the plain message.
+                    try:
+                        from app.services.ai_digest_service import (
+                            explain_alert_trigger,
+                        )
+
+                        explanation = await explain_alert_trigger(alert_info)
+                        if explanation:
+                            message = f"{message}\n{explanation}"
+                    except Exception:
+                        logger.debug(
+                            "alert explanation skipped for alert %s",
+                            alert_info.get("alert_id"),
+                            exc_info=True,
+                        )
                     subject = (
                         f"Alert: {alert_info.get('stock_symbol', 'N/A')} "
                         f"— {alert_info.get('alert_type', 'CUSTOM')}"

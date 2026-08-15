@@ -69,6 +69,22 @@ _EXCEL_CONTENT_TYPE = (
 )
 
 
+async def _report_ai_summary(user_id: int, db: AsyncSession) -> str | None:
+    """Best-effort AI summary text for the report/PDF routes.
+
+    The service already handles provider absence, timeouts, and errors by
+    returning None; the extra guard here guarantees the export itself can
+    never fail because of the AI section.
+    """
+    try:
+        from app.services.ai_digest_service import generate_report_summary
+
+        return await generate_report_summary(user_id, db)
+    except Exception:
+        logger.warning("AI report summary failed — exporting without it", exc_info=True)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -564,17 +580,26 @@ async def upload_json(
 @router.get("/export/pdf/{portfolio_id}")
 async def export_pdf(
     portfolio_id: int,
+    ai_summary: bool = False,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    """Export a portfolio report as a PDF file."""
+    """Export a portfolio report as a PDF file.
+
+    ``ai_summary=true`` adds a best-effort AI-generated summary section; any
+    AI failure/timeout simply exports the PDF without it.
+    """
     await verify_portfolio_ownership(portfolio_id, user, db)
     user_name = user.display_name or user.email
+
+    ai_text = await _report_ai_summary(user.id, db) if ai_summary else None
 
     try:
         from app.services.export_service import generate_portfolio_pdf
 
-        pdf_bytes = await generate_portfolio_pdf(portfolio_id, user_name, db)
+        pdf_bytes = await generate_portfolio_pdf(
+            portfolio_id, user_name, db, ai_summary=ai_text
+        )
     except ImportError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -601,15 +626,24 @@ async def export_pdf(
 @router.get("/export/report/{portfolio_id}")
 async def export_report(
     portfolio_id: int,
+    ai_summary: bool = False,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> HTMLResponse:
-    """Generate a styled HTML portfolio report (can be printed to PDF in browser)."""
+    """Generate a styled HTML portfolio report (can be printed to PDF in browser).
+
+    ``ai_summary=true`` adds a best-effort AI-generated summary section; any
+    AI failure/timeout simply renders the report without it.
+    """
     await verify_portfolio_ownership(portfolio_id, user, db)
     user_name = user.display_name or user.email
 
+    ai_text = await _report_ai_summary(user.id, db) if ai_summary else None
+
     try:
-        html = await generate_portfolio_report_html(portfolio_id, user_name, db)
+        html = await generate_portfolio_report_html(
+            portfolio_id, user_name, db, ai_summary=ai_text
+        )
     except ValueError as exc:
         raise map_value_error(exc) from exc
 

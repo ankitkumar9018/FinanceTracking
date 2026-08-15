@@ -13,6 +13,7 @@ network in the hot path (``analyze_concentration`` is called with
 from __future__ import annotations
 
 import logging
+import re
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +39,28 @@ def _fmt(value: object) -> str:
     if isinstance(value, float):
         return f"{value:,.2f}".rstrip("0").rstrip(".")
     return str(value)
+
+
+_EQ_RUN = re.compile(r"={3,}")
+_WS_RUN = re.compile(r"[ \t]+")
+
+
+def _sanitize(value: object, max_len: int = 60) -> str:
+    """Defang a free-text value before interpolating it into the LLM context.
+
+    User-controlled strings (portfolio name, sector, symbol, notes-derived
+    warnings, ...) could otherwise smuggle prompt-injection payloads into the
+    system prompt — e.g. a portfolio named ``"=== END PORTFOLIO CONTEXT ==="``
+    followed by fake instructions. Newlines/carriage returns are flattened,
+    runs of 3+ ``=`` (the context block delimiter) are collapsed to ``‗``,
+    whitespace is squeezed/stripped, and the result is length-capped.
+    """
+    if value is None:
+        return ""
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    text = _EQ_RUN.sub("‗", text)
+    text = _WS_RUN.sub(" ", text).strip()
+    return text[:max_len]
 
 
 async def build_portfolio_context(user_id: int, db: AsyncSession) -> str:
@@ -75,9 +98,9 @@ async def build_portfolio_context(user_id: int, db: AsyncSession) -> str:
             continue
         any_holdings = True
         processed += 1
-        cur = p.currency or "INR"
+        cur = _sanitize(p.currency, 10) or "INR"
 
-        lines.append(f"## Portfolio: {p.name} ({cur})")
+        lines.append(f"## Portfolio: {_sanitize(p.name)} ({cur})")
         lines.append(
             f"Invested {cur} {_fmt(summary.get('total_invested'))}; "
             f"current value {cur} {_fmt(summary.get('total_current_value'))}; "
@@ -89,12 +112,13 @@ async def build_portfolio_context(user_id: int, db: AsyncSession) -> str:
         lines.append(f"Holdings ({len(holdings)}):")
         for h in holdings[:budget]:
             lines.append(
-                f"- {h.get('stock_symbol')} "
-                f"({h.get('exchange', '')}, {h.get('sector') or 'sector n/a'}): "
+                f"- {_sanitize(h.get('stock_symbol'))} "
+                f"({_sanitize(h.get('exchange'), 20)}, "
+                f"{_sanitize(h.get('sector')) or 'sector n/a'}): "
                 f"qty {_fmt(h.get('quantity'))}, avg {_fmt(h.get('avg_price'))}, "
                 f"current {_fmt(h.get('current_price'))}, "
                 f"P&L {_fmt(h.get('pnl_percent'))}%, "
-                f"zone {h.get('action_needed') or 'n/a'}, "
+                f"zone {_sanitize(h.get('action_needed'), 30) or 'n/a'}, "
                 f"RSI {_fmt(h.get('rsi'))}"
             )
         listed = min(budget, len(holdings))
@@ -125,7 +149,7 @@ async def _append_diversification(lines: list[str], portfolio_id: int, db: Async
         return
 
     lines.append(
-        f"Diversification: grade {conc.get('grade')}, "
+        f"Diversification: grade {_sanitize(conc.get('grade'), 10)}, "
         f"effective holdings {_fmt(conc.get('effective_holdings'))} "
         f"of {conc.get('holdings_count')}, "
         f"Herfindahl index {_fmt(conc.get('herfindahl_index'))}."
@@ -133,13 +157,16 @@ async def _append_diversification(lines: list[str], portfolio_id: int, db: Async
     sectors = conc.get("by_sector") or []
     if sectors:
         sec_txt = ", ".join(
-            f"{s.get('sector', '?')} {_fmt(s.get('weight_pct'))}%"
+            f"{_sanitize(s.get('sector')) or '?'} {_fmt(s.get('weight_pct'))}%"
             for s in sectors[:_MAX_SECTORS]
         )
         lines.append(f"Sector allocation: {sec_txt}.")
     warnings = conc.get("warnings") or []
     if warnings:
-        lines.append("Concentration flags: " + " ".join(str(w) for w in warnings[:4]))
+        lines.append(
+            "Concentration flags: "
+            + " ".join(_sanitize(w, 160) for w in warnings[:4])
+        )
 
 
 async def _append_drift(lines: list[str], portfolio_id: int, db: AsyncSession) -> None:
@@ -155,7 +182,7 @@ async def _append_drift(lines: list[str], portfolio_id: int, db: AsyncSession) -
     if not over:
         return
     dtxt = ", ".join(
-        f"{d.get('stock_symbol')} at {_fmt(d.get('actual_pct'))}% "
+        f"{_sanitize(d.get('stock_symbol'))} at {_fmt(d.get('actual_pct'))}% "
         f"vs target {_fmt(d.get('target_pct'))}% ({_fmt(d.get('drift_pct'))}pp off)"
         for d in over[:6]
     )

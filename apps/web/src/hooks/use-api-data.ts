@@ -51,7 +51,8 @@ export function useApiData<T>(
         setLoading(false);
       } catch (err) {
         if (seq !== seqRef.current) return;
-        setData(null);
+        // Keep the last good `data` on a failed reload — pages can keep
+        // showing (stale) content alongside the error instead of blanking.
         setError(err instanceof Error ? err.message : "Request failed");
         setLoading(false);
       }
