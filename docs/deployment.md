@@ -171,9 +171,13 @@ The names below are the exact field names read by `config.py`; env-var names are
 | `NOTIFICATION_CHANNELS` | `in_app` | No | Comma-separated enabled channels: `in_app,email,telegram,whatsapp,sms`. |
 | `LLM_PROVIDER` | `ollama` | No | One of `ollama`, `openai`, `anthropic`, `google`, `none`. |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | `http://localhost:11434` / `llama3.2` | No | Local LLM. |
+| `OLLAMA_TIMEOUT` | `300.0` | No | Seconds to wait for an Ollama generation. Raise it on CPU-only or busy machines where local generation is slow. |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | `""` / `gpt-4` | No | OpenAI provider. |
-| `ANTHROPIC_API_KEY` | `""` | No | Claude provider. |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | `""` / `claude-sonnet-4-20250514` | No | Claude provider. |
 | `GOOGLE_API_KEY` | `""` | No | Gemini provider. |
+| `AI_DIGEST_TIMEOUT` | `120.0` | No | Budget (seconds) for AI digest and report-summary generation. On expiry the deterministic numbers-only digest is served (or the report renders without the AI section). |
+| `AI_ALERT_EXPLANATIONS` | `true` | No | Append a one-sentence AI explanation to triggered alert notifications. Set `false` to disable. |
+| `AI_ALERT_EXPLAIN_TIMEOUT` | `20.0` | No | Budget (seconds) for that explanation; on expiry the plain alert message is sent. |
 | `ZERODHA_API_KEY` / `ZERODHA_API_SECRET` | `""` | No | Zerodha broker integration. |
 | `ICICI_APP_KEY` / `ICICI_SECRET_KEY` | `""` | No | ICICI Direct broker integration. |
 | `MFAPI_URL` | `https://api.mfapi.in` | No | Mutual-fund NAV source. |

@@ -81,6 +81,46 @@ Here are some examples of questions the AI can answer:
 
 ---
 
+## Asking the Assistant to Do Things
+
+Besides answering questions, the assistant can help you **record a transaction**, **add a new holding**, or **create an alert**:
+
+- "Buy 10 TCS at 3500"
+- "Add 50 shares of Infosys at an average price of 1450"
+- "Alert me if Reliance goes above 3000"
+
+**It never does any of this on its own.** When it recognises one of these requests, it replies with a plain summary of exactly what it would do -- "Buy 10 TCS (NSE) at 3500 on 2026-08-15." -- and waits. You click **Confirm** to go ahead, or **Dismiss** to throw it away and change nothing.
+
+What keeps this safe:
+
+- The assistant **proposes; you confirm**. The model can never change your data by itself.
+- When you confirm, the details are **checked again on the server** and the holding or portfolio is re-checked as yours.
+- The change is made through the **same code as manual entry**, so the same rules apply -- you still cannot sell more than your ledger says you hold.
+- If the stock is not in your portfolios, or you hold it in more than one place, it tells you and sets nothing up rather than guessing.
+- A proposal **expires after 15 minutes**, and at most **5** can be waiting in a conversation at once. If one expires, just ask again.
+
+This needs a connected AI model. Without one, use the normal Holdings, Transactions, and Alerts screens.
+
+---
+
+## Your Portfolio Digest
+
+The digest is a short written round-up of your portfolio -- total invested versus current value, overall profit and loss, your biggest positions, notable gainers and losers, and any concentration flags.
+
+- **Generate one any time** from the AI Assistant area; the newest one is stored so you can reopen it.
+- **Or schedule it**: **Off**, **Daily**, or **Weekly** (weekly digests go out on Mondays). Scheduled digests are delivered through your usual notification channels -- in-app always, plus email, Telegram, WhatsApp, or SMS if you have those turned on.
+
+**The digest works even with no AI model connected.** It is assembled from your own computed numbers first; a model is only ever asked to rewrite those numbers into nicer prose. If no model is available (or it is too slow), you still get the numbers-only version, and the digest reports its provider as `none`.
+
+---
+
+## AI in Reports and Alerts
+
+- **Reports**: when exporting the HTML report or PDF you can opt in to a short **AI summary** at the top. It is slower and needs a connected model -- and if the model is unavailable, the report exports exactly as normal, just without the summary.
+- **Alerts**: a triggered alert notification can carry **one short AI sentence** explaining what the trigger means. It is tightly time-boxed, so a slow model never delays your alert, and it is skipped silently if AI is unavailable.
+
+---
+
 ## AI Providers
 
 The AI assistant can use different language models. You choose which one in Settings.
@@ -147,7 +187,8 @@ Each conversation is saved as a "session." To start fresh:
 
 ## What the AI Cannot Do
 
-- It cannot place trades or buy/sell stocks for you
+- It cannot place trades or buy/sell stocks for you -- it can only *propose* recording a transaction, holding, or alert in your own records, which you then confirm
+- It cannot predict future prices
 - It does not provide financial advice (it provides information and analysis)
 - It may sometimes give incorrect information -- always verify important decisions
 - It cannot access data outside of your FinanceTracker portfolio

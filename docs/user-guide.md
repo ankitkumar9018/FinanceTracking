@@ -404,7 +404,25 @@ By default, the AI runs locally using Ollama (free, private, no internet needed)
 - **Claude** -- Requires API key
 - **Gemini** -- Requires API key
 
-Configure these in **Settings** then **AI Assistant**.
+Configure these in **Settings** then **AI Assistant**. A local model on a slow or busy machine can take a while to reply; the backend `OLLAMA_TIMEOUT` setting (default 300 seconds) controls how long the app waits.
+
+### Actions You Confirm
+
+If you ask the assistant to record a transaction, add a holding, or create an alert ("Buy 10 TCS at 3500"), it does **not** do it. It replies with a summary of exactly what it would do and waits for you to **Confirm** or **Dismiss**. On confirmation the details are re-validated, ownership is re-checked, and the change is made through the same code as manual entry -- so the same guards apply (you still cannot sell more than your ledger shows). Proposals expire after 15 minutes and at most 5 can be pending in a conversation. This needs a connected AI model.
+
+### Portfolio Digest
+
+The assistant can produce a **digest** -- a short round-up of totals, P&L, largest positions, gainers/losers, and concentration flags. Generate one on demand, or schedule it **daily** or **weekly** (weekly goes out on Mondays) so it arrives through your notification channels.
+
+The digest **works even with no AI model connected**: it is built from your own computed numbers, and a model is only ever asked to rewrite them. When no model answers in time, you get the numbers-only version and the digest reports its provider as `none`.
+
+### AI Summary in Reports
+
+The HTML report and PDF export accept an opt-in AI summary at the top of the report. It is slower and needs a connected model, and the export still succeeds without it if the model is unavailable.
+
+### Alert Explanations
+
+Triggered alert notifications can carry one short AI sentence explaining what the trigger means. It is time-boxed (default 20 seconds), so a slow model never delays the alert, and it is skipped silently if AI is unavailable.
 
 ### Market Insights
 
@@ -418,7 +436,9 @@ These use the built-in ML models and, like the chat, degrade gracefully if a mod
 
 ### If AI Is Offline
 
-If no AI provider is available, you will see an "AI assistant offline" message. This does not affect any other part of the app -- everything else works normally.
+If no AI provider is available, you will see an "AI assistant offline" message. This does not affect any other part of the app -- everything else works normally. The **portfolio digest** still works (in its numbers-only form); chat, proposed actions, report summaries, and alert explanations need a connected model.
+
+Everything the AI produces is educational information, not financial advice, and it cannot predict prices.
 
 ---
 

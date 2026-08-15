@@ -319,6 +319,8 @@ Go to **Alerts** in the sidebar to create rules that watch your holdings and pin
 
 **Alert history:** a history list shows every time your alerts have fired — the same data behind the top-bar notification bell.
 
+**AI explanations:** if an AI model is connected, a triggered alert can carry one extra sentence explaining in plain terms what the trigger means — see [14.8](#148-explanations-on-triggered-alerts). It never delays or replaces the alert itself.
+
 ### 6.3 Notification channels & per-user destinations
 
 Alerts can reach you on any of these channels:
@@ -684,6 +686,60 @@ Click **Insights** to open the insights panel, enter a symbol, and switch betwee
 
 By default the assistant runs **locally via Ollama** — free, private, and works offline. You can optionally connect **OpenAI (GPT)**, **Claude**, or **Gemini** with your own API key in **Settings → AI Assistant**. If the app can't reach any provider, it simply shows an "AI assistant offline" message and everything else keeps working.
 
+A local model on a CPU-only or busy machine can take a while to answer. If replies time out, raise `OLLAMA_TIMEOUT` (default **300** seconds) in the backend configuration.
+
+> Everything the AI writes is **educational information, not financial advice**. It cannot predict prices, and it can be wrong — always check the numbers it quotes against your own screens.
+
+### 14.5 Your portfolio digest
+
+A **digest** is a short written round-up of your portfolio: total invested versus current value, overall profit and loss, your largest positions, notable gainers and losers, and any concentration or drift flags.
+
+**It always works — even with no AI model connected.** The digest is built from your own computed numbers first. When a model is available it is only asked to *rewrite* those same numbers into readable prose; if it is unavailable, slow, or errors out, you still get the numbers-only version. You can tell which you received: the digest reports the provider that wrote it, or **`none`** when it is the built-from-your-numbers fallback.
+
+**Generate one now:** open the digest from the AI Assistant area and choose **Generate**. The newest digest is stored, so you can reopen it any time without regenerating.
+
+**Get it on a schedule:** set the frequency to **Off**, **Daily**, or **Weekly** (weekly digests go out on Mondays). A background job runs once a day and delivers each due digest through your existing **notification channels** — always in-app, plus email, Telegram, WhatsApp, or SMS if you have those enabled in **Settings → Notifications**.
+
+Because the digest never depends on a model, turning it on is safe even if you never configure AI at all.
+
+### 14.6 Asking the assistant to do things (with your confirmation)
+
+The assistant can help you **record a transaction**, **add a new holding**, or **create an alert** — for example:
+
+- "Buy 10 TCS at 3500."
+- "Add 50 shares of Infosys at an average price of 1450."
+- "Alert me if Reliance goes above 3000."
+
+**Nothing happens until you say so.** When the assistant recognises one of these requests, it replies with a plain-English summary of exactly what it would do and waits. You then either **Confirm** or **Dismiss**. Dismissing throws the proposal away and changes nothing.
+
+How this is kept safe:
+
+- **You are the only one who can trigger a change** — the model can propose, never execute.
+- **Everything is re-checked on the server** when you confirm: the numbers are validated again, and the holding or portfolio is re-checked as belonging to you.
+- **The same code path as manual entry** does the work, so identical guards apply — for instance you still can't sell more than your ledger shows you hold.
+- **Nothing is invented.** If the symbol isn't in your portfolios, or you hold it in more than one place, the assistant says so and sets nothing up rather than guessing.
+- **Proposals don't linger.** They expire **15 minutes** after being offered, and at most **5** can be pending in a conversation at once — the oldest is dropped beyond that. An expired proposal simply can't be confirmed; ask again.
+
+This feature **needs a connected AI model**. Without one, the assistant will not propose actions — use the normal Holdings, Transactions, and Alerts screens instead.
+
+### 14.7 AI summary in reports
+
+When you export a portfolio **HTML report** or **PDF**, you can opt in to an **AI summary** — a compact 4–6 sentence overview of the same figures placed at the top of the report.
+
+- It is **off by default** — you have to ask for it.
+- It **needs a connected model** and makes the export noticeably **slower**.
+- The export **never fails because of AI**: if the model is unavailable, slow, or errors out, the report is produced exactly as normal, just without the summary section.
+
+### 14.8 Explanations on triggered alerts
+
+When an alert fires, the notification can include **one short AI sentence** explaining in plain terms what the trigger means. It is appended to the usual alert message.
+
+- It is **time-boxed**: if the model doesn't answer quickly (default 20 seconds), the plain alert is sent on time regardless. Alert delivery is never held up.
+- It is **silently skipped** when no model is connected or anything goes wrong — you never lose the alert itself.
+- It can be turned off entirely by the instance operator (`AI_ALERT_EXPLANATIONS`).
+
+As always, the sentence is an explanation of what happened, not a recommendation about what to do.
+
 ---
 
 ## 15. Brokers
@@ -763,6 +819,8 @@ Open **Reports** in the sidebar:
 - **Capital Gains Tax Report** (CSV/HTML) — see [8.4](#84-the-itr-ready-capital-gains-tax-report).
 - **SQLite backup** — a copy of the whole database (desktop).
 - **Export Everything** — a single **.zip** bundle containing holdings CSV, transactions CSV, the JSON backup, the HTML report, the Excel workbook, the PDF report, and a README.
+
+The **HTML report** and **PDF export** can optionally include an **AI summary** at the top — see [14.7](#147-ai-summary-in-reports). It's opt-in, slower, needs a connected model, and is quietly left out if the model isn't available.
 
 ### 16.4 Shareable snapshot
 

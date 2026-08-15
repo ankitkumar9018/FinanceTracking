@@ -1255,9 +1255,82 @@ Pass an existing integer `session_id` to continue a conversation, or `null` to s
   "session_id": 1,
   "response": "Based on your portfolio, 3 stocks are underperforming Nifty 50 this month:\n\n1. **INFY.NS** (-3.2% vs Nifty +1.8%)\n2. **HDFCBANK.NS** (-0.75% vs Nifty +1.8%)\n3. **WIPRO.NS** (-1.5% vs Nifty +1.8%)\n\nInfosys has the widest gap. Its RSI is at 35, approaching oversold territory.",
   "provider": "ollama",
-  "model": "llama3.2"
+  "model": "llama3.2",
+  "proposed_action": null
 }
 ```
+
+A stale or foreign `session_id` returns `404 Not Found` (`"Chat session not found"`) rather than silently starting a new session.
+
+Cost controls: only the most recent 20 messages of the session are replayed to the provider, and the compiled portfolio context is cached per session for 300 seconds.
+
+**Proposed actions.** When an active provider is configured, a lightweight intent pass runs first. If the message is a clear request to perform one of the supported actions, the reply is composed server-side and `proposed_action` is populated instead of `null`. **Nothing is executed at this point** — the proposal is parked in the session until the user confirms.
+
+```json
+{
+  "session_id": 1,
+  "response": "I can do that, but it needs your confirmation first: Buy 10 TCS (NSE) at 3500 on 2026-08-15. Confirm to execute this action, or dismiss it.",
+  "provider": "ollama",
+  "model": "llama3.2",
+  "proposed_action": {
+    "id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "type": "add_transaction",
+    "summary": "Buy 10 TCS (NSE) at 3500 on 2026-08-15.",
+    "params": {"transaction_type": "BUY", "symbol": "TCS", "exchange": "NSE", "quantity": 10, "price": 3500, "date": "2026-08-15", "brokerage": 0.0, "notes": null, "holding_id": 42}
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | UUID of the proposal, used in the execute/dismiss routes |
+| `type` | string | One of `add_transaction`, `add_holding`, `create_alert` |
+| `summary` | string | Human-readable, server-composed description to show in the confirm prompt |
+| `params` | object | Validated parameters; `holding_id` / `portfolio_id` are resolved server-side, never taken from the model |
+
+Proposals expire **900 seconds (15 minutes)** after creation and a maximum of **5** pending proposals are kept per chat session (the oldest is dropped when a sixth arrives). Without an active provider, the intent pass is skipped entirely and `proposed_action` is always `null`.
+
+### Execute a Proposed Action
+
+```
+POST /ai/chat/actions/{action_id}/execute
+```
+
+**Request Body** (optional):
+```json
+{"session_id": 1}
+```
+
+Omitting the body (or `session_id`) searches all of the caller's chat sessions for the pending action.
+
+**Response** `200 OK`:
+```json
+{
+  "status": "executed",
+  "detail": "Recorded BUY of 10 TCS at 3500 and recalculated the holding.",
+  "result": {"transaction_id": 501, "holding_id": 42}
+}
+```
+
+The `result` keys depend on the action type: `{transaction_id, holding_id}` for `add_transaction`, `{holding_id, portfolio_id}` for `add_holding`, `{alert_id, holding_id}` for `create_alert`.
+
+**Errors:**
+| Status | Meaning |
+|---|---|
+| `404` | `"Action not found or expired"` — unknown, foreign, or expired `action_id` |
+| `400` | Stored parameters failed re-validation, an unsupported action type, or a business guard from the reused route handler (e.g. the SELL ledger guard) |
+
+Execution re-validates the stored parameters, re-checks ownership, and runs through the **same route handlers as the manual endpoints** (`create_transaction`, `create_holding`, `create_alert`) — so the ledger sell-guard and cumulative-holding recompute apply identically. The proposal is removed from the session once executed.
+
+### Dismiss a Proposed Action
+
+```
+POST /ai/chat/actions/{action_id}/dismiss
+```
+
+**Request Body** (optional): `{"session_id": 1}`
+
+**Response** `204 No Content` — the proposal is discarded without being executed. `404` if it is unknown or already expired.
 
 ### Get AI-Generated Insights
 
@@ -1268,23 +1341,12 @@ GET /ai/insights
 **Response** `200 OK`:
 ```json
 {
-  "insights": [
-    {
-      "type": "alert_summary",
-      "title": "3 stocks approaching upper mid range",
-      "description": "TCS, Infosys, and Wipro are within 5% of your upper mid range 1.",
-      "priority": "medium"
-    },
-    {
-      "type": "risk",
-      "title": "Portfolio Sharpe ratio improved",
-      "description": "Your Sharpe ratio improved from 1.2 to 1.8 this month.",
-      "priority": "low"
-    }
-  ],
-  "provider_status": "online"
+  "insights": "1. TCS, Infosys and Wipro are within 5% of your upper mid range...\n2. Your IT allocation is 46% of the portfolio, well above your 30% target...",
+  "provider": "ollama"
 }
 ```
+
+With no holdings the response is `{"insights": "No holdings found. Start by adding stocks to your portfolio."}` (no `provider` key) and no LLM round-trip is made.
 
 ### Get Price Prediction
 
@@ -1337,6 +1399,68 @@ GET /ai/sentiment/{symbol}
   "analysis_method": "keyword"
 }
 ```
+
+### Get Latest AI Portfolio Digest
+
+```
+GET /ai/digest/
+```
+
+**Response** `200 OK`:
+```json
+{
+  "generated_at": "2026-08-15T06:30:00+00:00",
+  "content": "Portfolio Digest — 2026-08-15T06:30:00+00:00\n\n...\n\nAI-generated — educational information only, not financial advice.",
+  "provider": "ollama",
+  "grounded": true
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | string | ISO-8601 UTC timestamp (second precision) |
+| `content` | string | Plain-text digest |
+| `provider` | string | Provider that wrote it, or `"none"` when the deterministic numbers-only digest was used |
+| `grounded` | bool | `true` when the digest was built from a non-empty compiled portfolio context |
+
+`404 Not Found` if no digest has been generated yet; the `detail` points at `POST /api/v1/ai/digest/generate` and `PUT /api/v1/ai/digest/schedule`.
+
+The latest digest and the schedule preference are stored in the user's `notification_preferences` JSON column (keys `ai_digest_latest` / `ai_digest_frequency`) — no separate table.
+
+### Generate a Digest Now
+
+```
+POST /ai/digest/generate
+```
+
+No request body. Generates the digest, stores it as the user's latest, and returns it in the same shape as `GET /ai/digest/`.
+
+**This endpoint always succeeds even with no AI provider configured.** The numbers are compiled first into a deterministic plain-text digest; an active provider is only ever asked to *rewrite* that same grounded context, time-boxed by `AI_DIGEST_TIMEOUT` (default 120s). Any timeout, provider error, or empty reply falls back to the deterministic text and the response reports `"provider": "none"`.
+
+### Get Digest Schedule
+
+```
+GET /ai/digest/schedule
+```
+
+**Response** `200 OK`: `{"frequency": "off"}` — one of `off`, `daily`, `weekly`. Defaults to `off`.
+
+### Set Digest Schedule
+
+```
+PUT /ai/digest/schedule
+```
+
+**Request Body:**
+```json
+{"frequency": "weekly"}
+```
+
+`frequency` must be `off`, `daily`, or `weekly` (anything else is `422`).
+
+**Response** `200 OK`: `{"frequency": "weekly"}`
+
+A daily background job (`ai_digest_job`, Celery task `app.tasks.ai_digest_task.run_scheduled_digests_celery`) generates digests for every active user: `daily` on every run, `weekly` only on Mondays (UTC), `off` skipped. Each digest is delivered as an in-app notification plus any of `email`, `telegram`, `whatsapp`, `sms` the user has enabled via the `<channel>_enabled` notification preferences.
 
 ### Get Portfolio Risk Metrics
 
@@ -2482,6 +2606,14 @@ Endpoints not covered in detail above, one line each:
 - `GET /ai/status` — AI provider availability (Ollama, OpenAI, Anthropic, Google)
 - `GET /ai/anomalies/{symbol}` — Isolation Forest price/volume anomaly detection
 - `GET /ai/insights` — AI-generated portfolio insights
+- `POST /ai/chat/actions/{action_id}/execute` — execute a proposed chat action after user confirmation
+- `POST /ai/chat/actions/{action_id}/dismiss` — discard a proposed chat action (`204`)
+
+### AI Digest
+- `GET /ai/digest/` — latest stored portfolio digest (`404` if none generated yet)
+- `POST /ai/digest/generate` — generate, store and return the digest now (works with no AI provider — falls back to a deterministic numbers-only digest with `provider: "none"`)
+- `GET /ai/digest/schedule` — current digest frequency (`off` | `daily` | `weekly`)
+- `PUT /ai/digest/schedule` — set the digest frequency
 
 ### Import / Export
 - `POST /import-export/excel?portfolio_id=` — import holdings/transactions from an `.xlsx` file
@@ -2503,8 +2635,8 @@ Endpoints not covered in detail above, one line each:
 - `GET /import-export/export/xlsx/{portfolio_id}` — export a multi-sheet `.xlsx` workbook (Holdings, Transactions, Dividends, Summary)
 - `GET /import-export/export/json/{portfolio_id}` — full portfolio backup as JSON
 - `POST /import-export/json` — restore a portfolio from a JSON backup
-- `GET /import-export/export/pdf/{portfolio_id}` — PDF report (requires xhtml2pdf, else `501`)
-- `GET /import-export/export/report/{portfolio_id}` — styled HTML report
+- `GET /import-export/export/pdf/{portfolio_id}?ai_summary=` — PDF report (requires xhtml2pdf, else `501`); `ai_summary=true` prepends a best-effort AI summary section
+- `GET /import-export/export/report/{portfolio_id}?ai_summary=` — styled HTML report; `ai_summary=true` prepends a best-effort AI summary section
 - `GET /import-export/export/bundle/{portfolio_id}` — "Export Everything" `.zip` (CSVs, JSON, HTML report, XLSX workbook, PDF report, README)
 - `GET /import-export/export/backup/sqlite` — download the raw SQLite database (instance owner only; `501` on PostgreSQL)
 - `GET /import-export/aa/providers` — list Account Aggregator providers (stubs)

@@ -94,7 +94,7 @@ No. Redis is optional. It is used for the background task queue (Celery) which h
 
 ### 11. Do I need Ollama for the AI features?
 
-No. Ollama is optional. Without it, the AI chat assistant and AI-powered insights are disabled (you will see an "AI offline" banner). All other features -- portfolio tracking, charts, alerts, tax tracking, import/export -- work perfectly without any AI provider. If you want AI features, install Ollama (free, runs locally) and pull the Llama 3.2 model. You can also use OpenAI, Claude, or Gemini instead by entering your API key in Settings.
+No. Ollama is optional. Without it, the AI chat assistant and AI-powered insights are disabled (you will see an "AI offline" banner). All other features -- portfolio tracking, charts, alerts, tax tracking, import/export -- work perfectly without any AI provider. The **portfolio digest** is the exception among the AI features: it still works with no model at all, falling back to a version built purely from your own computed numbers. If you want the rest, install Ollama (free, runs locally) and pull the Llama 3.2 model. You can also use OpenAI, Claude, or Gemini instead by entering your API key in Settings. If a local model is slow to answer, raise the backend `OLLAMA_TIMEOUT` setting (default 300 seconds).
 
 ---
 
@@ -247,6 +247,19 @@ Yes. The **display-currency** dropdown in the top bar (INR / EUR / USD) converts
 ### 28. I forgot my password -- how do I reset it?
 
 On the login page, click **Forgot password?**, enter your account email, and click **Send reset link**. Open the link from the email you receive and choose a new password (at least 8 characters). For your security, the app always responds with "if that email exists, a reset link was sent," so it never reveals whether an email is registered. If you have Two-Factor Authentication enabled, you will still enter your authenticator code the next time you log in.
+
+---
+
+### 29. What can the AI assistant do?
+
+Four things, and all of them are optional:
+
+1. **Answer questions about your portfolio** in plain language, grounded in your real holdings and numbers. Needs a connected model (Ollama, OpenAI, Claude, or Gemini).
+2. **Propose changes for you to confirm.** Ask it to record a transaction, add a holding, or create an alert and it will reply with a summary of exactly what it would do -- and then wait. **Nothing is executed until you confirm**; dismissing discards it. On confirmation the details are re-validated, ownership re-checked, and the change goes through the same code as manual entry, so the same guards apply. Proposals expire after 15 minutes and at most 5 can be pending in a conversation. Needs a connected model.
+3. **Write a portfolio digest** -- totals, P&L, largest positions, gainers/losers, and concentration flags -- on demand or on a daily/weekly schedule delivered through your notification channels. **This one works with no AI model connected**, falling back to a digest built from your own computed numbers.
+4. **Add short explanations** -- an optional AI summary at the top of the HTML/PDF report, and a one-sentence explanation on triggered alert notifications. Both are best-effort: the report still exports and the alert still arrives if AI is unavailable or slow.
+
+What it cannot do: predict prices, or give you financial advice. Everything it writes is educational information to help you think, and it can be wrong -- check the numbers it quotes.
 
 ---
 
