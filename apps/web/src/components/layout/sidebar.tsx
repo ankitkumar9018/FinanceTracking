@@ -10,7 +10,7 @@ import {
   Eye,
   BarChart3,
   Bell,
-  Upload,
+  ArrowDownUp,
   Receipt,
   Landmark,
   Banknote,
@@ -63,7 +63,7 @@ const NAV_SECTIONS: NavSection[] = [
       { href: "/watchlist", label: "Watchlist", icon: Eye },
       { href: "/charts", label: "Charts", icon: BarChart3 },
       { href: "/corporate-actions", label: "Corporate Actions", icon: Split },
-      { href: "/import", label: "Import", icon: Upload },
+      { href: "/import", label: "Import & Export", icon: ArrowDownUp },
     ],
   },
   {

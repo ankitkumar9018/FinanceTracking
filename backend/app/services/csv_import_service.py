@@ -5,6 +5,9 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re
+from collections.abc import Mapping
+from datetime import date as date_cls
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +48,188 @@ _TAX_RECORD_COLUMNS = [
     "sale_date", "purchase_price", "sale_price", "gain_amount",
     "tax_amount", "currency",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Header aliasing — the single source of truth for BOTH importers
+# ---------------------------------------------------------------------------
+#
+# Our own exports write human-readable headers ("Stock Symbol", "Avg Price",
+# "Type"), while the import templates use machine keys ("stock_symbol",
+# "price", "transaction_type").  Without aliasing, re-importing an export
+# fails with "No valid data rows found".  ``excel_service`` imports these
+# helpers rather than duplicating the map.
+#
+# Keys are the *normalized* header form produced by :func:`_normalize_header`
+# (lowercase, punctuation dropped, words space-separated).  Anything not in
+# the map falls back to ``"_".join(words)``, which reproduces the previous
+# ``header.strip().lower().replace(" ", "_")`` behaviour — so every existing
+# template header keeps mapping to itself (zero regression).
+_COLUMN_ALIASES: dict[str, str] = {
+    # identity/canonical
+    "stock symbol": "stock_symbol",
+    "stock name": "stock_name",
+    "transaction type": "transaction_type",
+    # symbol
+    "symbol": "stock_symbol",
+    "ticker": "stock_symbol",
+    "scrip": "stock_symbol",
+    "instrument": "stock_symbol",
+    # name
+    "name": "stock_name",
+    "company": "stock_name",
+    "company name": "stock_name",
+    "security name": "stock_name",
+    # exchange
+    "exchange": "exchange",
+    "exchange code": "exchange",
+    # transaction type  (NB: "action" is deliberately NOT aliased — the
+    # holdings export uses it for the action-needed zone, not BUY/SELL)
+    "type": "transaction_type",
+    "trade type": "transaction_type",
+    "txn type": "transaction_type",
+    "order type": "transaction_type",
+    # date
+    "date": "date",
+    "transaction date": "date",
+    "trade date": "date",
+    "txn date": "date",
+    # quantity
+    "quantity": "quantity",
+    "qty": "quantity",
+    "shares": "quantity",
+    "no of shares": "quantity",
+    # price
+    "price": "price",
+    "avg price": "price",
+    "average price": "price",
+    "avg cost": "price",
+    "average cost": "price",
+    "buy price": "price",
+    "unit price": "price",
+    "price per unit": "price",
+    "rate": "price",
+    # brokerage
+    "brokerage": "brokerage",
+    "fees": "brokerage",
+    "fee": "brokerage",
+    "commission": "brokerage",
+    "charges": "brokerage",
+    # range levels (Excel export shortens the template names)
+    "lower mid 1": "lower_mid_range_1",
+    "lower mid 2": "lower_mid_range_2",
+    "upper mid 1": "upper_mid_range_1",
+    "upper mid 2": "upper_mid_range_2",
+    # free text
+    "sector": "sector",
+    "notes": "notes",
+    "note": "notes",
+    "remarks": "notes",
+    "comment": "notes",
+    "comments": "notes",
+}
+
+_NON_ALNUM = re.compile(r"[^0-9a-z]+")
+
+
+def _normalize_header(header: object) -> str:
+    """Lowercase a header and reduce it to space-separated alphanumeric words.
+
+    ``"P&L %"`` → ``"p l"``, ``"Avg Price"`` → ``"avg price"``,
+    ``"stock_symbol"`` → ``"stock symbol"``.
+    """
+    if header is None:
+        return ""
+    return _NON_ALNUM.sub(" ", str(header).strip().lower()).strip()
+
+
+def canonical_column(header: object) -> str:
+    """Map any supported spelling of a column header to its canonical key.
+
+    Unknown headers are snake_cased and passed through untouched so extra
+    export-only columns (``current_price``, ``rsi``, ``action_needed``, …)
+    are simply ignored downstream instead of breaking the import.
+    """
+    words = _normalize_header(header)
+    if not words:
+        return ""
+    return _COLUMN_ALIASES.get(words, words.replace(" ", "_"))
+
+
+def canonicalize_row(row: Mapping) -> dict:
+    """Return a copy of ``row`` with its keys mapped to canonical column keys.
+
+    When two source columns collapse onto the same canonical key, the first
+    non-blank value wins (e.g. a file carrying both ``price`` and
+    ``avg_price``).
+    """
+    out: dict = {}
+    for key, value in row.items():
+        canonical = canonical_column(key)
+        if not canonical:
+            continue
+        if canonical in out and not is_blank(out[canonical]):
+            continue
+        out[canonical] = value
+    return out
+
+
+def is_blank(value: object) -> bool:
+    """True when a cell carries no data.
+
+    A numeric ``0`` is *not* blank — a bonus/IPO allotment at price 0 is a
+    legitimate row.
+    """
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def text_or_none(value: object) -> str | None:
+    """Stringify a free-text cell, collapsing blanks (and ``None``) to ``None``."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def normalize_transaction_fields(row: dict) -> str:
+    """Fill in the fields a position snapshot omits; classify the row.
+
+    Returns one of:
+
+    ``"transaction"``
+        A full ledger row (type + date present) — imported as-is.
+    ``"snapshot"``
+        A position-snapshot row (our holdings CSV / the "Holdings" sheet):
+        quantity + average price with **no** transaction type or date.  It is
+        materialised as a single opening ``BUY`` of ``quantity`` at the
+        average price, dated **today** — the export carries no acquisition
+        date, and today is the only defensible stand-in (it is also the date
+        on which the snapshot was taken).  Consequence to be aware of:
+        re-importing the same snapshot on a *later* day creates a second
+        opening BUY, because the transaction-fingerprint dedup in
+        ``excel_service.import_to_portfolio`` includes the date.  Same-day
+        re-imports are deduped correctly.
+    ``"invalid"``
+        A partial row (type without date, or date without type) — the caller
+        skips it, exactly as before.
+
+    ``stock_name`` is defaulted to ``stock_symbol`` when absent, because the
+    transactions export identifies a position by symbol + exchange and does
+    not repeat the display name.
+    """
+    if is_blank(row.get("stock_name")):
+        row["stock_name"] = row.get("stock_symbol")
+
+    has_type = not is_blank(row.get("transaction_type"))
+    has_date = not is_blank(row.get("date"))
+    if has_type and has_date:
+        return "transaction"
+    if has_type or has_date:
+        return "invalid"
+
+    row["transaction_type"] = "BUY"
+    row["date"] = date_cls.today()
+    return "snapshot"
 
 
 # ---------------------------------------------------------------------------
@@ -106,24 +291,37 @@ def _read_csv(file_bytes: bytes) -> list[dict]:
 def parse_csv(file_bytes: bytes) -> list[dict]:
     """Parse a CSV file with the same column layout as the Excel template.
 
+    Header spellings are canonicalised (see :func:`canonical_column`), so both
+    the import template (``stock_symbol``, ``transaction_type``, …) and our own
+    human-readable exports (``Stock Symbol``, ``Type``, ``Avg Price``, …) are
+    accepted.  A row with neither a transaction type nor a date is treated as a
+    position snapshot — see :func:`normalize_transaction_fields`.
+
     Returns the same list[dict] structure as parse_excel() so that
     import_to_portfolio() can be reused directly.
     """
     rows = _read_csv(file_bytes)
     parsed: list[dict] = []
 
-    for row in rows:
+    for raw_row in rows:
+        row = canonicalize_row(raw_row)
         symbol = row.get("stock_symbol")
-        name = row.get("stock_name")
         exchange = row.get("exchange")
-        tx_type = row.get("transaction_type")
-        tx_date = row.get("date")
         qty = row.get("quantity")
         price = row.get("price")
 
-        if not all([symbol, name, exchange, tx_type, tx_date, qty, price]):
+        if any(is_blank(v) for v in (symbol, exchange, qty, price)):
             logger.warning("Skipping CSV row with missing required fields: %s", row)
             continue
+
+        kind = normalize_transaction_fields(row)
+        if kind == "invalid":
+            logger.warning("Skipping CSV row with a partial transaction: %s", row)
+            continue
+
+        name = row["stock_name"]
+        tx_type = row["transaction_type"]
+        tx_date = row["date"]
 
         row["stock_symbol"] = str(symbol).strip().upper()
         row["stock_name"] = str(name).strip()
@@ -145,6 +343,11 @@ def parse_csv(file_bytes: bytes) -> list[dict]:
         if qty_val is None or price_val is None:
             logger.warning("Non-numeric quantity/price in CSV row, skipping: %s", row)
             continue
+        if qty_val == 0:
+            # A zero-quantity row carries no position and no trade (a fully
+            # exited holding still appears in the holdings export).
+            logger.info("Skipping zero-quantity CSV row: %s", symbol)
+            continue
         row["quantity"] = qty_val
         row["price"] = price_val
         brokerage_val = _safe_float(row.get("brokerage"))
@@ -158,8 +361,8 @@ def parse_csv(file_bytes: bytes) -> list[dict]:
         ):
             row[field] = _safe_float(row.get(field))
 
-        row["sector"] = str(row.get("sector", "")).strip() or None
-        row["notes"] = str(row.get("notes", "")).strip() or None
+        row["sector"] = text_or_none(row.get("sector"))
+        row["notes"] = text_or_none(row.get("notes"))
 
         parsed.append(row)
 

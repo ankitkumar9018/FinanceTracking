@@ -15,6 +15,13 @@ from sqlalchemy.orm import selectinload
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.transaction import Transaction
+from app.services.csv_import_service import (
+    canonical_column,
+    canonicalize_row,
+    is_blank,
+    normalize_transaction_fields,
+    text_or_none,
+)
 from app.services.portfolio_service import calculate_cumulative_holding
 from app.utils.dates import parse_date
 
@@ -48,63 +55,51 @@ _TEMPLATE_COLUMNS = [
 # Parse uploaded Excel
 # ---------------------------------------------------------------------------
 
-def parse_excel(file_bytes: bytes) -> list[dict]:
-    """Parse an uploaded Excel file and return a list of structured row dicts.
+def _parse_sheet(ws: Any) -> list[dict]:
+    """Parse one worksheet into structured row dicts (see :func:`parse_excel`)."""
+    rows_iter = ws.iter_rows(values_only=True)
 
-    Expected columns match ``_TEMPLATE_COLUMNS``.
-    Rows with missing required fields (symbol, name, exchange, type, date,
-    quantity, price) are skipped with a warning.
-    """
-    wb = load_workbook(filename=io.BytesIO(file_bytes), read_only=True)
-    ws = wb.active
-    if ws is None:
-        return []
-
-    rows_iter = ws.iter_rows(values_only=False)
-
-    # Read header row
+    # Read header row, mapping every supported spelling onto the canonical keys.
     header_row = next(rows_iter, None)
     if header_row is None:
         return []
-
-    headers = [
-        str(cell.value).strip().lower().replace(" ", "_") if cell.value else ""
-        for cell in header_row
-    ]
+    headers = [canonical_column(value) for value in header_row]
 
     parsed: list[dict] = []
 
-    for row in rows_iter:
-        values = [cell.value for cell in row]
-        row_dict: dict = {}
+    for values in rows_iter:
+        raw_row: dict = {}
         for header, value in zip(headers, values):
             if header:
-                row_dict[header] = value
+                raw_row[header] = value
+        row_dict = canonicalize_row(raw_row)
 
         # Validate required fields
         symbol = row_dict.get("stock_symbol")
-        name = row_dict.get("stock_name")
         exchange = row_dict.get("exchange")
-        tx_type = row_dict.get("transaction_type")
-        tx_date = row_dict.get("date")
         # Raw spreadsheet cell values (numeric, str, or None). Typed as Any so the
         # float() coercion below reads cleanly; the None/non-numeric cases are
-        # filtered by the _missing() guard and caught by the try/except.
+        # filtered by the is_blank() guard and caught by the try/except.
         qty: Any = row_dict.get("quantity")
         price: Any = row_dict.get("price")
 
         # A field is "missing" only when it is None or a blank string. Do NOT
         # treat a legitimate numeric 0 (e.g. a bonus/IPO allotment at price 0)
         # as absent — plain truthiness would drop those valid rows.
-        def _missing(v: object) -> bool:
-            return v is None or (isinstance(v, str) and not v.strip())
-
-        if any(
-            _missing(v)
-            for v in (symbol, name, exchange, tx_type, tx_date, qty, price)
-        ):
+        if any(is_blank(v) for v in (symbol, exchange, qty, price)):
             logger.warning("Skipping row with missing required fields: %s", row_dict)
             continue
+
+        # Fills in BUY/today for a position-snapshot row ("Holdings" sheet),
+        # and defaults stock_name to the symbol when the sheet omits it.
+        kind = normalize_transaction_fields(row_dict)
+        if kind == "invalid":
+            logger.warning("Skipping row with a partial transaction: %s", row_dict)
+            continue
+
+        name = row_dict["stock_name"]
+        tx_type = row_dict["transaction_type"]
+        tx_date = row_dict["date"]
 
         # Normalise types
         row_dict["stock_symbol"] = str(symbol).strip().upper()
@@ -131,6 +126,12 @@ def parse_excel(file_bytes: bytes) -> list[dict]:
             logger.warning("Non-numeric quantity/price/brokerage in row, skipping: %s", row_dict)
             continue
 
+        if row_dict["quantity"] == 0:
+            # A zero-quantity row carries no position and no trade (a fully
+            # exited holding still appears in the holdings export).
+            logger.info("Skipping zero-quantity row: %s", row_dict["stock_symbol"])
+            continue
+
         # Optional numeric fields
         for field in (
             "lower_mid_range_1",
@@ -146,13 +147,48 @@ def parse_excel(file_bytes: bytes) -> list[dict]:
             except (ValueError, TypeError):
                 row_dict[field] = None
 
-        row_dict["sector"] = str(row_dict.get("sector", "")).strip() or None
-        row_dict["notes"] = str(row_dict.get("notes", "")).strip() or None
+        row_dict["sector"] = text_or_none(row_dict.get("sector"))
+        row_dict["notes"] = text_or_none(row_dict.get("notes"))
 
         parsed.append(row_dict)
 
-    wb.close()
     return parsed
+
+
+def parse_excel(file_bytes: bytes) -> list[dict]:
+    """Parse an uploaded Excel file and return a list of structured row dicts.
+
+    Header spellings are canonicalised (see
+    ``csv_import_service.canonical_column``), so both the import template
+    (``stock_symbol``, ``transaction_type``, …) and our own human-readable
+    exports (``Stock Symbol``, ``Type``, ``Avg Price``, …) are accepted.
+
+    Sheet selection: a workbook produced by :func:`export_portfolio` holds both
+    a "Holdings" snapshot and a "Transactions" ledger, so a sheet named
+    "Transactions" is preferred (it round-trips the full history). We fall back
+    to the active sheet — the single-sheet import template, or the "Holdings"
+    snapshot — whenever the preferred sheet yields no usable rows.
+
+    Rows with missing required fields (symbol, exchange, quantity, price) are
+    skipped with a warning. Rows without a transaction type *and* without a
+    date are treated as position snapshots (single opening BUY dated today);
+    see ``csv_import_service.normalize_transaction_fields``.
+    """
+    wb = load_workbook(filename=io.BytesIO(file_bytes), read_only=True)
+    try:
+        active = wb.active
+        candidates: list[str] = []
+        for title in ("Transactions", active.title if active is not None else None, "Holdings"):
+            if title and title in wb.sheetnames and title not in candidates:
+                candidates.append(title)
+
+        for title in candidates:
+            parsed = _parse_sheet(wb[title])
+            if parsed:
+                return parsed
+        return []
+    finally:
+        wb.close()
 
 
 # ---------------------------------------------------------------------------

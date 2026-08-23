@@ -890,7 +890,7 @@
           <li>Pick the <strong>financial year</strong> and the <strong>jurisdiction</strong> (India or Germany).</li>
           <li>Download as <strong>CSV</strong> or <strong>HTML</strong>. The report lists per-transaction gains plus STCG/LTCG, tax, and exemption totals — ready to review or forward to your accountant.</li>
         </ol>
-        <p>You can also <strong>bulk import/export tax records</strong> as CSV from the Import and Reports pages (see <a href="#import-export-reports">Section 16</a>).</p>
+        <p>You can also <strong>bulk import/export tax records</strong> as CSV from the <strong>Import &amp; Export</strong> and <strong>Reports</strong> pages (see <a href="#import-export-reports">Section 16</a>).</p>
 
         <h3>8.5 Holding Period Timer (India)</h3>
         <p>Selling an Indian holding <em>just before</em> it crosses the one-year mark can cost you real money — the gain is taxed as <strong>STCG at 20%</strong> instead of <strong>LTCG at 12.5%</strong>. The <strong>Holding Period Timer</strong> card on the Tax page helps you avoid that trap.</p>
@@ -914,7 +914,7 @@
         <h3>9.1 Mutual funds</h3>
         <p>Open <strong>Mutual Funds</strong> in the sidebar.</p>
         <ol>
-          <li><strong>Add funds</strong> — enter them manually, or <strong>bulk-import</strong> from a CSV (a template is available on the Import page).</li>
+          <li><strong>Add funds</strong> — enter them manually, or <strong>bulk-import</strong> from a CSV (a template is available on the <strong>Import &amp; Export</strong> page).</li>
           <li><strong>Refresh NAV</strong> — pull the latest Net Asset Value from mfapi.in.</li>
           <li><strong>XIRR</strong> — your money-weighted annualised return across your funds appears in the summary.</li>
           <li><strong>Overlap X-Ray</strong> — see how much your funds hold the <em>same</em> underlying stocks (a look-through analysis), shown as a heatmap plus a list of the top common holdings. Two funds with heavy overlap mean you're less diversified than you think.</li>
@@ -1299,14 +1299,14 @@
         </div>
         <h4>Upload</h4>
         <ol>
-          <li>Go to <strong>Import</strong> in the sidebar and choose the <strong>portfolio</strong> to import into.</li>
+          <li>Go to <strong>Import &amp; Export</strong> in the sidebar and choose the <strong>portfolio</strong> to import into. The page opens on its <strong>Import</strong> tab; the <strong>Export</strong> tab beside it holds every export.</li>
           <li><strong>Drag and drop</strong> your file (or click to browse). It's parsed and imported in one step.</li>
           <li>A summary shows how many rows were parsed and how many holdings/transactions were created. Current prices are fetched automatically.</li>
         </ol>
         <p><strong>Re-importing</strong> an updated file will update existing holdings with new transactions, add new stocks, and recalculate quantities and averages.</p>
 
         <h3>16.2 Other imports</h3>
-        <p>From the <strong>Import</strong> page you can also bring in <strong>CSV</strong> files for <strong>holdings, dividends, mutual funds,</strong> and <strong>tax records</strong> (each has a downloadable template), and restore a <strong>JSON portfolio backup</strong>.</p>
+        <p>From the <strong>Import</strong> tab you can also bring in <strong>CSV</strong> files for <strong>holdings, dividends, mutual funds,</strong> and <strong>tax records</strong> (each has a downloadable template), and restore a <strong>JSON portfolio backup</strong>.</p>
         <p>A <strong>More Import Formats</strong> section handles statements from brokers, banks, and fund registrars:</p>
         <ul>
           <li><strong>OFX / QFX</strong> — a broker or bank statement; investment buys/sells are parsed, with bank transactions as a fallback.</li>
@@ -1316,11 +1316,11 @@
         <p>Uploads are capped at <strong>10 MB</strong>.</p>
 
         <h3>16.3 Reports &amp; exports</h3>
-        <p>Open <strong>Reports</strong> in the sidebar:</p>
+        <p>Exports live in two places, and the list is identical in both: the <strong>Export</strong> tab of <strong>Import &amp; Export</strong>, and the <strong>Reports</strong> page (which adds the Capital Gains Tax Report). The two pages link to each other.</p>
         <ul>
           <li><strong>HTML report</strong> — a shareable, formatted portfolio summary.</li>
           <li><strong>Holdings CSV</strong> and <strong>Transactions CSV</strong>.</li>
-          <li><strong>Excel workbook (.xlsx)</strong> — a multi-sheet workbook with <strong>Holdings, Transactions, Dividends,</strong> and <strong>Summary</strong> sheets. (A single-sheet Excel export is also available.)</li>
+          <li><strong>Excel workbook (.xlsx)</strong> — a multi-sheet workbook with <strong>Holdings, Transactions, Dividends,</strong> and <strong>Summary</strong> sheets. (A separate <strong>Excel export</strong> with <strong>Holdings</strong> and <strong>Transactions</strong> sheets is also available.)</li>
           <li><strong>JSON backup</strong> — a full portfolio snapshot you can re-import later.</li>
           <li><strong>PDF export</strong> of your portfolio.</li>
           <li><strong>Google Sheets export</strong> — a CSV structured for Google Sheets, in three sections.</li>
@@ -1329,12 +1329,20 @@
           <li><strong>Export Everything</strong> — a single <strong>.zip</strong> bundle containing holdings CSV, transactions CSV, the JSON backup, the HTML report, the Excel workbook, the PDF report, and a README.</li>
         </ul>
         <p>The <strong>HTML report</strong> and <strong>PDF export</strong> can optionally include an <strong>AI summary</strong> at the top — see <a href="#ai-assistant">14.7</a>. It's opt-in, slower, needs a connected model, and is quietly left out if the model isn't available.</p>
+        <p><strong>Re-importing exported files.</strong> Most of what you export can be loaded straight back in from the <strong>Import</strong> tab — handy for moving a portfolio to another machine or rebuilding one from a spreadsheet. How much comes back depends on the file:</p>
+        <ul>
+          <li><strong>JSON backup</strong> — the recommended full-fidelity backup. It restores everything: holdings, transactions, dividends, mutual funds, F&amp;O positions, goals, assets, and tax records.</li>
+          <li><strong>Transactions CSV</strong> and the <strong>Excel export</strong> (from its <strong>Transactions</strong> sheet) — reproduce the ledger transaction by transaction, so quantities and average prices come back identical.</li>
+          <li><strong>Holdings CSV</strong>, the <strong>Holdings</strong> sheet, and the multi-sheet <strong>Excel workbook</strong> — these are <em>position snapshots</em>: they carry a quantity and an average price, but no transaction type or date. Each row is imported as <strong>one opening BUY at the average price, dated today</strong>. Your positions are right; the original buy/sell history isn't reproduced. Re-importing the same snapshot <strong>on the same day</strong> is de-duplicated and won't double a position — importing it on a <strong>later</strong> day adds a second opening BUY.</li>
+          <li><strong>HTML</strong> and <strong>PDF</strong> reports are documents to read, not files to import. The <strong>SQLite backup</strong> is your whole database — you put the file back in place rather than import it.</li>
+        </ul>
+        <p>Column headings are matched flexibly, so the import templates (<code>stock_symbol</code>, <code>price</code>, <code>transaction_type</code>) <em>and</em> the human-readable headings the exports write (<code>Stock Symbol</code>, <code>Avg Price</code>, <code>Type</code>) both work. Export-only columns such as <strong>Current Price</strong>, <strong>RSI</strong>, and <strong>P&amp;L %</strong> are ignored, the stock name is optional (it falls back to the symbol), and rows with a zero quantity are skipped.</p>
 
         <h3>16.4 Shareable snapshot</h3>
         <p>Open <strong>Snapshot</strong> in the sidebar to generate a shareable view of your portfolio, with an <strong>anonymise toggle</strong> (hide amounts/names) and copy-to-clipboard — perfect for asking for a second opinion without revealing your balances.</p>
 
         <h3>16.5 Account Aggregator (India)</h3>
-        <p>The Import page includes a framework for India's <strong>Account Aggregator</strong> network (Finvu, OneMoney, CAMS) to fetch data with consent. This is a <strong>stub/preview</strong> — the plumbing is in place but it's not a fully live integration yet.</p>
+        <p>The <strong>Import &amp; Export</strong> page includes a framework for India's <strong>Account Aggregator</strong> network (Finvu, OneMoney, CAMS) to fetch data with consent. This is a <strong>stub/preview</strong> — the plumbing is in place but it's not a fully live integration yet.</p>
         <p class="backtop"><a href="#top">↑ Back to top</a></p>
       </section>
 
@@ -1375,8 +1383,8 @@
 
         <h3>17.5 Data backup</h3>
         <ul>
-          <li><strong>Export</strong> from the <strong>Reports</strong> page (CSV, JSON, HTML, PDF, Google Sheets, SQLite backup).</li>
-          <li><strong>Import/restore</strong> from the <strong>Import</strong> page.</li>
+          <li><strong>Export</strong> from the <strong>Export</strong> tab of <strong>Import &amp; Export</strong>, or from the <strong>Reports</strong> page — the same list in both (CSV, JSON, HTML, PDF, Google Sheets, SQLite backup).</li>
+          <li><strong>Import/restore</strong> from the <strong>Import</strong> tab of the same page.</li>
         </ul>
         <div class="callout tip">
           <span class="co-ico">→</span>
@@ -1429,7 +1437,7 @@
         <ul>
           <li>Your data <strong>never leaves your machine</strong> unless you export it. The built-in server listens only on your own computer (<code>127.0.0.1</code>) and isn't reachable over the network.</li>
           <li><strong>Upgrades are safe:</strong> when you install a newer version, the app updates the database structure <strong>additively</strong> — it adds anything new but never drops or rewrites your existing data, so an older database keeps working after an upgrade.</li>
-          <li><strong>Back up</strong> by copying that <code>finance.db</code> file, or by using the <strong>JSON / SQLite backup</strong> exports on the Reports page.</li>
+          <li><strong>Back up</strong> by copying that <code>finance.db</code> file, or by using the <strong>JSON / SQLite backup</strong> exports on the <strong>Import &amp; Export</strong> or <strong>Reports</strong> page.</li>
         </ul>
         <div class="callout tip">
           <span class="co-ico">→</span>
@@ -1497,7 +1505,7 @@
               <tr><td><kbd>Cmd/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>H</kbd></td><td>Go to Holdings</td></tr>
               <tr><td><kbd>Cmd/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>W</kbd></td><td>Go to Watchlist</td></tr>
               <tr><td><kbd>Cmd/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>A</kbd></td><td>Go to Alerts</td></tr>
-              <tr><td><kbd>Cmd/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>I</kbd></td><td>Go to Import</td></tr>
+              <tr><td><kbd>Cmd/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>I</kbd></td><td>Open AI Assistant</td></tr>
               <tr><td><kbd>?</kbd></td><td>Open the help dialog</td></tr>
               <tr><td><kbd>Escape</kbd></td><td>Close any open panel or modal</td></tr>
             </tbody>

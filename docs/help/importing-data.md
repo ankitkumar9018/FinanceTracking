@@ -6,7 +6,7 @@ This guide explains how to bring your existing portfolio into FinanceTracker. Ex
 
 ## Supported Import Formats
 
-You can import any of these from the **Import** page in the sidebar:
+You can import any of these from the **Import & Export** page in the sidebar (it opens on the **Import** tab; the **Export** tab beside it holds every export):
 
 | Format | File type | What it's for |
 |---|---|---|
@@ -20,7 +20,7 @@ You can import any of these from the **Import** page in the sidebar:
 | **QIF** | `.qif` | Quicken Interchange Format — investment and bank types |
 | **CAS PDF** | `.pdf` | A CAMS/KFintech Consolidated Account Statement — imports your mutual-fund holdings |
 
-**Where these appear on the Import page:** the main area handles **Excel, CSV, and JSON**, and a **More Import Formats** section handles **OFX/QFX, QIF, and CAS PDF**. Every CSV import type has a downloadable blank template, and the maximum upload size is **10 MB**.
+**Where these appear on the Import tab:** the main area handles **Excel, CSV, and JSON**, and a **More Import Formats** section handles **OFX/QFX, QIF, and CAS PDF**. Every CSV import type has a downloadable blank template, and the maximum upload size is **10 MB**.
 
 ---
 
@@ -64,12 +64,13 @@ Here is an example of how your spreadsheet should look:
 - Numbers should not include currency symbols (write 2450.00, not Rs.2450 or 2,450)
 - If you have multiple purchases of the same stock on different dates, use one row per purchase
 - German decimals: the app understands both 2450.00 (dot) and 2450,00 (comma)
+- Headers are matched flexibly: `stock_symbol` and `Stock Symbol` are the same column, as are `price` / `Avg Price`, `transaction_type` / `Type`, and `brokerage` / `Fees` — so a file exported from the app (or a spreadsheet with tidy human-readable headings) imports without renaming anything
 
 ### How to Import
 
 #### Step 1: Open the Import Page
 
-Click **Import** in the sidebar menu.
+Click **Import & Export** in the sidebar menu. The page opens on the **Import** tab.
 
 #### Step 2: Upload Your File
 
@@ -79,37 +80,40 @@ You can either:
 
 The app accepts .xlsx files up to 10 MB.
 
-#### Step 3: Column Mapping
+#### Step 3: The Import Runs Immediately
 
-The app will automatically try to map your column names to the expected fields. You will see a preview showing:
-- Which columns from your file are matched to which fields
-- You can change the mapping if the app guessed wrong using dropdown menus
+There is no separate preview or confirmation step — as soon as you choose the
+file, it is uploaded and imported in one action. The app will:
 
-#### Step 4: Review the Preview
+1. Match your column headings to the expected fields (see the flexible-header
+   tip above — `Stock Symbol` and `stock_symbol` both work)
+2. Create a holding for each stock, or merge into an existing one
+3. Record the transactions (buys and sells), skipping any that duplicate a
+   transaction already present
+4. Recalculate cumulative quantities and average prices
+5. Fetch current market prices for the imported stocks
 
-A table shows all the data that will be imported:
-- **Green rows**: Everything looks correct
-- **Yellow rows**: The app made an assumption (hover to see what)
-- **Red rows**: There is a problem (for example, a missing required field or invalid number)
+#### Step 4: Read the Result
 
-You can fix issues in the preview or go back and fix your Excel file.
+A toast message reports exactly what happened — for example
+*"Import complete — rows parsed: 12, holdings created: 3, transactions created:
+12, transactions skipped: 0"*. If the file could not be read, an error toast
+explains why (a common one is *"No valid data rows found in the uploaded
+file"*, which usually means the required columns are missing).
 
-#### Step 5: Choose a Portfolio
+Rows that are missing a required field are skipped rather than aborting the
+whole import, so a partially valid file still imports what it can.
 
-Select which portfolio to import into, or create a new one.
+#### Which Portfolio Does It Import Into?
 
-#### Step 6: Confirm
-
-Click **Confirm Import**. The app will:
-1. Create holdings for each stock
-2. Record the transactions (buys and sells)
-3. Calculate cumulative quantities and average prices
-4. Fetch current market prices for all imported stocks
-5. Show you the completed import summary
+Whichever portfolio is currently selected in the app — pick it in the header
+before importing. Two importers are the exception and do not need a portfolio:
+**tax records** and the **JSON backup restore** (which creates its own
+portfolio).
 
 ## Importing from CSV
 
-If your data is in a plain CSV file instead of Excel, use the CSV importers on the Import page. There are four kinds:
+If your data is in a plain CSV file instead of Excel, use the CSV importers on the **Import** tab. There are four kinds:
 
 - **Holdings** — the same fields as the Excel import above, as comma-separated values.
 - **Dividends** — dividend payouts you have received.
@@ -120,11 +124,11 @@ Each CSV importer has a **downloadable blank template** so your column headers m
 
 ## Restoring a JSON Backup
 
-The app can export a full portfolio snapshot as a **JSON backup**. To restore one, open the Import page and upload the JSON file. This re-creates the portfolio, holdings, transactions, and range levels exactly as they were when the backup was taken. This is the recommended way to move data between machines or recover after a reinstall.
+The app can export a full portfolio snapshot as a **JSON backup**. To restore one, open the **Import & Export** page and upload the JSON file on the **Import** tab. This re-creates the portfolio, holdings, transactions, and range levels exactly as they were when the backup was taken. This is the recommended way to move data between machines or recover after a reinstall.
 
 ## More Import Formats
 
-The **More Import Formats** section of the Import page handles statements from brokers, banks, and mutual-fund registrars.
+The **More Import Formats** section of the **Import** tab handles statements from brokers, banks, and mutual-fund registrars.
 
 ### OFX / QFX (broker or bank statement)
 
@@ -149,13 +153,32 @@ If you update your Excel file and import it again:
 - Existing range levels are preserved (not overwritten) unless the new file has different values
 - Duplicate transactions (same stock, date, quantity, price) are detected and skipped
 
+## Re-Importing Files You Exported
+
+The files on the **Export** tab (and on the **Reports** page — it shows the same list) can be loaded straight back in on the **Import** tab. This works because the importers understand both header styles: the machine keys used by the blank templates (`stock_symbol`, `price`, `transaction_type`, `date`) and the human-readable headings the exports write (`Stock Symbol`, `Avg Price`, `Type`, `Date`). Common alternatives such as `Symbol`, `Ticker`, `Qty`, `Shares`, `Trade Date`, `Fees`, and `Commission` are understood too, and any column the importer doesn't recognise — `Current Price`, `RSI`, `P&L %`, `Action Needed` — is simply ignored instead of breaking the row.
+
+How much of your history survives depends on which file you re-import:
+
+| File | What comes back |
+|---|---|
+| **JSON backup** | Everything — holdings, transactions, dividends, mutual funds, goals, assets, tax records. The recommended full-fidelity backup. |
+| **Transactions CSV** | The full ledger, transaction by transaction. Quantities and average prices come back identical. |
+| **Excel export** (Holdings + Transactions sheets) | The full ledger — the **Transactions** sheet is used when the workbook has one. |
+| **Holdings CSV**, the **Holdings** sheet, the multi-sheet **Excel workbook** | A *position snapshot*, not the ledger — see below. |
+| **HTML / PDF reports** | Nothing — these are documents to read, not import files. |
+| **SQLite backup** | Not an import: it is your whole database file, which you put back in place. |
+
+**The position-snapshot caveat.** The holdings CSV and the "Holdings" sheet record a quantity and an **average price**, with no transaction type and no date. Each such row is therefore imported as a **single opening BUY of that quantity at the average price, dated today**. Your positions and averages end up correct, but the individual buys and sells that produced them are not reproduced (which also affects anything derived from the ledger, such as holding-period and tax calculations). Duplicate detection means importing the same snapshot **again on the same day** changes nothing; importing it on a **later** day creates a second opening BUY on top of the first. If you want the real history, export and import the **Transactions CSV** or the **JSON backup** instead.
+
+Two smaller details: the **stock name** is optional on import (it falls back to the symbol, which is what the transactions export carries), and rows with a **zero quantity** — a fully exited holding still appears in the holdings export — are skipped.
+
 ## Common Questions
 
 **Q: My Excel file has extra columns that are not listed above. Is that okay?**
 A: Yes. Extra columns are simply ignored during import. Only the columns that match known fields are used.
 
 **Q: I have multiple sheets in my Excel file. Which one is used?**
-A: The first sheet is used by default. If you want to import from a different sheet, rename it or move it to the first position.
+A: A sheet named **Transactions** is preferred — that is what lets a workbook exported from the app come back as the full ledger. If there isn't one (or it holds no usable rows), the first/active sheet is used, falling back to a sheet named **Holdings**.
 
 **Q: I already entered some stocks manually. Will importing overwrite them?**
 A: No. The import adds new transactions to existing holdings. Your manually entered data and range levels are preserved.

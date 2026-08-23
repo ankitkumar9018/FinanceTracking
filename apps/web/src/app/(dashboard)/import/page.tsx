@@ -1,11 +1,15 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ChevronDown, FileText, Database, FileJson, Landmark, Banknote, Receipt } from "lucide-react";
+import Link from "next/link";
+import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ChevronDown, FileText, Database, FileJson, Landmark, Banknote, Receipt, Download } from "lucide-react";
 import { api, download } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
+import { ExportOptions } from "@/components/data/export-options";
+
+type HubTab = "import" | "export";
 
 type NewFormatKey = "ofx" | "qif" | "cas";
 
@@ -97,6 +101,7 @@ export default function ImportPage() {
   const [typeOpen, setTypeOpen] = useState(false);
   const [busyFormat, setBusyFormat] = useState<NewFormatKey | null>(null);
   const [casPassword, setCasPassword] = useState("");
+  const [tab, setTab] = useState<HubTab>("import");
 
   const currentType = DATA_TYPES.find((t) => t.key === dataType)!;
   const typeSelectorRef = useRef<HTMLDivElement>(null);
@@ -213,11 +218,68 @@ export default function ImportPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Import Data</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Import &amp; Export</h1>
         <p className="text-sm text-[hsl(var(--muted-foreground))]">
-          Upload Excel, CSV, or JSON files to import your financial data
+          Bring data in from Excel, CSV, JSON, or broker statements — and take it back out again
         </p>
       </div>
+
+      {/* Import / Export switcher */}
+      <div
+        role="tablist"
+        aria-label="Import and export"
+        className="inline-flex rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-1"
+      >
+        {([
+          { key: "import" as const, label: "Import", icon: Upload },
+          { key: "export" as const, label: "Export", icon: Download },
+        ]).map((t) => {
+          const Icon = t.icon;
+          const active = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(t.key)}
+              className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+                active
+                  ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]"
+                  : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))]"
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === "export" ? (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight">Export Data</h2>
+            <p className="text-sm text-[hsl(var(--muted-foreground))]">
+              Download your holdings, transactions, and full backups — or generate a portfolio report.
+            </p>
+          </div>
+          <ExportOptions
+            portfolioId={activePortfolioId}
+            crossLink={{
+              href: "/reports",
+              label: "Looking for the tax report and the full report view? Go to Reports →",
+            }}
+            noPortfolioMessage="No portfolio selected — pick one from the top bar to enable portfolio exports. The database backup works without one."
+          />
+        </div>
+      ) : (
+      <div className="space-y-6">
+      {!activePortfolioId && (
+        <p className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3 text-sm text-[hsl(var(--muted-foreground))]">
+          No portfolio selected — choose or create one from the top bar. Tax records and JSON backup
+          restores still work without one.
+        </p>
+      )}
 
       {/* Data type selector */}
       <div className="relative inline-block" ref={typeSelectorRef}>
@@ -449,6 +511,16 @@ export default function ImportPage() {
           </p>
         )}
       </div>
+
+      <p className="text-sm text-[hsl(var(--muted-foreground))]">
+        Need to get data out instead? Switch to the Export tab above, or see the{" "}
+        <Link href="/reports" className="text-[hsl(var(--primary))] underline-offset-4 hover:underline">
+          Reports
+        </Link>{" "}
+        page for the full report view.
+      </p>
+      </div>
+      )}
     </div>
   );
 }

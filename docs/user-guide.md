@@ -508,7 +508,7 @@ For Indian holdings, the Tax page shows a per-lot countdown to **LTCG eligibilit
 
 From the **Reports** page you can download a consolidated, ITR-ready **Capital Gains Tax Report** for a financial year -- per-transaction gains plus STCG/LTCG, tax, and exemption totals. Pick the financial year and jurisdiction (India or Germany) and download it as **CSV** or **HTML**.
 
-Tax records can also be bulk-imported/exported as CSV from the Import and Reports pages.
+Tax records can also be bulk-imported/exported as CSV from the **Import & Export** and **Reports** pages.
 
 ---
 
@@ -562,7 +562,7 @@ Below your goals are two planning calculators:
 
 ### Mutual Funds
 
-- Add mutual fund holdings manually or bulk-import them from a CSV file (a template is available on the Import page)
+- Add mutual fund holdings manually or bulk-import them from a CSV file (a template is available on the **Import & Export** page)
 - NAV (Net Asset Value) can be refreshed from mfapi.in
 - **XIRR** (money-weighted annualized return) is calculated across your funds and shown in the summary
 - **Overlap X-Ray** -- shows how much your funds share the same underlying stocks (look-through), with a heatmap and a list of the top common holdings
@@ -740,8 +740,9 @@ The **Security** section in Settings covers your account protection:
 
 ### Data Backup
 
-- **Export**: Go to the **Reports** page for holdings/transactions CSV, a multi-sheet Excel workbook (.xlsx), a JSON portfolio backup, an HTML report, a PDF report, Google Sheets export, a SQLite database backup, and an **Export Everything** ZIP bundle that packages them all together
-- **Import**: Go to the **Import** page to restore a JSON backup, import Excel/CSV files, or bring in broker/bank statements — **OFX/QFX**, **QIF**, and CAMS/KFintech **CAS PDF** (for mutual funds)
+- **Export**: Use the **Export** tab of the **Import & Export** page, or the **Reports** page — both show the same list: holdings/transactions CSV, a multi-sheet Excel workbook (.xlsx), a JSON portfolio backup, an HTML report, a PDF report, Google Sheets export, a SQLite database backup, and an **Export Everything** ZIP bundle that packages them all together. (The Capital Gains Tax Report lives on the Reports page.)
+- **Import**: Use the **Import** tab of the same page to restore a JSON backup, import Excel/CSV files, or bring in broker/bank statements — **OFX/QFX**, **QIF**, and CAMS/KFintech **CAS PDF** (for mutual funds)
+- **Round-tripping**: exported CSV/Excel files can be imported back — their human-readable headers (`Stock Symbol`, `Avg Price`) are recognised alongside the template headers. The **Transactions CSV** and the **Excel export** restore your ledger exactly; the **Holdings CSV**, the **Holdings** sheet, and the multi-sheet **Excel workbook** carry no transaction type or date, so each row returns as a single opening **BUY** at the average price dated **today** (a position snapshot, not the history). The **JSON backup** remains the recommended full-fidelity backup
 
 ---
 
@@ -754,7 +755,7 @@ The **Security** section in Settings covers your account protection:
 | `Cmd/Ctrl + Shift + H` | Go to Holdings |
 | `Cmd/Ctrl + Shift + W` | Go to Watchlist |
 | `Cmd/Ctrl + Shift + A` | Go to Alerts |
-| `Cmd/Ctrl + Shift + I` | Go to Import |
+| `Cmd/Ctrl + Shift + I` | Open AI Assistant |
 | `?` | Open help dialog |
 | `Escape` | Close any open panel or modal |
 

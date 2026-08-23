@@ -416,7 +416,7 @@ You can download a consolidated report suitable for filing:
 3. Pick the **financial year** and the **jurisdiction** (India or Germany).
 4. Download as **CSV** or **HTML**. The report lists per-transaction gains plus STCG/LTCG, tax, and exemption totals — ready to review or forward to your accountant.
 
-You can also **bulk import/export tax records** as CSV from the Import and Reports pages (see [Section 16](#16-import-export--reports)).
+You can also **bulk import/export tax records** as CSV from the **Import & Export** and **Reports** pages (see [Section 16](#16-import-export--reports)).
 
 ### 8.5 Holding Period Timer (India)
 
@@ -437,7 +437,7 @@ Selling an Indian holding *just before* it crosses the one-year mark can cost yo
 
 Open **Mutual Funds** in the sidebar.
 
-1. **Add funds** — enter them manually, or **bulk-import** from a CSV (a template is available on the Import page).
+1. **Add funds** — enter them manually, or **bulk-import** from a CSV (a template is available on the **Import & Export** page).
 2. **Refresh NAV** — pull the latest Net Asset Value from mfapi.in.
 3. **XIRR** — your money-weighted annualised return across your funds appears in the summary.
 4. **Overlap X-Ray** — see how much your funds hold the *same* underlying stocks (a look-through analysis), shown as a heatmap plus a list of the top common holdings. Two funds with heavy overlap mean you're less diversified than you think.
@@ -788,7 +788,7 @@ If you already track investments in Excel, import them in one go.
 
 **Upload:**
 
-1. Go to **Import** in the sidebar and choose the **portfolio** to import into.
+1. Go to **Import & Export** in the sidebar and choose the **portfolio** to import into. The page opens on its **Import** tab; the **Export** tab beside it holds every export.
 2. **Drag and drop** your file (or click to browse). It's parsed and imported in one step.
 3. A summary shows how many rows were parsed and how many holdings/transactions were created. Current prices are fetched automatically.
 
@@ -796,7 +796,7 @@ If you already track investments in Excel, import them in one go.
 
 ### 16.2 Other imports
 
-From the **Import** page you can also bring in **CSV** files for **holdings, dividends, mutual funds,** and **tax records** (each has a downloadable template), and restore a **JSON portfolio backup**.
+From the **Import** tab you can also bring in **CSV** files for **holdings, dividends, mutual funds,** and **tax records** (each has a downloadable template), and restore a **JSON portfolio backup**.
 
 A **More Import Formats** section handles statements from brokers, banks, and fund registrars:
 
@@ -808,11 +808,11 @@ Uploads are capped at **10 MB**.
 
 ### 16.3 Reports & exports
 
-Open **Reports** in the sidebar:
+Exports live in two places, and the list is identical in both: the **Export** tab of **Import & Export**, and the **Reports** page (which adds the Capital Gains Tax Report). The two pages link to each other.
 
 - **HTML report** — a shareable, formatted portfolio summary.
 - **Holdings CSV** and **Transactions CSV**.
-- **Excel workbook (.xlsx)** — a multi-sheet workbook with **Holdings, Transactions, Dividends,** and **Summary** sheets. (A single-sheet Excel export is also available.)
+- **Excel workbook (.xlsx)** — a multi-sheet workbook with **Holdings, Transactions, Dividends,** and **Summary** sheets. (A separate **Excel export** with **Holdings** and **Transactions** sheets is also available.)
 - **JSON backup** — a full portfolio snapshot you can re-import later.
 - **PDF export** of your portfolio.
 - **Google Sheets export** — a CSV structured for Google Sheets, in three sections.
@@ -822,13 +822,22 @@ Open **Reports** in the sidebar:
 
 The **HTML report** and **PDF export** can optionally include an **AI summary** at the top — see [14.7](#147-ai-summary-in-reports). It's opt-in, slower, needs a connected model, and is quietly left out if the model isn't available.
 
+**Re-importing exported files.** Most of what you export can be loaded straight back in from the **Import** tab — handy for moving a portfolio to another machine or rebuilding one from a spreadsheet. How much comes back depends on the file:
+
+- **JSON backup** — the recommended full-fidelity backup. It restores everything: holdings, transactions, dividends, mutual funds, F&O positions, goals, assets, and tax records.
+- **Transactions CSV** and the **Excel export** (from its **Transactions** sheet) — reproduce the ledger transaction by transaction, so quantities and average prices come back identical.
+- **Holdings CSV**, the **Holdings** sheet, and the multi-sheet **Excel workbook** — these are *position snapshots*: they carry a quantity and an average price, but no transaction type or date. Each row is imported as **one opening BUY at the average price, dated today**. Your positions are right; the original buy/sell history isn't reproduced. Re-importing the same snapshot **on the same day** is de-duplicated and won't double a position — importing it on a **later** day adds a second opening BUY.
+- **HTML** and **PDF** reports are documents to read, not files to import. The **SQLite backup** is your whole database — you put the file back in place rather than import it.
+
+Column headings are matched flexibly, so the import templates (`stock_symbol`, `price`, `transaction_type`) *and* the human-readable headings the exports write (`Stock Symbol`, `Avg Price`, `Type`) both work. Export-only columns such as **Current Price**, **RSI**, and **P&L %** are ignored, the stock name is optional (it falls back to the symbol), and rows with a zero quantity are skipped.
+
 ### 16.4 Shareable snapshot
 
 Open **Snapshot** in the sidebar to generate a shareable view of your portfolio, with an **anonymise toggle** (hide amounts/names) and copy-to-clipboard — perfect for asking for a second opinion without revealing your balances.
 
 ### 16.5 Account Aggregator (India)
 
-The Import page includes a framework for India's **Account Aggregator** network (Finvu, OneMoney, CAMS) to fetch data with consent. This is a **stub/preview** — the plumbing is in place but it's not a fully live integration yet.
+The **Import & Export** page includes a framework for India's **Account Aggregator** network (Finvu, OneMoney, CAMS) to fetch data with consent. This is a **stub/preview** — the plumbing is in place but it's not a fully live integration yet.
 
 ---
 
@@ -868,8 +877,8 @@ Choose your AI provider and (if using a cloud one) paste your **API key** for Op
 
 ### 17.5 Data backup
 
-- **Export** from the **Reports** page (CSV, JSON, HTML, PDF, Google Sheets, SQLite backup).
-- **Import/restore** from the **Import** page.
+- **Export** from the **Export** tab of **Import & Export**, or from the **Reports** page — the same list in both (CSV, JSON, HTML, PDF, Google Sheets, SQLite backup).
+- **Import/restore** from the **Import** tab of the same page.
 
 > **Tip:** Take a **JSON backup** every so often, especially before a big cleanup or a desktop-app upgrade. It's your safety net.
 
@@ -908,7 +917,7 @@ Your database is a single SQLite file in your operating system's app-data folder
 
 - Your data **never leaves your machine** unless you export it. The built-in server listens only on your own computer (`127.0.0.1`) and isn't reachable over the network.
 - **Upgrades are safe:** when you install a newer version, the app updates the database structure **additively** — it adds anything new but never drops or rewrites your existing data, so an older database keeps working after an upgrade.
-- **Back up** by copying that `finance.db` file, or by using the **JSON / SQLite backup** exports on the Reports page.
+- **Back up** by copying that `finance.db` file, or by using the **JSON / SQLite backup** exports on the **Import & Export** or **Reports** page.
 
 > **Tip:** Closing the app fully shuts down its background server. If prices or the AI ever seem stuck, quitting and reopening the app is a clean, safe reset.
 
@@ -1019,7 +1028,7 @@ graph TD
 | `Cmd/Ctrl + Shift + H` | Go to Holdings |
 | `Cmd/Ctrl + Shift + W` | Go to Watchlist |
 | `Cmd/Ctrl + Shift + A` | Go to Alerts |
-| `Cmd/Ctrl + Shift + I` | Go to Import |
+| `Cmd/Ctrl + Shift + I` | Open AI Assistant |
 | `?` | Open the help dialog |
 | `Escape` | Close any open panel or modal |
 
