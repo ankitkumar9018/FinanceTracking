@@ -249,7 +249,7 @@ pub fn run() {
             // without feedback users see a blank window and assume the app
             // is broken.
             let _ = window.eval(
-                "document.documentElement.innerHTML = '<head><style>body{margin:0;font-family:system-ui;background:#09090b;color:#fafafa;display:flex;align-items:center;justify-content:center;height:100vh}.sp{width:40px;height:40px;border:3px solid #333;border-top-color:#6366f1;border-radius:50%;animation:r 1s linear infinite;margin:0 auto 16px}@keyframes r{to{transform:rotate(360deg)}}p{color:#888;font-size:14px}</style></head><body><div style=\"text-align:center\"><div class=\"sp\"></div><h2 style=\"margin:0 0 8px\">FinanceTracker</h2><p>Starting local server\\u2026<br>First launch can take a minute or two.</p></div></body>';"
+                "document.documentElement.innerHTML = '<head><style>body{margin:0;font-family:system-ui;background:#09090b;color:#fafafa;display:flex;align-items:center;justify-content:center;height:100vh}.sp{width:40px;height:40px;border:3px solid #333;border-top-color:#6366f1;border-radius:50%;animation:r 1s linear infinite;margin:0 auto 16px}@keyframes r{to{transform:rotate(360deg)}}p{color:#888;font-size:14px}</style></head><body><div style=\"text-align:center\"><div class=\"sp\"></div><h2 style=\"margin:0 0 8px\">FinanceTracker</h2><p>Setting things up\\u2026<br>FinanceTracker runs its own private server on this computer, so your data never leaves it.<br>The first launch can take a minute or two; later ones are faster.</p></div></body>';"
             );
 
             // If the sidecar failed to spawn there is no backend to reach, so
@@ -258,7 +258,7 @@ pub fn run() {
             // already logged to stderr above.)
             if spawn_error.is_some() {
                 let _ = window.eval(
-                    "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888;background:#09090b\"><div style=\"text-align:center;max-width:460px;padding:24px\"><h2 style=\"color:#fafafa;margin:0 0 12px\">Could not start the local server</h2><p>The FinanceTracker backend failed to launch on this machine. Please reinstall or reopen the app; if it keeps happening, check the application logs.</p></div></div>';"
+                    "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888;background:#09090b\"><div style=\"text-align:center;max-width:460px;padding:24px\"><h2 style=\"color:#fafafa;margin:0 0 12px\">Could not start the local server</h2><p>FinanceTracker\\u2019s built-in server could not start on this computer. Try reopening the app first. If it keeps happening, allow FinanceTracker through your antivirus or firewall, then reinstall. The application logs have the details.</p></div></div>';"
                 );
             } else {
             let nav_port = Arc::clone(&api_port);
@@ -285,7 +285,7 @@ pub fn run() {
                     // announced a move while we were waiting).
                     let port = nav_port.load(Ordering::SeqCst);
                     let recovery = format!(
-                        "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888;background:#09090b\"><div style=\"text-align:center\"><h2 style=\"color:#fafafa\">Backend is taking longer than expected</h2><p id=\"ft-status\">Still trying to reach the local server\\u2026</p><button onclick=\"window.__ftCheck&&window.__ftCheck()\" style=\"margin-top:16px;padding:8px 24px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px\">Retry now</button></div></div>';\
+                        "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888;background:#09090b\"><div style=\"text-align:center\"><h2 style=\"color:#fafafa\">Still starting up\\u2026</h2><p id=\"ft-status\">This is taking longer than usual. On the first launch, security software often scans the app before it can start \\u2014 that is normal and only happens once.</p><button onclick=\"window.__ftCheck&&window.__ftCheck()\" style=\"margin-top:16px;padding:8px 24px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px\">Retry now</button></div></div>';\
                         window.__ftCheck = function() {{\
                             fetch('http://localhost:{port}/health').then(function(r) {{\
                                 if (r.ok) {{ window.location.replace('http://localhost:{port}/#ftport={port}'); }}\
