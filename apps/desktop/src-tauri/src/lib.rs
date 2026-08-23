@@ -66,6 +66,132 @@ fn get_api_port(state: tauri::State<'_, AppState>) -> u16 {
     state.api_port.load(Ordering::SeqCst)
 }
 
+/// Collect every live descendant PID of `pid` (children, grandchildren, ...).
+///
+/// Used to reap the PyInstaller *onefile* layout: the tracked process is the
+/// bootloader, which extracts and spawns a SEPARATE child that actually binds
+/// the port. SIGTERM is forwarded by the bootloader, but SIGKILL is not — so
+/// killing only the tracked PID leaves that child orphaned, still holding the
+/// port. Walking `pgrep -P` keeps the blast radius provably inside our own
+/// process tree (never a name/port sweep that could hit another app).
+#[cfg(not(target_os = "windows"))]
+fn descendants_of(pid: u32) -> Vec<u32> {
+    let mut found = Vec::new();
+    let mut frontier = vec![pid];
+    // Bounded walk: a sidecar tree is tiny; the cap prevents pathological loops.
+    for _ in 0..16 {
+        let mut next = Vec::new();
+        for parent in frontier.drain(..) {
+            if let Ok(out) = std::process::Command::new("pgrep")
+                .args(["-P", &parent.to_string()])
+                .output()
+            {
+                for line in String::from_utf8_lossy(&out.stdout).lines() {
+                    if let Ok(child) = line.trim().parse::<u32>() {
+                        if child != 0 && !found.contains(&child) {
+                            found.push(child);
+                            next.push(child);
+                        }
+                    }
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    found
+}
+
+/// Path of the file recording the PID of the sidecar we spawned.
+fn pid_file(app_data_dir: &std::path::Path) -> std::path::PathBuf {
+    app_data_dir.join("backend.pid")
+}
+
+/// Reap a sidecar left behind by a PRIOR crash (where `kill_sidecar` never ran).
+///
+/// Only ever targets the exact PID we ourselves recorded, and only after
+/// confirming that PID is still our backend binary — so a recycled PID
+/// belonging to an unrelated process is never touched. This is the safe
+/// equivalent of the name-based sweep we deliberately refuse to do.
+#[cfg(not(target_os = "windows"))]
+fn reap_stale_sidecar(app_data_dir: &std::path::Path) {
+    let path = pid_file(app_data_dir);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let _ = std::fs::remove_file(&path);
+    let Ok(pid) = text.trim().parse::<u32>() else {
+        return;
+    };
+    // Verify identity before signalling: the recorded PID must still be OUR
+    // binary (guards against PID reuse after a reboot).
+    let is_ours = std::process::Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("financetracker-backend"))
+        .unwrap_or(false);
+    if !is_ours {
+        return;
+    }
+    eprintln!("[sidecar] reaping orphaned backend from a previous run (pid {})", pid);
+    terminate_tree(pid);
+}
+
+#[cfg(target_os = "windows")]
+fn reap_stale_sidecar(app_data_dir: &std::path::Path) {
+    let path = pid_file(app_data_dir);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let _ = std::fs::remove_file(&path);
+    let Ok(pid) = text.trim().parse::<u32>() else {
+        return;
+    };
+    terminate_tree(pid);
+}
+
+/// Terminate `pid` AND its descendants: graceful first, then forced.
+///
+/// The descendant list is snapshotted BEFORE the parent dies — once it exits,
+/// orphans reparent to init and `pgrep -P` can no longer find them.
+fn terminate_tree(pid: u32) {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut tree = vec![pid];
+        tree.extend(descendants_of(pid));
+
+        for p in &tree {
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &p.to_string()])
+                .output();
+        }
+        // Give the backend's lifespan handler time to stop the scheduler,
+        // dispose DB connections and checkpoint the SQLite WAL.
+        std::thread::sleep(Duration::from_millis(1500));
+        for p in &tree {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &p.to_string()])
+                .output();
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // /T kills the whole tree rooted at this PID; /F forces it.
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T"])
+            .creation_flags(0x08000000)
+            .output();
+        std::thread::sleep(Duration::from_millis(1500));
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(0x08000000)
+            .output();
+    }
+}
+
 fn kill_sidecar(state: &AppState) {
     // A poisoned mutex must NOT skip the kill — that would leak the sidecar
     // process (and its port) past app exit. Recover the inner value instead:
@@ -77,26 +203,14 @@ fn kill_sidecar(state: &AppState) {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(child) = guard.take() {
         let pid = child.pid();
-        // Graceful first: ask the backend to shut down so its lifespan
-        // handler runs — stops the scheduler, disposes DB connections, and
-        // checkpoints the SQLite WAL. Then hard-kill only if it lingers.
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = std::process::Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .output();
-            std::thread::sleep(Duration::from_millis(1500));
-        }
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            let _ = std::process::Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T"])
-                .creation_flags(0x08000000)
-                .output();
-            std::thread::sleep(Duration::from_millis(1500));
-        }
-        let _ = child.kill(); // SIGKILL / force fallback if still alive
+        // Terminate the whole tree, not just the tracked PID. The sidecar is a
+        // PyInstaller onefile binary: the tracked process is the bootloader and
+        // the process that actually BINDS THE PORT is its child. SIGTERM is
+        // forwarded by the bootloader, but the SIGKILL fallback is not — so
+        // killing only the parent orphaned the child and leaked the port
+        // (reproduced: parent killed, child kept serving on 8420).
+        terminate_tree(pid);
+        let _ = child.kill(); // reap the handle itself if anything remains
     }
 
     // Co-running safety (HARD REQUIREMENT): we deliberately do NOT perform any
@@ -126,6 +240,11 @@ pub fn run() {
                 .app_data_dir()
                 .expect("failed to resolve app data dir");
             std::fs::create_dir_all(&app_data_dir).ok();
+
+            // A crash or force-quit can leave last run's backend alive, still
+            // holding its port. Reap it now — strictly by the PID we recorded
+            // ourselves, and only after confirming it is still our binary.
+            reap_stale_sidecar(&app_data_dir);
             let db_path = app_data_dir.join("finance.db");
 
             let port = find_port();
@@ -168,6 +287,9 @@ pub fn run() {
             // (there is no backend to reach, so the poll would never succeed).
             let (child, spawn_error): (Option<CommandChild>, Option<String>) = match sidecar_result {
                 Ok((mut rx, child)) => {
+                    // Record the PID so a future launch can reap this process
+                    // if we never get to run kill_sidecar (crash / force-quit).
+                    let _ = std::fs::write(pid_file(&app_data_dir), child.pid().to_string());
                     let pump_port = Arc::clone(&api_port);
                     tauri::async_runtime::spawn(async move {
                         use tauri_plugin_shell::process::CommandEvent;
@@ -312,6 +434,11 @@ pub fn run() {
         if let tauri::RunEvent::Exit = event {
             if let Some(state) = app_handle.try_state::<AppState>() {
                 kill_sidecar(&state);
+            }
+            // Clean shutdown: drop the PID record so the next launch has
+            // nothing stale to reap.
+            if let Ok(dir) = app_handle.path().app_data_dir() {
+                let _ = std::fs::remove_file(pid_file(&dir));
             }
         }
     });
