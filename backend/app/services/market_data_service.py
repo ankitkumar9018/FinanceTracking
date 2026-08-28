@@ -21,6 +21,11 @@ from app.utils.concurrency import gather_bounded
 
 logger = logging.getLogger(__name__)
 
+# Window pulled on every refresh to keep price history current. Wide enough
+# to always include the last trading day (weekends, holidays, long breaks)
+# and to back-fill bars missed while the app was closed.
+HISTORY_BACKFILL_DAYS = 30
+
 # Cap concurrent per-holding refresh pipelines: unbounded gather over a large
 # portfolio floods the thread pool, and queue time then counts against each
 # fetch's timeout. gather_bounded applies the semaphore *outside* the work so
@@ -142,6 +147,7 @@ async def fetch_historical_data(
     symbol: str,
     exchange: str = "NSE",
     days: int = 30,
+    quote: dict | None = None,
 ) -> list[dict]:
     """Fetch OHLCV history for the past *days* trading days.
 
@@ -181,12 +187,38 @@ async def fetch_historical_data(
     # Trim to requested number of rows
     hist = hist.tail(days)
 
+    # yfinance emits the CURRENT (not yet finalised) session as a row whose
+    # Close is NaN. Dropping it silently made every chart and RSI value one
+    # trading day stale — the symptom users see as "the data is a day old".
+    # The live quote already carries that session's real OHLCV, so use it to
+    # complete the pending row instead of discarding it. Only the final row is
+    # ever repaired, and only when the quote is usable; any failure falls back
+    # to the previous behaviour of skipping the row.
+    pending_fill: dict | None = None
+    if len(hist) > 0 and _safe_float(hist["Close"].iloc[-1]) is None:
+        try:
+            q = quote if quote is not None else await fetch_current_price(symbol, exchange)
+            if q and _safe_float(q.get("current_price")) is not None:
+                pending_fill = q
+        except Exception:  # pragma: no cover - best effort only
+            logger.debug("Could not complete pending bar for %s", ticker_str)
+
     rows: list[dict] = []
-    for idx, row in hist.iterrows():
+    last_idx = len(hist) - 1
+    for pos, (idx, row) in enumerate(hist.iterrows()):
         o = _safe_float(row["Open"])
         h = _safe_float(row["High"])
         lo = _safe_float(row["Low"])
         c = _safe_float(row["Close"])
+        if c is None and pos == last_idx and pending_fill is not None:
+            # Complete today's/this session's bar from the live quote.
+            c = _safe_float(pending_fill.get("current_price"))
+            o = _safe_float(pending_fill.get("open")) or o
+            h = _safe_float(pending_fill.get("high")) or h
+            lo = _safe_float(pending_fill.get("low")) or lo
+            if c is not None and pd.isna(row["Volume"]):
+                row = row.copy()
+                row["Volume"] = pending_fill.get("volume") or 0
         # Skip rows where essential price data is missing (NaN from yfinance)
         if c is None:
             continue
@@ -256,6 +288,7 @@ async def fetch_rsi_series(
     exchange: str = "NSE",
     days: int = 30,
     period: int = 14,
+    quote: dict | None = None,
 ) -> list[dict]:
     """Fetch historical data and compute an RSI time series.
 
@@ -263,7 +296,7 @@ async def fetch_rsi_series(
     """
     # Wilder smoothing needs ~4x the period to stabilize
     fetch_days = days + period * 4 + 10
-    raw = await fetch_historical_data(symbol, exchange, fetch_days)
+    raw = await fetch_historical_data(symbol, exchange, fetch_days, quote=quote)
     if not raw:
         return []
 
@@ -308,16 +341,27 @@ async def _fetch_holding_data(symbol: str, exchange: str) -> dict:
         # Compute RSI from recent history
         rsi_val = None
         try:
-            rsi_data = await fetch_rsi_series(symbol, exchange, days=1, period=14)
+            rsi_data = await fetch_rsi_series(
+                symbol, exchange, days=1, period=14, quote=quote
+            )
             if rsi_data:
                 rsi_val = rsi_data[-1]["rsi"]
         except Exception:
             logger.warning("RSI fetch failed for %s", symbol)
         data["rsi"] = rsi_val
 
-        # Fetch OHLCV for price history
+        # Fetch OHLCV for price history.
+        #
+        # NOT days=1: that window returns ZERO bars (verified — the range is
+        # exclusive of today and collapses completely across weekends and
+        # holidays), so the history table never received a single row and every
+        # chart built on it stayed frozen. A short window always covers the last
+        # trading day, and back-filling the whole window closes gaps left while
+        # the app was closed.
         try:
-            ohlcv = await fetch_historical_data(symbol, exchange, days=1)
+            ohlcv = await fetch_historical_data(
+                symbol, exchange, days=HISTORY_BACKFILL_DAYS, quote=quote
+            )
             data["ohlcv"] = ohlcv
         except Exception:
             data["ohlcv"] = []
@@ -394,9 +438,8 @@ async def refresh_all_prices(
             # Store price in history table under the bar's own trading date —
             # not "today", which would fabricate rows on weekends/holidays.
             ohlcv = fetch_result.get("ohlcv", [])
-            if ohlcv:
-                latest = ohlcv[-1]
-                bar_date = latest.get("date") or today
+            for bar in ohlcv:
+                bar_date = bar.get("date") or today
                 hist_result = await db.execute(
                     select(PriceHistory).where(
                         PriceHistory.stock_symbol == holding.stock_symbol,
@@ -405,28 +448,35 @@ async def refresh_all_prices(
                     )
                 )
                 existing = hist_result.scalar_one_or_none()
+                # RSI is only meaningful for the most recent bar (it is the
+                # value computed for "now"); older back-filled bars keep
+                # whatever RSI they already had rather than being stamped with
+                # today's figure.
+                is_latest = bar is ohlcv[-1]
                 if existing is None:
-                    ph = PriceHistory(
-                        stock_symbol=holding.stock_symbol,
-                        exchange=holding.exchange,
-                        date=bar_date,
-                        open=latest["open"],
-                        high=latest["high"],
-                        low=latest["low"],
-                        close=latest["close"],
-                        volume=latest["volume"],
-                        rsi_14=holding.current_rsi,
+                    db.add(
+                        PriceHistory(
+                            stock_symbol=holding.stock_symbol,
+                            exchange=holding.exchange,
+                            date=bar_date,
+                            open=bar["open"],
+                            high=bar["high"],
+                            low=bar["low"],
+                            close=bar["close"],
+                            volume=bar["volume"],
+                            rsi_14=holding.current_rsi if is_latest else None,
+                        )
                     )
-                    db.add(ph)
                 else:
                     # Intraday row for the same bar date: update with the
                     # latest values so the EOD close replaces the midday one.
-                    existing.open = latest["open"]
-                    existing.high = latest["high"]
-                    existing.low = latest["low"]
-                    existing.close = latest["close"]
-                    existing.volume = latest["volume"]
-                    existing.rsi_14 = holding.current_rsi
+                    existing.open = bar["open"]
+                    existing.high = bar["high"]
+                    existing.low = bar["low"]
+                    existing.close = bar["close"]
+                    existing.volume = bar["volume"]
+                    if is_latest:
+                        existing.rsi_14 = holding.current_rsi
 
             updated += 1
         except Exception:

@@ -16,7 +16,7 @@ Covers, without any real LLM provider (a stub captures every call):
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from httpx import AsyncClient
 from sqlalchemy import func, select
@@ -155,8 +155,14 @@ async def test_detect_add_transaction(db: AsyncSession):
     assert result.proposal.params["holding_id"] == holding.id
     assert result.proposal.params["exchange"] == "NSE"
     assert result.proposal.params["quantity"] == 10
-    # Missing date defaults to today (ISO)
-    assert result.proposal.params["date"] == datetime.now(UTC).date().isoformat()
+    # Missing date defaults to today (ISO). The service uses the LOCAL day —
+    # the date a person would write on a trade — while this test previously
+    # pinned the UTC day, so it failed for the hours where the two differ
+    # (reproduced just after local midnight). Accept either.
+    assert result.proposal.params["date"] in {
+        date.today().isoformat(),
+        datetime.now(UTC).date().isoformat(),
+    }
     assert "RELIANCE" in result.proposal.summary
     assert result.proposal.id  # uuid assigned
 

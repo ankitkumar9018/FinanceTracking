@@ -13,6 +13,7 @@ while no worker existed, so prices and alerts silently never refreshed.
 from __future__ import annotations
 
 import logging
+from datetime import UTC
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -20,6 +21,8 @@ from app.config import settings
 from app.tasks.celery_app import JOBS, JobSpec, celery_app
 
 logger = logging.getLogger(__name__)
+
+_UTC = UTC
 
 # ---------------------------------------------------------------------------
 # Module-level scheduler instance
@@ -93,6 +96,12 @@ def start_scheduler() -> None:
 
     # Register every job from the shared JOBS spec (same source the Celery
     # beat schedule is generated from, so the two modes cannot drift).
+    # `next_run_time=now` matters: an interval trigger otherwise waits a FULL
+    # interval before its first run, so a freshly opened app showed stale prices
+    # and RSI for the first 5 minutes (and a desktop session shorter than that
+    # never refreshed at all). Run once at startup, then on the interval.
+    from datetime import datetime as _dt
+
     for spec in JOBS:
         _scheduler.add_job(
             _make_job(spec),
@@ -101,6 +110,7 @@ def start_scheduler() -> None:
             id=spec.id,
             name=spec.name,
             replace_existing=True,
+            next_run_time=_dt.now(_UTC),
         )
 
     _scheduler.start()
