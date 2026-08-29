@@ -102,6 +102,17 @@ async def get_net_worth(
     used as the base currency for this response only (the returned ``currency``
     field reflects it) — the user's stored preference is never changed.
 
+    How each asset class is valued (be honest about this in the UI):
+
+    * ``STOCK`` — live/last-known holding price.
+    * ``CRYPTO`` / ``GOLD`` **with a ticker symbol** — re-priced from yfinance
+      on every call (falling back to the stored ``current_value``).
+    * ``FIXED_DEPOSIT`` / ``BOND`` / ``REAL_ESTATE`` — **user-maintained**: the
+      stored ``current_value`` is reported verbatim. Nothing accrues it, and
+      ``interest_rate`` / ``maturity_date`` are carried through for display
+      only — no calculation reads them. Keep the value current with
+      ``PATCH /net-worth/assets/{asset_id}``.
+
     Returns a dict matching NetWorthResponse schema.
     """
     breakdown: list[dict] = []
@@ -192,6 +203,9 @@ async def get_net_worth(
         type_items: list[dict] = []
 
         for asset in asset_list:
+            # Baseline: the value the user last stored. For FIXED_DEPOSIT /
+            # BOND / REAL_ESTATE this is the FINAL answer — nothing here
+            # accrues interest or revalues property; PATCH keeps it honest.
             value = float(asset.current_value)
             value_currency = asset.currency
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowUpDown, ChevronDown, ChevronUp, Search } from "lucide-react";
 import type { Holding } from "@/stores/portfolio-store";
@@ -33,9 +33,23 @@ function getRsiStyle(rsi: number | null): { bg: string; text: string } {
 export function PortfolioTable({ holdings, isLoading }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>("stock_symbol");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
-  const [selectedHolding, setSelectedHolding] = useState<Holding | null>(null);
+  // Store the id, not the object: the panel must follow live store updates
+  // instead of freezing the row as it looked at click time.
+  const [selectedHoldingId, setSelectedHoldingId] = useState<number | null>(null);
   const [detailType, setDetailType] = useState<"price" | "rsi">("price");
   const [search, setSearch] = useState("");
+
+  const selectedHolding =
+    selectedHoldingId === null
+      ? null
+      : holdings.find((h) => h.holding_id === selectedHoldingId) ?? null;
+
+  // The holding went away (deleted, or the portfolio switched) — close the panel.
+  useEffect(() => {
+    if (selectedHoldingId !== null && !holdings.some((h) => h.holding_id === selectedHoldingId)) {
+      setSelectedHoldingId(null);
+    }
+  }, [holdings, selectedHoldingId]);
 
   function handleSort(key: SortKey) {
     if (sortKey === key) {
@@ -176,7 +190,7 @@ export function PortfolioTable({ holdings, isLoading }: Props) {
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     className="border-b border-[hsl(var(--border))] last:border-0 hover:bg-[hsl(var(--muted))]/30 transition-colors cursor-pointer"
-                    onClick={() => { setSelectedHolding(holding); setDetailType("price"); }}
+                    onClick={() => { setSelectedHoldingId(holding.holding_id); setDetailType("price"); }}
                   >
                     <td className="px-4 py-3">
                       <div>
@@ -243,7 +257,7 @@ export function PortfolioTable({ holdings, isLoading }: Props) {
           <StockDetailPanel
             holding={selectedHolding}
             type={detailType}
-            onClose={() => setSelectedHolding(null)}
+            onClose={() => setSelectedHoldingId(null)}
           />
         )}
       </AnimatePresence>

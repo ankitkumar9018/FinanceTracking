@@ -110,7 +110,7 @@ def start_scheduler() -> None:
             id=spec.id,
             name=spec.name,
             replace_existing=True,
-            next_run_time=_dt.now(_UTC),
+            next_run_time=_dt.now(_UTC) if spec.run_at_startup else None,
         )
 
     _scheduler.start()

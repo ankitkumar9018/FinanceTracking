@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +23,21 @@ from app.schemas.alert import (
 from app.services.alert_service import check_all_alerts_for_user
 
 router = APIRouter()
+
+
+def _as_utc_iso(value: datetime | None) -> str | None:
+    """Serialise a (possibly naive-UTC) timestamp as an offset-aware ISO string.
+
+    ``Alert.last_triggered`` is a naive UTC column. Emitted bare it reads as
+    ``2026-08-29T10:00:00``, which JavaScript parses as *local* time — so in
+    IST every alert appeared ~5.5 h in the future and the unread badge could
+    never clear. Stamping the offset makes the instant unambiguous.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +240,7 @@ async def alert_history(
                 "alert_id": a.id,
                 "alert_type": a.alert_type,
                 "condition": a.condition,
-                "triggered_at": a.last_triggered.isoformat() if a.last_triggered else None,
+                "triggered_at": _as_utc_iso(a.last_triggered),
                 "stock_symbol": stock_symbol,
                 "message": f"Alert {a.alert_type} triggered for {stock_symbol or 'unknown'}",
             }

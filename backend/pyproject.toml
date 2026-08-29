@@ -116,6 +116,7 @@ testpaths = ["tests"]
 # --timeout: no single test may hang the suite (a rare nondeterministic
 # deadlock was hanging CI); the "thread" method dumps every thread's stack on
 # expiry, naming the culprit in the CI log instead of hanging forever.
+markers = ["live_fallback: test deliberately exercises a live-market fallback"]
 addopts = "--disable-socket --allow-hosts=127.0.0.1,::1,localhost --timeout=120 --timeout-method=thread"
 
 [tool.mypy]

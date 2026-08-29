@@ -50,10 +50,16 @@ async def compare_with_benchmark(
 
     end = date.today()
     start = end - timedelta(days=days)
+    # yfinance treats `end` as EXCLUSIVE, so passing today drops today's bar
+    # and leaves the comparison a full trading day behind. Worse, the last
+    # benchmark date then clips the portfolio series below, so today's
+    # portfolio value is dropped too. Pad by a day (`fetch_index_window`
+    # already pads by 3 for the same reason).
+    fetch_end = end + timedelta(days=1)
 
     def _fetch_sync():
         t = yf.Ticker(symbol)
-        return t.history(start=start.isoformat(), end=end.isoformat())
+        return t.history(start=start.isoformat(), end=fetch_end.isoformat())
 
     try:
         hist = await asyncio.wait_for(asyncio.to_thread(_fetch_sync), timeout=15.0)

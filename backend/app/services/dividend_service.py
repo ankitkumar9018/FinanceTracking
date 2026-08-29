@@ -195,8 +195,18 @@ async def get_dividend_summary(user_id: int, db: AsyncSession) -> dict:
         total_reinvested: sum of total_amount where is_reinvested is True
         dividend_yield: (trailing-12m dividends / total portfolio value) * 100
         count: number of dividend records
-        calendar: list of {month, amount} grouped by YYYY-MM
+        calendar: list of {month, amount, projected} grouped by YYYY-MM
         currency: the currency all figures are expressed in
+
+    The trailing-12-month figures (``dividend_yield``, ``yield_on_cost``) are
+    bounded on BOTH sides — ``one_year_ago <= ex_date <= today``. An unbounded
+    lower-only window let a dividend declared with a future ex-date inflate the
+    yield with income that has not accrued yet.
+
+    Calendar decision: declared-but-not-yet-ex dividends are KEPT in the
+    calendar (users enter them precisely to see upcoming income) but every
+    future-dated month is flagged ``projected: true`` so the UI can render it
+    distinctly and it is never mistaken for received income.
     """
     base_currency = await _user_base_currency(user_id, db)
     rates = RateCache(base_currency, db)
@@ -216,7 +226,9 @@ async def get_dividend_summary(user_id: int, db: AsyncSession) -> dict:
     total_reinvested = 0.0
     annual_dividends = 0.0  # Trailing 12 months only
     monthly: dict[str, float] = defaultdict(float)
-    one_year_ago = date.today() - timedelta(days=365)
+    projected_months: set[str] = set()
+    today = date.today()
+    one_year_ago = today - timedelta(days=365)
 
     for div, holding_currency, portfolio_currency in dividend_rows:
         currency = holding_currency or portfolio_currency
@@ -229,11 +241,16 @@ async def get_dividend_summary(user_id: int, db: AsyncSession) -> dict:
         if div.is_reinvested:
             total_reinvested += amount
 
-        if div.ex_date >= one_year_ago:
+        # Trailing twelve months = the last 365 days UP TO TODAY. A future
+        # ex-date is income that has not accrued yet and must not inflate the
+        # yield.
+        if one_year_ago <= div.ex_date <= today:
             annual_dividends += amount
 
         month_key = div.ex_date.strftime("%Y-%m")
         monthly[month_key] += amount
+        if div.ex_date > today:
+            projected_months.add(month_key)
 
     # Dividend yield: trailing 12-month dividends / total portfolio value
     holdings_stmt = (
@@ -269,8 +286,14 @@ async def get_dividend_summary(user_id: int, db: AsyncSession) -> dict:
     if total_invested > 0 and annual_dividends > 0:
         yield_on_cost = round((annual_dividends / total_invested) * 100, 2)
 
+    # Declared-but-not-yet-ex dividends stay in the calendar (that is what the
+    # calendar is for) but are flagged so they read as expected, not received.
     calendar = [
-        {"month": month, "amount": round(amount, 2)}
+        {
+            "month": month,
+            "amount": round(amount, 2),
+            "projected": month in projected_months,
+        }
         for month, amount in sorted(monthly.items())
     ]
 
@@ -292,8 +315,9 @@ async def get_dividend_summary(user_id: int, db: AsyncSession) -> dict:
 def _sync_fetch_dividend_forecast(ticker_str: str) -> dict | None:
     """Fetch dividend history + rate for a symbol (runs in a thread).
 
-    Returns forecast primitives ``{annual_rate, pay_months, frequency}`` where
-    ``annual_rate`` is the estimated annual dividend *per share*, ``pay_months``
+    Returns forecast primitives ``{annual_rate, pay_months, frequency,
+    stale_since}`` where ``annual_rate`` is the estimated annual dividend *per
+    share*, ``pay_months``
     is the sorted set of calendar months (1-12) historically paid in the
     trailing year, and ``frequency`` is the number of payments per year.
 
@@ -332,7 +356,11 @@ def _sync_fetch_dividend_forecast(ticker_str: str) -> dict | None:
         if events:
             events.sort(key=lambda e: e[0])
             last_date = events[-1][0]
-            cutoff = last_date - timedelta(days=365)
+            # The trailing window is anchored to TODAY, not to the last payment
+            # ever made. Anchoring to the last payment made every ex-payer look
+            # like a current one — a stock whose final dividend was in 2015 kept
+            # projecting a full forward schedule, unflagged.
+            cutoff = date.today() - timedelta(days=365)
             recent = [(d, a) for (d, a) in events if d > cutoff]
             if recent:
                 pay_months = sorted({d.month for (d, a) in recent})
@@ -341,6 +369,16 @@ def _sync_fetch_dividend_forecast(ticker_str: str) -> dict | None:
                 # Fall back to trailing-sum when .info gave nothing usable.
                 if not annual_rate or float(annual_rate) <= 0:
                     annual_rate = trailing_sum
+            else:
+                # Dividend history exists, but nothing in the last 12 months:
+                # the payer has gone quiet. Report the staleness instead of
+                # forecasting income that is not coming.
+                return {
+                    "annual_rate": 0.0,
+                    "pay_months": [],
+                    "frequency": 0,
+                    "stale_since": last_date.isoformat(),
+                }
 
     try:
         annual_rate = float(annual_rate) if annual_rate is not None else 0.0
@@ -358,6 +396,7 @@ def _sync_fetch_dividend_forecast(ticker_str: str) -> dict | None:
         "annual_rate": annual_rate,
         "pay_months": pay_months,
         "frequency": frequency,
+        "stale_since": None,
     }
 
 
@@ -430,7 +469,8 @@ async def get_dividend_forecast(user_id: int, db: AsyncSession) -> dict:
             "by_holding": [
                 {"symbol", "exchange", "annual_estimate",
                  "yield_pct", "yield_on_cost_pct"}, ...
-            ],
+            ],   # a holding whose last dividend predates the trailing year
+                 # carries "stale_since": "YYYY-MM-DD" and contributes nothing
             "currency": str,
         }
     """
@@ -477,6 +517,22 @@ async def get_dividend_forecast(user_id: int, db: AsyncSession) -> dict:
             total_current_value += value_base
 
         if not prim:
+            continue
+
+        if prim.get("stale_since"):
+            # Last payment is more than a year old — no forward income is
+            # projected, but the holding is still listed so the staleness is
+            # visible rather than silently dropped.
+            by_holding.append(
+                {
+                    "symbol": h.stock_symbol,
+                    "exchange": h.exchange,
+                    "annual_estimate": 0.0,
+                    "yield_pct": None,
+                    "yield_on_cost_pct": None,
+                    "stale_since": prim["stale_since"],
+                }
+            )
             continue
 
         annual_rate = prim["annual_rate"]

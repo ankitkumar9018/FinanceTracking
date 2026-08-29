@@ -50,8 +50,6 @@ export default function HoldingsPage() {
   const [bulkEditMode, setBulkEditMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [refreshing, setRefreshing] = useState(false);
-  // When holdings data was last loaded/refreshed (drives the freshness pill)
-  const [pricesUpdatedAt, setPricesUpdatedAt] = useState<Date | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
 
   // Edit holding state — the modal loads the full holding itself
@@ -77,9 +75,21 @@ export default function HoldingsPage() {
     () => new Map(stopLosses.map((s) => [s.holding_id, s])),
     [stopLosses],
   );
-  // Track when holdings data was last loaded
-  useEffect(() => {
-    if (holdings.length > 0) setPricesUpdatedAt(new Date());
+  // Honest freshness: the OLDEST server-side price timestamp across holdings —
+  // i.e. how stale the *worst* row on this screen is. Null when nothing has ever
+  // been priced, which renders the unknown state rather than a green "Live".
+  const oldestPriceUpdate = useMemo(() => {
+    let oldestMs = Number.POSITIVE_INFINITY;
+    let oldestIso: string | null = null;
+    for (const h of holdings) {
+      const raw = h.last_price_update;
+      if (!raw) continue;
+      const ms = new Date(raw).getTime();
+      if (!Number.isFinite(ms) || ms >= oldestMs) continue;
+      oldestMs = ms;
+      oldestIso = raw;
+    }
+    return oldestIso;
   }, [holdings]);
 
   // ---- Dynamic columns --------------------------------------------------
@@ -247,7 +257,12 @@ export default function HoldingsPage() {
   }
 
   function handleBulkApplied() {
-    if (activePortfolioId) fetchHoldings(activePortfolioId);
+    if (activePortfolioId) {
+      // Stop-loss levels are recomputed from the edited holdings, so the badges
+      // must be re-read too — otherwise they keep the pre-edit status.
+      fetchHoldings(activePortfolioId);
+      fetchStopLosses(activePortfolioId);
+    }
     exitBulkEdit();
   }
 
@@ -321,7 +336,7 @@ export default function HoldingsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {pricesUpdatedAt && <FreshnessBadge lastUpdated={pricesUpdatedAt} />}
+          {holdings.length > 0 && <FreshnessBadge lastUpdated={oldestPriceUpdate} />}
           <button
             onClick={handleRefreshPrices}
             disabled={refreshing}

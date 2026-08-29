@@ -39,6 +39,58 @@ def _sync_fetch_earnings_calendar(ticker_str: str):
     return ticker.calendar
 
 
+# Cadences that must be projected by CALENDAR month rather than by a fixed
+# number of days, mapped to their month step.
+_CALENDAR_CADENCE_MONTHS: dict[str, int] = {"monthly": 1, "quarterly": 3}
+
+
+def add_months(anchor: date, months: int) -> date:
+    """Return *anchor* shifted by *months* calendar months.
+
+    The day-of-month is preserved, clamped to the target month's length
+    (31 Jan + 1 month -> 28/29 Feb). Always measured from the ORIGINAL anchor,
+    never by repeated increment, so a clamped month doesn't permanently pull
+    the anchor day earlier.
+    """
+    total = anchor.year * 12 + (anchor.month - 1) + months
+    year, month0 = divmod(total, 12)
+    month = month0 + 1
+    return date(year, month, min(anchor.day, monthrange(year, month)[1]))
+
+
+def _project_occurrences(
+    anchor: date,
+    month_start: date,
+    month_end: date,
+    step_months: int | None,
+    interval_days: int,
+) -> list[date]:
+    """Project a recurring event's dates falling inside a month window.
+
+    ``step_months`` set -> step by calendar months from *anchor*; otherwise
+    step by ``interval_days``.
+    """
+    dates: list[date] = []
+    if step_months:
+        elapsed = 0
+        projected = anchor
+        while projected < month_start:
+            elapsed += step_months
+            projected = add_months(anchor, elapsed)
+        while projected <= month_end:
+            dates.append(projected)
+            elapsed += step_months
+            projected = add_months(anchor, elapsed)
+    else:
+        projected = anchor
+        while projected < month_start:
+            projected += timedelta(days=interval_days)
+        while projected <= month_end:
+            dates.append(projected)
+            projected += timedelta(days=interval_days)
+    return dates
+
+
 # ---------------------------------------------------------------------------
 # Event types
 # ---------------------------------------------------------------------------
@@ -94,17 +146,27 @@ async def get_calendar_events(
             if avg_interval <= 0:
                 avg_interval = 30
 
-            # Walk the projected date into the requested month window
-            projected = next_date
-            while projected < month_start:
-                projected += timedelta(days=avg_interval)
+            # Monthly/quarterly SIPs are debited on a fixed DAY OF MONTH, so
+            # they must be projected by calendar month. Stepping by a flat 30
+            # (or 91) days walked the date backwards a little every month —
+            # a 15th-of-the-month SIP anchored 2026-01-15 drifted to 03-16,
+            # 06-14, 09-12, 12-11. Other cadences (weekly, bi-weekly, ad hoc)
+            # genuinely are day-based and keep the interval step.
+            step_months = _CALENDAR_CADENCE_MONTHS.get(
+                str(sip.get("frequency", "")).lower()
+            )
 
-            # Collect all occurrences within the month
-            while projected <= month_end:
+            for occurrence in _project_occurrences(
+                anchor=next_date,
+                month_start=month_start,
+                month_end=month_end,
+                step_months=step_months,
+                interval_days=avg_interval,
+            ):
                 events.append(
                     {
                         "type": EVENT_SIP,
-                        "date": projected.isoformat(),
+                        "date": occurrence.isoformat(),
                         "stock_symbol": sip["stock_symbol"],
                         "stock_name": sip["stock_name"],
                         "exchange": sip["exchange"],
@@ -116,7 +178,6 @@ async def get_calendar_events(
                         ),
                     }
                 )
-                projected += timedelta(days=avg_interval)
     except Exception:
         logger.exception("Failed to generate SIP calendar events")
 

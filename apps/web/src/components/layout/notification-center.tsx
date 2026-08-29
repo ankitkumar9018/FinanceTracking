@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Bell, BellOff, Loader2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api-client";
 import { formatDate } from "@/lib/utils";
+import { acquireLiveSocket, releaseLiveSocket } from "@/lib/live-socket";
 
 const SEEN_AT_KEY = "ft-alerts-seen-at";
 
@@ -24,9 +25,10 @@ interface AlertHistoryResponse {
 
 /**
  * Bell button + notification dropdown. Fetches recent triggered alerts from
- * `GET /alerts/history`, shows an unread badge for items triggered after the
- * last-seen timestamp (localStorage `ft-alerts-seen-at`), and marks everything
- * seen when the panel is opened.
+ * `GET /alerts/history`, re-fetches whenever the backend pushes
+ * `alert_triggered` over the shared live socket, shows an unread badge for
+ * items triggered after the last-seen timestamp (localStorage
+ * `ft-alerts-seen-at`), and marks everything seen when the panel is opened.
  */
 export function NotificationCenter() {
   const [open, setOpen] = useState(false);
@@ -34,22 +36,45 @@ export function NotificationCenter() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [seenAt, setSeenAt] = useState(0);
+  // Mirror of seenAt for use inside async callbacks without re-creating them.
+  const seenAtRef = useRef(0);
+
+  const applySeenAt = useCallback((timestampMs: number) => {
+    if (!Number.isFinite(timestampMs)) return;
+    const next = Math.max(seenAtRef.current, timestampMs);
+    if (next === seenAtRef.current) return;
+    seenAtRef.current = next;
+    setSeenAt(next);
+    try {
+      localStorage.setItem(SEEN_AT_KEY, new Date(next).toISOString());
+    } catch {
+      // storage unavailable — badge simply won't persist as cleared
+    }
+  }, []);
 
   // Read the persisted "seen" timestamp once on mount.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const stored = localStorage.getItem(SEEN_AT_KEY);
-    setSeenAt(stored ? new Date(stored).getTime() : 0);
+    const ms = stored ? new Date(stored).getTime() : 0;
+    const initial = Number.isFinite(ms) ? ms : 0;
+    seenAtRef.current = initial;
+    setSeenAt(initial);
   }, []);
 
-  const load = useCallback(async () => {
+  /** Fetch the history; returns the items so callers can act on what actually
+   *  landed (null when the request failed). */
+  const load = useCallback(async (): Promise<AlertHistoryItem[] | null> => {
     setLoading(true);
     setError(null);
     try {
       const res = await api.get<AlertHistoryResponse>("/alerts/history");
-      setHistory(res.history || []);
+      const items = res.history || [];
+      setHistory(items);
+      return items;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to load notifications");
+      return null;
     } finally {
       setLoading(false);
     }
@@ -57,7 +82,22 @@ export function NotificationCenter() {
 
   // Prime the list on mount so the unread badge is accurate before first open.
   useEffect(() => {
-    load();
+    void load();
+  }, [load]);
+
+  // Live alerts arrive on the SAME socket the price stream uses
+  // (manager.send_alert fans out to every connection of the user), so join the
+  // shared connection rather than opening a second one.
+  useEffect(() => {
+    const ws = acquireLiveSocket();
+    if (!ws) return;
+    const off = ws.on("alert_triggered", () => {
+      void load();
+    });
+    return () => {
+      off();
+      releaseLiveSocket();
+    };
   }, [load]);
 
   const unreadCount = useMemo(
@@ -71,17 +111,20 @@ export function NotificationCenter() {
   function handleToggle() {
     const next = !open;
     setOpen(next);
-    if (next) {
-      load();
-      // Mark all current notifications as seen.
-      const now = Date.now();
-      try {
-        localStorage.setItem(SEEN_AT_KEY, new Date(now).toISOString());
-      } catch {
-        // storage unavailable — badge simply won't persist as cleared
+    if (!next) return;
+    void (async () => {
+      const items = await load();
+      // Mark seen from what the user can actually see. Using Date.now() before
+      // the load resolved would swallow items that arrive in this very fetch.
+      if (!items) return;
+      let newest = 0;
+      for (const item of items) {
+        if (!item.triggered_at) continue;
+        const ms = new Date(item.triggered_at).getTime();
+        if (Number.isFinite(ms) && ms > newest) newest = ms;
       }
-      setSeenAt(now);
-    }
+      if (newest > 0) applySeenAt(newest);
+    })();
   }
 
   return (
@@ -139,7 +182,7 @@ export function NotificationCenter() {
                   <div className="px-4 py-8 text-center">
                     <p className="text-sm text-[hsl(var(--destructive))]">{error}</p>
                     <button
-                      onClick={load}
+                      onClick={() => void load()}
                       className="mt-3 rounded-md border border-[hsl(var(--border))] px-3 py-1.5 text-xs font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
                     >
                       Retry

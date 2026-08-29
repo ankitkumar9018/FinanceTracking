@@ -15,6 +15,10 @@ export interface Holding {
   action_needed: string;
   pnl_percent: number | null;
   sector: string | null;
+  /** When the backend last captured `current_price` (ISO-8601 with a UTC
+   *  offset), or null when this holding has never been priced. Drives the
+   *  freshness badge — never use a client-side clock for that. */
+  last_price_update?: string | null;
   // Range levels come from full holding fetch, not summary
   lower_mid_range_1?: number | null;
   lower_mid_range_2?: number | null;
@@ -31,6 +35,12 @@ export interface Portfolio {
   currency: string;
   is_default: boolean;
 }
+
+/** Fields a live `price_update` may patch onto a holding. `pnl_percent` is
+ *  re-derived from `current_price` and is therefore not patchable directly. */
+export type HoldingPatch = Partial<
+  Pick<Holding, "current_price" | "rsi" | "action_needed" | "last_price_update">
+>;
 
 export interface RefreshSummary {
   updated: number;
@@ -49,6 +59,14 @@ interface PortfolioState {
   setActivePortfolio: (id: number) => void;
   fetchHoldings: (portfolioId: number) => Promise<void>;
   refreshPrices: () => Promise<RefreshSummary>;
+  /** Re-fetch the active portfolio's holdings unconditionally (no-op when no
+   *  portfolio is active). Use after a mutation the store can't observe, e.g.
+   *  an import or a `prices_refreshed` push. */
+  refreshActive: () => Promise<void>;
+  /** Apply a partial live update to one holding, matched case-insensitively
+   *  on `stock_symbol`. */
+  updateHolding: (symbol: string, patch: HoldingPatch) => void;
+  /** @deprecated Use {@link updateHolding} — kept for callers that only have a price. */
   updateHoldingPrice: (symbol: string, price: number) => void;
 }
 
@@ -130,11 +148,41 @@ export const usePortfolioStore = create<PortfolioState>((set, get) => ({
     return summary;
   },
 
+  refreshActive: async () => {
+    const portfolioId = get().activePortfolioId;
+    if (portfolioId == null) return;
+    await get().fetchHoldings(portfolioId);
+  },
+
+  updateHolding: (symbol, patch) => {
+    const target = symbol.trim().toUpperCase();
+    set((state): Partial<PortfolioState> => {
+      let changed = false;
+      const holdings = state.holdings.map((h) => {
+        if ((h.stock_symbol ?? "").trim().toUpperCase() !== target) return h;
+        changed = true;
+        const next: Holding = { ...h };
+        // Only fields actually present in the payload are applied, so a
+        // partial/altered server envelope degrades to "leave it alone".
+        if (patch.current_price !== undefined) next.current_price = patch.current_price;
+        if (patch.rsi !== undefined) next.rsi = patch.rsi;
+        if (patch.action_needed !== undefined) next.action_needed = patch.action_needed;
+        if (patch.last_price_update !== undefined) {
+          next.last_price_update = patch.last_price_update;
+        }
+        // pnl_percent is client-derived from price vs avg — recompute it so the
+        // P&L column can't disagree with the price next to it.
+        if (patch.current_price != null && next.avg_price > 0) {
+          next.pnl_percent = ((patch.current_price - next.avg_price) / next.avg_price) * 100;
+        }
+        return next;
+      });
+      // Unknown symbol (e.g. a stale subscription): don't churn the array identity.
+      return changed ? { holdings } : {};
+    });
+  },
+
   updateHoldingPrice: (symbol, price) => {
-    set((state) => ({
-      holdings: state.holdings.map((h) =>
-        h.stock_symbol === symbol ? { ...h, current_price: price } : h
-      ),
-    }));
+    get().updateHolding(symbol, { current_price: price });
   },
 }));

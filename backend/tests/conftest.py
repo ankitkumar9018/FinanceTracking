@@ -128,3 +128,37 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
     )
     tokens = login_resp.json()
     return {"Authorization": f"Bearer {tokens['access_token']}"}
+
+
+@pytest.fixture(autouse=True)
+def _no_live_market_fallbacks(request, monkeypatch):
+    """Keep the suite hermetic and fast.
+
+    Several services now fall back to a LIVE market fetch when stored history
+    is thin (benchmark returns for beta/alpha, technical indicators). In tests
+    the seeded DB is deliberately small, so those fallbacks fire and make real
+    yfinance calls — which is slow locally and, on CI runners that Yahoo
+    rate-limits, is exactly what previously hung the pipeline for 10+ minutes.
+
+    Default them to "no live data" so tests exercise the stored-data path
+    deterministically. A test that deliberately covers the fallback opts out
+    with ``@pytest.mark.live_fallback`` and installs its own stub.
+    """
+    if request.node.get_closest_marker("live_fallback") is not None:
+        return
+    import pandas as pd
+
+    async def _no_benchmark(*_args, **_kwargs):
+        return pd.Series(dtype=float)
+
+    async def _no_ohlcv(*_args, **_kwargs):
+        return []
+
+    from app.ml import risk_calculator, technical_indicators
+
+    monkeypatch.setattr(
+        risk_calculator, "_fetch_benchmark_returns_live", _no_benchmark, raising=False
+    )
+    monkeypatch.setattr(
+        technical_indicators, "_fetch_live_ohlcv", _no_ohlcv, raising=False
+    )

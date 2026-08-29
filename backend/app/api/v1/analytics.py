@@ -72,6 +72,64 @@ async def _gather_histories(
     )
     return [[] if isinstance(r, BaseException) else r for r in results]
 
+
+def _as_iso(value) -> str:
+    """Normalise a history row's ``date`` (str or ``date``) to ``YYYY-MM-DD``."""
+    return value if isinstance(value, str) else value.isoformat()
+
+
+def _aligned_close_series(
+    histories: dict[str, list[dict]],
+) -> tuple[list[str], dict[str, list[float]]]:
+    """Align many symbols' close series onto one shared date axis.
+
+    NSE and XETRA (and NYSE) keep different holiday calendars, so a naive
+    "sum whatever rows share this date" aggregation silently drops a holding
+    on every date it happens to lack a bar — which fabricates cliffs of tens
+    of percent in portfolio-value and drawdown series.
+
+    The axis is the sorted UNION of every symbol's dates. Each symbol is then
+    projected onto it by carrying its last known close forward, and its
+    EARLIEST known close backward over dates that precede its first bar. The
+    backward fill matters because these charts value the *current* basket over
+    history (they use today's cumulative quantities for every date), so a
+    symbol appearing mid-window would otherwise contribute 0 and then jump —
+    a fabricated step change, not a real return.
+
+    A single-symbol portfolio is unaffected: the union is that symbol's own
+    date list and neither fill ever triggers.
+    """
+    all_dates: set[str] = set()
+    by_symbol: dict[str, dict[str, float]] = {}
+    for sym, hist in histories.items():
+        per_date: dict[str, float] = {}
+        for d in hist:
+            close = d.get("close")
+            if close is None:
+                continue
+            iso = _as_iso(d["date"])
+            per_date[iso] = float(close)
+        if per_date:
+            by_symbol[sym] = per_date
+            all_dates.update(per_date)
+
+    axis = sorted(all_dates)
+    if not axis:
+        return [], {}
+
+    aligned: dict[str, list[float]] = {}
+    for sym, per_date in by_symbol.items():
+        first_close = per_date[min(per_date)]
+        series: list[float] = []
+        last = first_close  # back-fill before the symbol's first bar
+        for dt in axis:
+            last = per_date.get(dt, last)
+            series.append(last)
+        aligned[sym] = series
+
+    return axis, aligned
+
+
 def _month_range(start: str, end: str) -> list[str]:
     """Return every ``YYYY-MM`` month from ``start`` to ``end`` inclusive.
 
@@ -328,7 +386,8 @@ async def data_freshness(
     """Get data freshness / staleness for each holding in the portfolio.
 
     A holding is stale if its price data is older than 30 minutes during
-    market hours, or older than 1 day outside market hours.
+    market hours, or predates the last settled session close for its exchange
+    outside market hours (so Friday's close stays fresh over the weekend).
     """
     await verify_portfolio_ownership(portfolio_id, user, db)
     freshness = await get_data_freshness(portfolio_id, db)
@@ -411,30 +470,42 @@ async def get_correlation_matrix(
 
     try:
         import numpy as np
+        import pandas as pd
 
         # Fetch price history for each holding concurrently (bounded).
-        returns_map: dict[str, list[float]] = {}
+        # Returns are kept DATE-KEYED: truncating each series to a common
+        # length and correlating position-by-position pairs unrelated trading
+        # days whenever two exchanges' calendars differ, which drives the
+        # correlation toward noise (~0) regardless of the real relationship.
+        returns_map: dict[str, pd.Series] = {}
         histories = await _gather_histories(list(zip(symbols, exchanges)), days=days)
         for sym, history in zip(symbols, histories):
             if len(history) >= 2:
-                closes = [d["close"] for d in history]
-                daily_returns = [
-                    (closes[i] - closes[i - 1]) / closes[i - 1]
-                    for i in range(1, len(closes))
-                    if closes[i - 1] != 0
-                ]
-                returns_map[sym] = daily_returns
+                by_date = {
+                    _as_iso(d["date"]): float(d["close"])
+                    for d in history
+                    if d.get("close") is not None
+                }
+                if len(by_date) < 2:
+                    continue
+                closes = pd.Series(by_date).sort_index()
+                closes = closes[closes != 0]
+                daily_returns = closes.pct_change().dropna()
+                if len(daily_returns) >= 2:
+                    returns_map[sym] = daily_returns
 
         # Only include symbols with sufficient data
         valid_symbols = [s for s in symbols if s in returns_map and len(returns_map[s]) >= 10]
         if len(valid_symbols) < 2:
             return {"symbols": valid_symbols, "matrix": [[1.0]] * len(valid_symbols)}
 
-        # Align to same length (minimum common length)
-        min_len = min(len(returns_map[s]) for s in valid_symbols)
-        matrix_data = np.array([returns_map[s][:min_len] for s in valid_symbols])
+        # Align on shared dates (the same alignment calculate_beta uses), then
+        # correlate only the days every symbol actually traded.
+        frame = pd.DataFrame({s: returns_map[s] for s in valid_symbols}).dropna()
+        if len(frame) < 2:
+            return {"symbols": valid_symbols, "matrix": []}
 
-        corr = np.corrcoef(matrix_data)
+        corr = frame.corr().to_numpy()
         # Replace NaN with 0
         corr = np.nan_to_num(corr, nan=0.0)
 
@@ -588,19 +659,22 @@ async def get_drawdown(
         if not all_histories:
             return {"drawdown": []}
 
-        # Build daily portfolio value (sum of qty * close for each holding)
-        date_values: dict[str, float] = {}
-        for sym, hist in all_histories.items():
-            qty = quantities.get(sym, 0)
-            for d in hist:
-                dt = d["date"] if isinstance(d["date"], str) else d["date"].isoformat()
-                date_values[dt] = date_values.get(dt, 0) + qty * d["close"]
-
-        if not date_values:
+        # Build daily portfolio value (sum of qty * close for each holding) on
+        # a SHARED date axis. Summing only the rows that happen to exist on a
+        # given date silently omits any holding whose exchange was shut that
+        # day (NSE and XETRA holidays don't line up), which showed up as
+        # fabricated ~-96 % drawdown cliffs.
+        sorted_dates, aligned = _aligned_close_series(all_histories)
+        if not sorted_dates:
             return {"drawdown": []}
 
-        # Sort by date and compute drawdown from peak
-        sorted_dates = sorted(date_values.keys())
+        date_values: dict[str, float] = {}
+        for sym, closes in aligned.items():
+            qty = quantities.get(sym, 0)
+            for dt, close in zip(sorted_dates, closes):
+                date_values[dt] = date_values.get(dt, 0.0) + qty * close
+
+        # Compute drawdown from peak
         peak = 0.0
         drawdown_series = []
 

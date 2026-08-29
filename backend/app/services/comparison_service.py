@@ -6,7 +6,6 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass
-from datetime import date, timedelta
 
 import yfinance as yf
 
@@ -49,23 +48,66 @@ class StockComparison:
     period_days: int
 
 
-def _sync_fetch_stock_data(yf_symbol: str, days: int) -> tuple[dict, list[dict]]:
-    """Fetch stock info and price history synchronously (runs in thread)."""
+def _sync_fetch_stock_info(yf_symbol: str) -> dict:
+    """Fetch a ticker's ``.info`` payload synchronously (runs in a thread)."""
     ticker = yf.Ticker(yf_symbol)
-    info = ticker.info or {}
+    return ticker.info or {}
 
-    end = date.today()
-    start = end - timedelta(days=days)
-    hist = ticker.history(start=start.isoformat(), end=end.isoformat())
 
-    history: list[dict] = []
-    if not hist.empty:
-        for d, row in hist.iterrows():
-            c = _safe_float_val(row["Close"])
-            if c is not None:
-                history.append({"date": d.date().isoformat(), "close": round(c, 2)})
+def _quote_from_info(info: dict) -> dict:
+    """Adapt a yfinance ``.info`` payload to the quote shape
+    :func:`market_data_service.fetch_historical_data` expects.
 
-    return info, history
+    Passing it lets the delegated fetch repair the current (not-yet-closed)
+    session's NaN bar from data we already hold, instead of making a second
+    live-quote round-trip.
+    """
+    return {
+        "current_price": _safe_float_val(
+            info.get("currentPrice") or info.get("regularMarketPrice")
+        ),
+        "open": _safe_float_val(info.get("open") or info.get("regularMarketOpen")),
+        "high": _safe_float_val(info.get("dayHigh") or info.get("regularMarketDayHigh")),
+        "low": _safe_float_val(info.get("dayLow") or info.get("regularMarketDayLow")),
+        "volume": info.get("volume") or info.get("regularMarketVolume") or 0,
+    }
+
+
+async def _fetch_close_series(
+    symbol: str,
+    exchange: str,
+    days: int,
+    info: dict,
+) -> list[dict]:
+    """Close-price series for one symbol, delegated to market_data_service.
+
+    Delegating (rather than issuing our own ``ticker.history(start=, end=)``)
+    fixes two things at once: yfinance treats ``end`` as EXCLUSIVE, so the old
+    ``end=date.today()`` left the comparison chart a trading day short, and the
+    shared fetcher repairs the pending-session bar that the old ``if c is not
+    None`` filter dropped. The shape is adapted locally to ``{date, close}``.
+    """
+    from app.services.market_data_service import fetch_historical_data
+
+    try:
+        rows = await fetch_historical_data(
+            symbol, exchange, days=days, quote=_quote_from_info(info)
+        )
+    except Exception:
+        logger.warning("Price history fetch failed for %s", symbol)
+        return []
+
+    series: list[dict] = []
+    for r in rows:
+        c = _safe_float_val(r.get("close"))
+        if c is None:
+            continue
+        d = r["date"]
+        series.append({
+            "date": d if isinstance(d, str) else d.isoformat(),
+            "close": round(c, 2),
+        })
+    return series
 
 
 async def compare_stocks(
@@ -75,9 +117,11 @@ async def compare_stocks(
 ) -> StockComparison:
     """Compare up to 3 stocks with their key metrics and price history.
 
-    The per-symbol yfinance fetches run concurrently with a bounded pool and
-    per-item timeout via :func:`bounded_thread_map`; a failed/timed-out fetch
-    degrades that stock to all-``None`` metrics instead of failing the batch.
+    The per-symbol yfinance ``.info`` fetches run concurrently with a bounded
+    pool and per-item timeout via :func:`bounded_thread_map`; a failed/timed-out
+    fetch degrades that stock to all-``None`` metrics instead of failing the
+    batch. Price history comes from the shared
+    :func:`market_data_service.fetch_historical_data`.
     """
     from app.services.market_data_service import _ticker_symbol
 
@@ -87,17 +131,26 @@ async def compare_stocks(
     ]
 
     results = await bounded_thread_map(
-        lambda pair: _sync_fetch_stock_data(_ticker_symbol(pair[0], pair[1]), days),
+        lambda pair: _sync_fetch_stock_info(_ticker_symbol(pair[0], pair[1])),
         selected,
         limit=3,
         timeout=10.0,
     )
 
+    histories = await asyncio.gather(
+        *(
+            _fetch_close_series(symbol, exchange, days, info or {})
+            for (symbol, exchange), info in zip(selected, results, strict=True)
+        )
+    )
+
     stocks: list[StockMetrics] = []
     price_history: dict[str, list[dict]] = {}
 
-    for (symbol, exchange), fetched in zip(selected, results, strict=True):
-        if fetched is None:
+    for (symbol, exchange), info, history in zip(
+        selected, results, histories, strict=True
+    ):
+        if info is None:
             logger.warning("Stock data fetch failed for %s", symbol)
             stocks.append(StockMetrics(
                 symbol=symbol, name=symbol, exchange=exchange,
@@ -105,10 +158,9 @@ async def compare_stocks(
                 week_52_low=None, pe_ratio=None, market_cap=None,
                 volume=None, dividend_yield=None, beta=None,
             ))
-            price_history[symbol] = []
+            price_history[symbol] = history
             continue
 
-        info, history = fetched
         current = _safe_float_val(
             info.get("currentPrice") or info.get("regularMarketPrice")
         )

@@ -53,7 +53,8 @@ export function PortfolioSummaryCards({ holdings, isLoading }: Props) {
       return pctA - pctB;
     })[0];
 
-  const rsiHoldings = holdings.filter((h) => h.rsi);
+  // != null / isFinite, not truthiness: a legitimate RSI of 0 must count.
+  const rsiHoldings = holdings.filter((h) => h.rsi != null && Number.isFinite(h.rsi));
   const avgRsi = rsiHoldings.length > 0
     ? rsiHoldings.reduce((sum, h) => sum + h.rsi!, 0) / rsiHoldings.length
     : null;
@@ -105,10 +106,10 @@ export function PortfolioSummaryCards({ holdings, isLoading }: Props) {
     },
     {
       title: "Portfolio RSI",
-      value: avgRsi ? avgRsi.toFixed(1) : "\u2014",
+      value: avgRsi != null ? avgRsi.toFixed(1) : "\u2014",
       numericValue: avgRsi,
-      isNumeric: !!avgRsi,
-      subtitle: avgRsi
+      isNumeric: avgRsi != null,
+      subtitle: avgRsi != null
         ? avgRsi < 30
           ? "Oversold"
           : avgRsi > 70
@@ -117,9 +118,9 @@ export function PortfolioSummaryCards({ holdings, isLoading }: Props) {
         : "No data",
       icon: Activity,
       color:
-        avgRsi && avgRsi < 30
+        avgRsi != null && avgRsi < 30
           ? "text-[hsl(var(--rsi-oversold))]"
-          : avgRsi && avgRsi > 70
+          : avgRsi != null && avgRsi > 70
           ? "text-[hsl(var(--rsi-overbought))]"
           : "text-[hsl(var(--rsi-neutral))]",
     },

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -166,12 +167,71 @@ def calculate_portfolio_returns(
     return df.sum(axis=1)
 
 
+# Beta/alpha/information-ratio need at least this many aligned observations
+# (see calculate_beta); below it the DB series is treated as unusable and the
+# live fallback is tried.
+_MIN_BENCHMARK_ROWS = 30
+
+# Upper bound on the live benchmark fetch so a slow/unreachable provider can
+# never stall a risk-metrics request.
+_BENCHMARK_FETCH_TIMEOUT = 20.0
+
+
+async def _fetch_benchmark_returns_live(
+    benchmark_symbol: str,
+    cutoff: date,
+) -> pd.Series:
+    """Fetch benchmark daily returns live, as a fallback for an empty DB.
+
+    ``PriceHistory`` is only ever written by the price refresh, which iterates
+    over HOLDINGS — an index symbol such as ``^NSEI`` is never a holding, so
+    the table has no benchmark rows and beta / alpha / information ratio came
+    back permanently ``None``.
+
+    Bounded by :data:`_BENCHMARK_FETCH_TIMEOUT` and degrades to an empty series
+    on any failure; it never raises.
+    """
+    from app.services.market_data_service import fetch_historical_data
+
+    days = max((date.today() - cutoff).days, 2)
+    try:
+        rows = await asyncio.wait_for(
+            # Index tickers take no exchange suffix, so pass an empty exchange.
+            fetch_historical_data(benchmark_symbol, "", days=days),
+            timeout=_BENCHMARK_FETCH_TIMEOUT,
+        )
+    except Exception:
+        logger.debug(
+            "Live benchmark fetch failed for %s", benchmark_symbol, exc_info=True
+        )
+        return pd.Series(dtype=float)
+
+    prices: dict[date, float] = {}
+    for r in rows:
+        d = r.get("date")
+        close = r.get("close")
+        if d is None or close is None:
+            continue
+        if isinstance(d, str):
+            d = date.fromisoformat(d)
+        elif isinstance(d, datetime):
+            d = d.date()
+        if d >= cutoff:
+            prices[d] = float(close)
+
+    if len(prices) < 2:
+        return pd.Series(dtype=float)
+
+    bench_series = pd.Series(prices).sort_index()
+    return bench_series.pct_change().dropna()
+
+
 async def _fetch_benchmark_returns(
     db,
     benchmark_symbol: str,
     cutoff: date,
 ) -> pd.Series:
-    """Fetch benchmark daily returns from the database."""
+    """Benchmark daily returns — from the database, else fetched live."""
     from sqlalchemy import select
 
     from app.models.price_history import PriceHistory
@@ -192,7 +252,14 @@ async def _fetch_benchmark_returns(
             index=[p.date for p in bench_prices],
         )
         bench_returns = bench_series.pct_change().dropna()
-    return bench_returns
+
+    if len(bench_returns) >= _MIN_BENCHMARK_ROWS:
+        return bench_returns
+
+    # Nothing usable stored — fall back to a live fetch rather than silently
+    # reporting beta/alpha/information ratio as None forever.
+    live = await _fetch_benchmark_returns_live(benchmark_symbol, cutoff)
+    return live if len(live) > len(bench_returns) else bench_returns
 
 
 async def compute_portfolio_risk(

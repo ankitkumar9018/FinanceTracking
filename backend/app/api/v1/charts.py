@@ -221,8 +221,25 @@ async def portfolio_performance(
         (h.stock_symbol, h.exchange): float(h.cumulative_quantity) for h in holdings
     }
 
+    # Seed each symbol's carried-forward price with its EARLIEST in-window
+    # close. Forward-filling only *after* a symbol's first row makes a holding
+    # whose history starts mid-window contribute 0 until then and jump to full
+    # value on its first bar — a fabricated step change (e.g. +500 % in a day)
+    # that is not a real return. This series values the CURRENT basket
+    # (today's cumulative quantities) over history, so back-filling with the
+    # symbol's earliest known close keeps the basket constant and the series
+    # full length instead of truncating it to the newest holding's start.
+    earliest_close: dict[tuple[str, str], tuple[str, float]] = {}
+    for (sym, exch, row_date), close in price_lookup.items():
+        pair = (sym, exch)
+        seen = earliest_close.get(pair)
+        if seen is None or row_date < seen[0]:
+            earliest_close[pair] = (row_date, close)
+    last_known_price: dict[tuple[str, str], float] = {
+        pair: close for pair, (_, close) in earliest_close.items()
+    }
+
     performance: list[dict] = []
-    last_known_price: dict[tuple[str, str], float] = {}
 
     for date_str in sorted_dates:
         total = 0.0

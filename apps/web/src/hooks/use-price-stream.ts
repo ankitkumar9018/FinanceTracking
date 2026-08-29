@@ -1,27 +1,54 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { WSConnection } from "@/lib/websocket";
-import { usePortfolioStore } from "@/stores/portfolio-store";
+import { acquireLiveSocket, releaseLiveSocket } from "@/lib/live-socket";
+import { usePortfolioStore, type HoldingPatch } from "@/stores/portfolio-store";
+import type { WSConnection } from "@/lib/websocket";
 
-/** Shape of the server's `price_update` message (see backend price_stream.py):
- *  `{ type: "price_update", symbol: "RELIANCE", data: { current_price, ... } }` */
+/** Envelope of the server's per-symbol push, verbatim from
+ *  `app/api/ws/connection_manager.py::broadcast_price_update`:
+ *
+ *    { "type": "price_update", "symbol": "RELIANCE", "data": { … } }
+ *
+ *  `symbol` is upper-cased server-side. Everything inside `data` is optional —
+ *  each field is applied only when present, so an envelope that gains or loses
+ *  keys degrades instead of blanking the table. */
 interface PriceUpdateMessage {
-  symbol?: string;
-  data?: { current_price?: number; price?: number; last_price?: number };
+  symbol?: unknown;
+  data?: {
+    current_price?: number | null;
+    price?: number | null;
+    last_price?: number | null;
+    rsi?: number | null;
+    action_needed?: string | null;
+    last_price_update?: string | null;
+  };
+}
+
+/** First finite number among the candidates, or undefined. */
+function firstFinite(...values: (number | null | undefined)[]): number | undefined {
+  for (const v of values) {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+  }
+  return undefined;
 }
 
 /**
- * Opens the `/ws/prices` stream once, subscribes to the active portfolio's
- * holding symbols, and pushes each live price into the portfolio store.
+ * Joins the shared `/ws/prices` stream, subscribes to the active portfolio's
+ * holding symbols, and pushes live data into the portfolio store.
  *
- * Mount this a single time (in the dashboard layout) so route changes never
- * open duplicate sockets. Degrades silently when there is no auth token or the
- * connection fails.
+ * Two server paths are handled:
+ *   - `price_update`     — per-symbol patch (price, RSI, action, timestamp)
+ *   - `prices_refreshed` — end of a refresh cycle; re-fetches the active
+ *     portfolio's holdings. Coarse, but it keeps the screen honest even if the
+ *     per-symbol payload changes shape or a symbol push is missed.
+ *
+ * Mount this a single time (in the dashboard layout). Degrades silently when
+ * there is no auth token or the connection fails.
  */
 export function usePriceStream(): void {
   const holdings = usePortfolioStore((s) => s.holdings);
-  const updateHoldingPrice = usePortfolioStore((s) => s.updateHoldingPrice);
+  const updateHolding = usePortfolioStore((s) => s.updateHolding);
 
   const wsRef = useRef<WSConnection | null>(null);
   const symbolsRef = useRef<string[]>([]);
@@ -33,42 +60,65 @@ export function usePriceStream(): void {
   );
   const symbolsKey = symbols.join(",");
 
-  // Open the socket once (token is read the same way api-client does).
+  // Join the shared socket once.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const token = localStorage.getItem("ft-access-token");
-    if (!token) return;
-
-    const ws = new WSConnection("/ws/prices");
+    const ws = acquireLiveSocket();
+    if (!ws) return;
     wsRef.current = ws;
     symbolsRef.current = symbols;
 
-    const offConnected = ws.on("connected", () => {
+    const subscribe = () => {
       const syms = symbolsRef.current;
       if (syms.length > 0) ws.send({ action: "subscribe", symbols: syms });
-    });
+    };
+
+    const offConnected = ws.on("connected", subscribe);
+    // The socket may already be OPEN (another consumer got here first), in
+    // which case "connected" has been and gone. send() is a no-op otherwise.
+    subscribe();
 
     const offPrice = ws.on("price_update", (raw) => {
-      const msg = raw as PriceUpdateMessage;
-      const symbol = msg.symbol;
-      const price = msg.data?.current_price ?? msg.data?.price ?? msg.data?.last_price;
-      if (symbol && typeof price === "number") {
-        updateHoldingPrice(symbol, price);
+      const msg = (raw ?? {}) as PriceUpdateMessage;
+      const symbol = typeof msg.symbol === "string" ? msg.symbol : "";
+      if (!symbol) return;
+      const data = msg.data ?? {};
+
+      const patch: HoldingPatch = {};
+      const price = firstFinite(data.current_price, data.price, data.last_price);
+      if (price !== undefined) patch.current_price = price;
+      // null is meaningful for these two ("no RSI" / "never priced"); anything
+      // of the wrong type is skipped rather than written through.
+      if (data.rsi === null || (typeof data.rsi === "number" && Number.isFinite(data.rsi))) {
+        patch.rsi = data.rsi;
       }
+      // action_needed is computed server-side (5-zone logic) — it can only be
+      // carried, never derived here.
+      if (typeof data.action_needed === "string" && data.action_needed !== "") {
+        patch.action_needed = data.action_needed;
+      }
+      if (data.last_price_update === null || typeof data.last_price_update === "string") {
+        patch.last_price_update = data.last_price_update;
+      }
+
+      if (Object.keys(patch).length > 0) updateHolding(symbol, patch);
     });
 
-    ws.connect();
+    // Coarse fallback: the refresh cycle finished, so re-read the summary.
+    const offRefreshed = ws.on("prices_refreshed", () => {
+      void usePortfolioStore.getState().refreshActive();
+    });
 
     return () => {
       offConnected();
       offPrice();
-      ws.disconnect();
+      offRefreshed();
       wsRef.current = null;
+      releaseLiveSocket();
     };
     // Intentionally run once: the socket must persist across holding changes.
-    // updateHoldingPrice is a stable zustand action; symbols are handled below.
+    // updateHolding is a stable zustand action; symbols are handled below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [updateHoldingPrice]);
+  }, [updateHolding]);
 
   // Keep the subscription in sync as holdings load / change. send() is a no-op
   // until the socket is OPEN; the "connected" handler covers the initial send.

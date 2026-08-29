@@ -15,7 +15,13 @@ logger = logging.getLogger(__name__)
 
 # How many hours before a cached (same-day) rate is considered stale and worth
 # refetching. Historical closes are immutable and never expire.
-RATE_CACHE_STALE_HOURS = 24
+#
+# This MUST stay below 24: a cache row dated today was, by definition, written
+# at some point today, so a 24-hour window could never elapse and the refetch
+# branch was unreachable dead code — the first rate of the day (often fetched
+# pre-market) stayed frozen until midnight. One hour keeps intraday moves
+# visible without hammering yfinance.
+RATE_CACHE_STALE_HOURS = 1
 
 # Exchange -> currency mapping. Re-exported alias of the shared
 # ``app.core.markets.CURRENCY`` map (kept for existing importers).
@@ -104,6 +110,10 @@ async def _fetch_rate_yfinance(
 def _is_stale(rate_row: ForexRate) -> bool:
     """Return True if a cached rate is older than ``RATE_CACHE_STALE_HOURS``.
 
+    Compared against the row's own ``created_at`` timestamp (the moment the
+    rate was written), NOT against the start of its ``date`` — a same-day row
+    is always less than 24 h old, so a 24-hour window would never fire.
+
     A missing/unknown timestamp is treated as stale so it gets refreshed.
     """
     ts = getattr(rate_row, "created_at", None)
@@ -164,8 +174,10 @@ async def get_exchange_rate(
 
     if cached is not None:
         # Historical closes are immutable — always serve them from cache. Only
-        # today's rate can go stale intraday: refetch it once it is older than
-        # RATE_CACHE_STALE_HOURS, otherwise keep serving the cached value.
+        # today's rate can go stale intraday: refetch it once the cached row is
+        # older than RATE_CACHE_STALE_HOURS (measured from when it was written,
+        # so a rate fetched pre-market is refreshed later the same day),
+        # otherwise keep serving the cached value.
         if lookup_date < date.today() or not _is_stale(cached):
             return float(cached.rate)
 

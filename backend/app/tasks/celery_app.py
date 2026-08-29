@@ -79,6 +79,11 @@ class JobSpec:
     celery_task: str  # dotted Celery task name
     interval_seconds: Callable[[], int]  # read settings at schedule time
     coro_factory: Callable[[], Coroutine[Any, Any, dict]]
+    # Run once as soon as the scheduler starts? True for the frequent refresh
+    # jobs (otherwise a freshly opened app shows stale data for a full
+    # interval). MUST stay False for daily jobs like the digest, which would
+    # otherwise re-send on every restart — desktop users restart constantly.
+    run_at_startup: bool = True
 
 
 JOBS: tuple[JobSpec, ...] = (
@@ -98,6 +103,7 @@ JOBS: tuple[JobSpec, ...] = (
     ),
     JobSpec(
         id="ai_digest_job",
+        run_at_startup=False,
         name="Generate scheduled AI portfolio digests",
         celery_task="app.tasks.ai_digest_task.run_scheduled_digests_celery",
         # Daily cadence; the task itself decides per user (daily vs weekly on

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -13,6 +17,25 @@ from app.schemas.net_worth import AssetCreate, AssetResponse, NetWorthResponse
 from app.services.net_worth_service import get_net_worth
 
 router = APIRouter()
+
+
+class AssetUpdate(BaseModel):
+    """Partial update for a non-stock asset. Only the fields sent are changed.
+
+    ``asset_type`` is deliberately NOT editable — it drives the net-worth
+    grouping and the emergency-fund liquidity classification, so changing it
+    would silently reclassify history.
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    symbol: str | None = None
+    quantity: float | None = Field(default=None, ge=0)
+    purchase_price: float | None = Field(default=None, ge=0)
+    current_value: float | None = Field(default=None, ge=0)
+    currency: str | None = Field(default=None, max_length=10)
+    interest_rate: float | None = None
+    maturity_date: date | None = None
+    notes: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -30,6 +53,12 @@ router = APIRouter()
 #     sale timelines); excluded from emergency coverage entirely.
 _LIQUID_ASSET_TYPES = frozenset({"FIXED_DEPOSIT", "CRYPTO", "GOLD"})
 _SEMI_LIQUID_ASSET_TYPES = frozenset({"STOCK"})
+
+# Asset columns that cannot be NULL — an explicit null in a PATCH body is
+# dropped rather than written (which would fail the NOT NULL constraint).
+_NON_NULLABLE_ASSET_FIELDS = frozenset(
+    {"name", "quantity", "purchase_price", "current_value", "currency"}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +84,13 @@ async def total_net_worth(
 
     Includes stocks (from portfolio holdings), crypto, gold, fixed deposits,
     bonds, and real estate.
+
+    Valuation honesty: only STOCK (from live holdings) and CRYPTO / GOLD with a
+    ticker symbol are marked to market. FIXED_DEPOSIT, BOND and REAL_ESTATE
+    report the ``current_value`` the USER last entered — no interest is
+    accrued and ``interest_rate`` / ``maturity_date`` are stored for reference
+    only, never used in a calculation. Keep those values current with
+    ``PATCH /net-worth/assets/{asset_id}``.
     """
     return await get_net_worth(user.id, db, display_currency=display_currency)
 
@@ -165,6 +201,11 @@ async def add_asset(
 
     Stocks are automatically pulled from portfolio holdings — use this endpoint
     for other asset types.
+
+    ``current_value`` for a fixed deposit / bond / property is user-maintained:
+    nothing accrues it over time, so update it with
+    ``PATCH /net-worth/assets/{asset_id}`` as the value changes. Crypto and gold
+    with a ticker ``symbol`` are re-priced live on every net-worth read.
     """
     if body.asset_type == "STOCK":
         raise HTTPException(
@@ -192,6 +233,54 @@ async def add_asset(
     return asset
 
 
+@router.patch("/assets/{asset_id}", response_model=AssetResponse)
+async def update_asset(
+    asset_id: int,
+    body: AssetUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Asset:
+    """Update a non-stock asset — chiefly its ``current_value``.
+
+    Fixed deposits, bonds and property are NOT valued automatically: their
+    ``current_value`` is whatever the user last entered (no interest accrual,
+    and ``interest_rate`` / ``maturity_date`` are stored for reference only).
+    This endpoint is how that stored value is kept honest. Crypto and gold with
+    a ticker ``symbol`` are re-priced live and do not need it.
+
+    Only the fields present in the request body are changed. ``asset_type`` is
+    immutable — delete and re-add to reclassify. An explicit ``null`` for a
+    non-nullable column (name / quantity / prices / currency) is ignored rather
+    than blowing up the request; ``symbol``, ``interest_rate``,
+    ``maturity_date`` and ``notes`` CAN be nulled to clear them.
+    """
+    result = await db.execute(
+        select(Asset).where(Asset.id == asset_id, Asset.user_id == user.id)
+    )
+    asset = result.scalar_one_or_none()
+    if asset is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Asset not found or does not belong to the current user",
+        )
+
+    updates = {
+        field: value
+        for field, value in body.model_dump(exclude_unset=True).items()
+        if value is not None or field not in _NON_NULLABLE_ASSET_FIELDS
+    }
+    if updates.get("name") is not None:
+        updates["name"] = updates["name"].strip()
+    if updates.get("symbol") is not None:
+        updates["symbol"] = updates["symbol"].strip().upper() or None
+    for field, value in updates.items():
+        setattr(asset, field, value)
+
+    await db.flush()
+    await db.refresh(asset)
+    return asset
+
+
 @router.delete("/assets/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_asset(
     asset_id: int,
@@ -199,8 +288,6 @@ async def remove_asset(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Remove a non-stock asset by ID."""
-    from sqlalchemy import select
-
     result = await db.execute(
         select(Asset).where(Asset.id == asset_id, Asset.user_id == user.id)
     )

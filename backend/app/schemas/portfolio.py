@@ -49,6 +49,10 @@ class HoldingSummaryRow(BaseModel):
     rsi: float | None
     pnl_percent: float | None
     sector: str | None
+    # Offset-aware ISO timestamp of the last successful quote (None = never
+    # priced). Without this field the response_model silently dropped the
+    # freshness value the service now emits.
+    last_price_update: str | None = None
 
     model_config = {"from_attributes": True}
 

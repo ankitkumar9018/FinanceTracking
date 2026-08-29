@@ -42,7 +42,10 @@ async def get_stop_loss_holdings(
         distance = None
         triggered = False
 
-        if h.current_price and sl_price > 0:
+        # ``is not None``, never truthiness: a price of 0 (collapsed or
+        # suspended stock) is the WORST case and must report as triggered —
+        # a falsy check reported exactly that case as NOT triggered.
+        if h.current_price is not None and sl_price > 0:
             distance = ((float(h.current_price) - sl_price) / sl_price) * 100
             triggered = float(h.current_price) <= sl_price
 

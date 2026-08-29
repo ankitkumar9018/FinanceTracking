@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -324,11 +324,14 @@ async def holding_period_timer(
 ) -> dict:
     """LTCG holding-period timer for Indian (NSE/BSE) holdings in a portfolio.
 
-    For every still-open FIFO buy lot of each Indian holding, report when the lot
-    crosses the 12-calendar-month mark and becomes LTCG-eligible (taxed at 12.5 %
-    instead of the 20 % STCG rate). ``days_remaining`` counts down to
-    ``ltcg_date`` (0 or negative = already LTCG). German/other-jurisdiction
-    holdings are skipped — the short-/long-term split is India-specific.
+    For every still-open FIFO buy lot of each Indian holding, report the first
+    date the lot is LTCG-eligible (taxed at 12.5 % instead of the 20 % STCG
+    rate). Eligibility requires the sale date to be STRICTLY AFTER the
+    12-calendar-month anniversary of the purchase (see ``classify_gain_type``),
+    so ``ltcg_date`` is that anniversary **plus one day**. ``days_remaining``
+    counts down to ``ltcg_date`` (0 or negative = already LTCG).
+    German/other-jurisdiction holdings are skipped — the short-/long-term split
+    is India-specific.
 
     Where a current price is available, STCG lots within ``_LTCG_SOON_DAYS`` of
     eligibility carry a best-effort ``potential_tax_saving`` = unrealized gain ×
@@ -358,7 +361,13 @@ async def holding_period_timer(
         for lot in build_open_lots(list(holding.transactions)):
             purchase_date = lot["date"]
             quantity = lot["qty"]
-            ltcg_date = _add_months(purchase_date, 12)
+            # ``classify_gain_type`` is the source of truth: a lot is LTCG only
+            # when the sale date is STRICTLY LATER than purchase + 12 months.
+            # The first day the lot actually qualifies is therefore the day
+            # AFTER that anniversary — reporting the anniversary itself would
+            # tell the user to sell a day early and cost them the 20 % vs
+            # 12.5 % rate difference.
+            ltcg_date = _add_months(purchase_date, 12) + timedelta(days=1)
             days_remaining = (ltcg_date - today).days
             is_ltcg = days_remaining <= 0
 

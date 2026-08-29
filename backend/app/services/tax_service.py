@@ -474,9 +474,12 @@ def _replay_fifo(
     """Replay BUY/SELL transactions in date order, consuming lots FIFO.
 
     The lot queue is built from BUY transactions in chronological order —
-    ordered by ``(date, id)`` so a BUY and SELL on the same day resolve
-    deterministically (earlier-created first). Every SELL is replayed against
-    the queue, consuming lots from the front (first-in, first-out).
+    ordered by ``(date, BUY-before-SELL, id)``. Sorting BUYs ahead of SELLs
+    within the same day matters: an intraday buy-then-sell whose SELL row
+    happens to carry the lower id would otherwise be replayed BEFORE its own
+    buy lot existed, matching nothing and silently losing a real realized gain.
+    Every SELL is then replayed against the queue, consuming lots from the
+    front (first-in, first-out).
 
     Each lot is ``{"qty": remaining, "price": buy price, "date": buy date}``.
 
@@ -490,7 +493,12 @@ def _replay_fifo(
       replay stops after that SELL; with ``None`` the whole history is
       replayed and ``consumed`` is empty.
     """
-    ordered = sorted(transactions, key=lambda t: (t.date, t.id))
+    # BUY sorts before SELL on the same date (0 < 1) so a same-day buy lot is
+    # always available to a same-day sale regardless of insertion order.
+    ordered = sorted(
+        transactions,
+        key=lambda t: (t.date, 0 if t.transaction_type == "BUY" else 1, t.id),
+    )
 
     lots: list[dict] = []
     consumed: list[dict] = []
@@ -609,13 +617,25 @@ async def _de_dividend_allowance_used(
     be a plain year string (anything else yields ``0.0``). These dividends
     consume the Sparer-Pauschbetrag alongside capital gains, so both the
     standalone allowance tracker AND the sale-path Freibetrag netting must
-    subtract them.
+    subtract them — both go through this single helper.
+
+    German investment income is attributed by the **Zuflussprinzip**: it
+    belongs to the tax year the money actually ARRIVES (the payment date), not
+    the year the share went ex-dividend. A dividend with a December ex-date and
+    a January payment date therefore consumes the FOLLOWING year's
+    Sparer-Pauschbetrag. ``ex_date`` is used only as a fallback when no payment
+    date is recorded.
     """
     year = int(financial_year) if financial_year.isdigit() else None
     if year is None:
         return 0.0
     div_res = await db.execute(
-        select(Dividend.total_amount, Dividend.ex_date, Holding.fund_type)
+        select(
+            Dividend.total_amount,
+            Dividend.ex_date,
+            Dividend.payment_date,
+            Holding.fund_type,
+        )
         .join(Holding, Dividend.holding_id == Holding.id)
         .join(Portfolio, Holding.portfolio_id == Portfolio.id)
         .where(
@@ -624,8 +644,9 @@ async def _de_dividend_allowance_used(
         )
     )
     total = 0.0
-    for amount, ex_date, ft in div_res.all():
-        if ex_date is not None and ex_date.year == year:
+    for amount, ex_date, payment_date, ft in div_res.all():
+        inflow_date = payment_date or ex_date
+        if inflow_date is not None and inflow_date.year == year:
             teil = teilfreistellung_for_fund_type(ft)
             total += float(amount) * (1.0 - teil / 100.0)
     return total
@@ -655,13 +676,14 @@ async def compute_tax_for_transaction(
     -------
     list[TaxRecord]
         One record per non-empty gain-type bucket (for THIS transaction).
-        Empty if the SELL matched no available buy lots.
 
     Raises
     ------
     ValueError
-        If the transaction is not found, does not belong to the user, or is
-        not a SELL transaction.
+        If the transaction is not found, does not belong to the user, is not a
+        SELL transaction, or matches no available FIFO buy lot. The last case
+        used to return an empty list, which quietly recorded zero tax on a real
+        realized gain — it is now an error the API surfaces as a 400.
     """
     records, fy, jurisdiction, sale_date = await _compute_tax_single(
         transaction_id, user_id, db
@@ -694,7 +716,19 @@ async def compute_tax_for_transaction(
             later_txn_ids.append(later_txn_id)
 
     for later_txn_id in later_txn_ids:
-        await _compute_tax_single(later_txn_id, user_id, db)
+        try:
+            await _compute_tax_single(later_txn_id, user_id, db)
+        except ValueError as exc:
+            # A later sale that can no longer be matched (its purchases were
+            # deleted, say) must not abort THIS sale's computation. Its now
+            # unbackable records have already been dropped by the recompute;
+            # log loudly rather than re-raising someone else's problem.
+            logger.warning(
+                "Tax cascade: recompute of later txn=%d failed (%s); "
+                "its stale records were removed",
+                later_txn_id,
+                exc,
+            )
 
     return records
 
@@ -775,13 +809,19 @@ async def _compute_tax_single(
     consumed_lots = _build_consumed_lots(all_txns, transaction_id)
 
     if not consumed_lots:
-        # No matching buy lots (e.g. an oversell with no history). Nothing to
-        # tax — return no records rather than fabricate a cost basis.
-        logger.info(
-            "Tax compute: txn=%d consumed no buy lots — no tax records created",
+        # No matching buy lots (e.g. an oversell, or a SELL imported without
+        # its purchase history). Silently returning zero records used to make a
+        # real realized gain vanish from /tax/summary and the ITR report, so
+        # fail loudly instead — the route maps this to a 400 the user can see.
+        logger.warning(
+            "Tax compute: txn=%d consumed no buy lots — refusing to record zero tax",
             transaction_id,
         )
-        return [], fy, jurisdiction, sale_date
+        raise ValueError(
+            "No purchase lots available to match this sale — the holding has no "
+            "unsold BUY transactions on or before the sale date. Import or add "
+            "the matching purchase before computing tax."
+        )
 
     # ── Indian LTCG grandfathering (31-Jan-2018) ───────────────────────
     # Income-tax Act §55(2)(ac): for equity / equity-MF lots acquired BEFORE
@@ -1094,6 +1134,26 @@ async def compute_german_allowance(
 # German Vorabpauschale — per-portfolio estimate
 # ---------------------------------------------------------------------------
 
+def _vorab_months_held(first_buy: date | None, year: int) -> int:
+    """Months counted for the §18 InvStG Vorabpauschale pro-rating.
+
+    The Vorabpauschale is reduced by 1/12 for every full month that PRECEDES
+    the month of acquisition, so a fund acquired in March counts 10 months
+    (13 − 3). A fund already held on 1 January counts the full 12; one whose
+    first purchase falls after the year in question counts 0.
+
+    ``None`` (no BUY transaction recorded at all) falls back to 12 — the
+    previous behaviour — rather than silently zeroing out the estimate.
+    """
+    if first_buy is None:
+        return 12
+    if first_buy.year < year:
+        return 12
+    if first_buy.year > year:
+        return 0
+    return 13 - first_buy.month
+
+
 async def estimate_portfolio_vorabpauschale(
     portfolio_id: int,
     db: AsyncSession,
@@ -1106,6 +1166,17 @@ async def estimate_portfolio_vorabpauschale(
     the year-start value and the current market value as the year-end value. Only
     German (XETRA) fund holdings with a Teilfreistellung-eligible fund_type are
     included (individual stocks have no Vorabpauschale).
+
+    Two §18 InvStG reductions are applied from stored data rather than assumed
+    away:
+
+    * **Distributions** — the fund's payouts during the year reduce the
+      Basisertrag one-for-one. Taken from the ``dividends`` table, attributed by
+      inflow date (``payment_date``, falling back to ``ex_date``).
+    * **Months held** — the Vorabpauschale is reduced by 1/12 for every full
+      month preceding the month of acquisition. Derived from the earliest BUY
+      transaction; a fund already held on 1 January counts a full 12 months, and
+      one first bought after the year counts 0.
 
     Returns per-fund estimates plus totals; caller must verify portfolio access.
     """
@@ -1122,6 +1193,39 @@ async def estimate_portfolio_vorabpauschale(
         )
     )
     holdings = list(result.scalars().all())
+    holding_ids = [h.id for h in holdings]
+
+    # ── Distributions paid out during the year, per holding ────────────
+    distributions_by_holding: dict[int, float] = {}
+    if holding_ids:
+        div_res = await db.execute(
+            select(
+                Dividend.holding_id,
+                Dividend.total_amount,
+                Dividend.ex_date,
+                Dividend.payment_date,
+            ).where(Dividend.holding_id.in_(holding_ids))
+        )
+        for hid, amount, ex_date, payment_date in div_res.all():
+            inflow_date = payment_date or ex_date
+            if inflow_date is not None and inflow_date.year == year:
+                distributions_by_holding[hid] = (
+                    distributions_by_holding.get(hid, 0.0) + float(amount)
+                )
+
+    # ── Earliest BUY per holding, for the months-held pro-rating ───────
+    first_buy_by_holding: dict[int, date] = {}
+    if holding_ids:
+        buy_res = await db.execute(
+            select(Transaction.holding_id, Transaction.date).where(
+                Transaction.holding_id.in_(holding_ids),
+                Transaction.transaction_type == "BUY",
+            )
+        )
+        for hid, txn_date in buy_res.all():
+            current = first_buy_by_holding.get(hid)
+            if current is None or txn_date < current:
+                first_buy_by_holding[hid] = txn_date
 
     funds: list[dict] = []
     total_vorab = 0.0
@@ -1134,13 +1238,15 @@ async def estimate_portfolio_vorabpauschale(
         current_value = (
             float(h.current_price) * qty if h.current_price is not None else cost_basis
         )
+        distributions = distributions_by_holding.get(h.id, 0.0)
+        months_held = _vorab_months_held(first_buy_by_holding.get(h.id), year)
         est = compute_vorabpauschale(
             value_start=cost_basis,
             value_end=current_value,
-            distributions=0.0,
+            distributions=distributions,
             basiszins_pct=basiszins,
             fund_type=h.fund_type,
-            months_held=12,
+            months_held=months_held,
         )
         funds.append(
             {
@@ -1149,6 +1255,8 @@ async def estimate_portfolio_vorabpauschale(
                 "fund_type": h.fund_type,
                 "value_start": round(cost_basis, 2),
                 "value_end": round(current_value, 2),
+                "distributions": round(distributions, 2),
+                "months_held": est["months_held"],
                 "vorabpauschale": est["vorabpauschale"],
                 "taxable_vorabpauschale": est["taxable_vorabpauschale"],
                 "tax_amount": est["tax_amount"],

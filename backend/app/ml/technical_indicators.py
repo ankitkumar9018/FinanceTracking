@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
@@ -213,6 +214,65 @@ def _nan_to_none(values: list) -> list:
     return [None if (v is not None and pd.isna(v)) else v for v in values]
 
 
+# Minimum bars needed before any indicator is worth reporting. (sma_50 needs
+# 50 and simply stays None below that, but MACD/Bollinger/RSI are meaningless
+# under ~30.)
+_MIN_BARS = 30
+
+# Upper bound on the live back-fill so a slow provider can't stall the request.
+_LIVE_FETCH_TIMEOUT = 20.0
+
+
+async def _fetch_live_ohlcv(symbol: str, exchange: str, days: int) -> list[dict]:
+    """Fetch OHLCV bars live when the stored history is too thin.
+
+    The scheduled refresh only back-fills a short window, so a freshly added
+    symbol (or one added after a long gap) has far fewer stored bars than the
+    indicators need and the endpoint returned "Insufficient price history" for
+    weeks. Falling back to a live fetch keeps the endpoint useful meanwhile.
+
+    Bounded by :data:`_LIVE_FETCH_TIMEOUT`; degrades to ``[]`` on any failure
+    and never raises.
+    """
+    from app.services.market_data_service import fetch_historical_data
+
+    try:
+        rows = await asyncio.wait_for(
+            # +60 calendar days of warm-up so sma_50 has its 50 bars.
+            fetch_historical_data(symbol, exchange, days=days + 60),
+            timeout=_LIVE_FETCH_TIMEOUT,
+        )
+    except Exception:
+        logger.debug(
+            "Live indicator back-fill failed for %s/%s", symbol, exchange, exc_info=True
+        )
+        return []
+
+    records: list[dict] = []
+    for r in rows:
+        close = r.get("close")
+        if close is None:
+            continue
+        d = r.get("date")
+        if isinstance(d, str):
+            d = date.fromisoformat(d)
+        elif isinstance(d, datetime):
+            d = d.date()
+        if d is None:
+            continue
+        records.append(
+            {
+                "date": d,
+                "open": float(r.get("open") or close),
+                "high": float(r.get("high") or close),
+                "low": float(r.get("low") or close),
+                "close": float(close),
+                "volume": int(r.get("volume") or 0),
+            }
+        )
+    return records
+
+
 async def get_all_indicators(
     symbol: str,
     exchange: str,
@@ -240,23 +300,31 @@ async def get_all_indicators(
     )
     rows = result.scalars().all()
 
-    if len(rows) < 30:
-        return {"error": "Insufficient price history", "data_points": len(rows)}
+    records = [
+        {
+            "date": r.date,
+            "open": float(r.open),
+            "high": float(r.high),
+            "low": float(r.low),
+            "close": float(r.close),
+            "volume": int(r.volume),
+        }
+        for r in rows
+    ]
 
-    df = pd.DataFrame(
-        [
-            {
-                "date": r.date,
-                "open": float(r.open),
-                "high": float(r.high),
-                "low": float(r.low),
-                "close": float(r.close),
-                "volume": int(r.volume),
-            }
-            for r in rows
-        ]
-    )
+    if len(records) < _MIN_BARS:
+        # The stored back-fill window is shorter than the indicators need —
+        # fetch live rather than reporting "Insufficient price history".
+        live = await _fetch_live_ohlcv(symbol, exchange, days)
+        if len(live) > len(records):
+            records = live
+
+    if len(records) < _MIN_BARS:
+        return {"error": "Insufficient price history", "data_points": len(records)}
+
+    df = pd.DataFrame(records)
     df.set_index("date", inplace=True)
+    df = df[~df.index.duplicated(keep="last")].sort_index()
 
     closes = df["close"]
     highs = df["high"]

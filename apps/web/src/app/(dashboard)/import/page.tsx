@@ -92,7 +92,7 @@ function getTemplateEndpoint(dataType: DataType): string | null {
 }
 
 export default function ImportPage() {
-  const { activePortfolioId, fetchPortfolios } = usePortfolioStore();
+  const { activePortfolioId, fetchPortfolios, refreshActive } = usePortfolioStore();
   const [status, setStatus] = useState<ImportStatus>("idle");
   const [error, setError] = useState("");
   const [result, setResult] = useState<Record<string, number> | null>(null);
@@ -158,11 +158,16 @@ export default function ImportPage() {
       }
       setResult(counts);
       setStatus("success");
+      // The import mutated the portfolio server-side; nothing else observes
+      // that, so pull the holdings back in. fetchPortfolios() alone is not
+      // enough — it only re-fetches holdings when the active id *changes*.
+      fetchPortfolios();
+      await refreshActive();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Import failed");
       setStatus("error");
     }
-  }, [activePortfolioId, dataType, currentType]);
+  }, [activePortfolioId, dataType, currentType, fetchPortfolios, refreshActive]);
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -194,12 +199,13 @@ export default function ImportPage() {
         parts.length > 0 ? `Import complete — ${parts.join(", ")}` : "Import complete"
       );
       fetchPortfolios();
+      await refreshActive();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Import failed");
     } finally {
       setBusyFormat(null);
     }
-  }, [activePortfolioId, casPassword, fetchPortfolios]);
+  }, [activePortfolioId, casPassword, fetchPortfolios, refreshActive]);
 
   async function downloadTemplate() {
     const endpoint = getTemplateEndpoint(dataType);

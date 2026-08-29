@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -14,6 +15,21 @@ from app.models.transaction import Transaction
 from app.services.alert_service import determine_action_needed
 from app.services.forex_service import RateCache
 from app.services.valuation import invested_value, market_value
+
+
+def _as_utc_iso(value: datetime | None) -> str | None:
+    """Serialise a (possibly naive-UTC) timestamp as an offset-aware ISO string.
+
+    ``Holding.last_price_update`` is a naive UTC column; emitting it bare made
+    browsers read it as *local* time, so a freshly refreshed price looked hours
+    old (or in the future) depending on the client's offset.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.isoformat()
+
 
 # ---------------------------------------------------------------------------
 # Cumulative holding recalculation
@@ -113,7 +129,13 @@ async def get_portfolio_summary(
         avg = float(h.average_price)
         invested = invested_value(h)
 
-        current = float(h.current_price) if h.current_price is not None else avg
+        # A holding whose quote never succeeded must report *no* price rather
+        # than silently echoing its purchase price (which rendered as a real
+        # quote at exactly +0.00 % and made every "no price yet" guard in the
+        # UI dead code). ``avg`` is still used as the fallback for the totals
+        # accumulation below — via ``market_value``'s ``fallback_to_avg`` — so
+        # the portfolio total keeps its existing meaning.
+        current = float(h.current_price) if h.current_price is not None else None
         mv = market_value(h)
         current_value = mv if mv is not None else 0.0
 
@@ -137,6 +159,7 @@ async def get_portfolio_summary(
                 "action_needed": h.action_needed,
                 "rsi": h.current_rsi,
                 "pnl_percent": pnl_percent,
+                "last_price_update": _as_utc_iso(h.last_price_update),
                 "sector": h.sector,
                 "base_level": float(h.base_level) if h.base_level else None,
                 "lower_mid_range_1": float(h.lower_mid_range_1) if h.lower_mid_range_1 else None,

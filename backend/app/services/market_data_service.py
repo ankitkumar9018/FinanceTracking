@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.price_history import PriceHistory
+from app.models.watchlist import WatchlistItem
 from app.services.alert_service import determine_action_needed
 from app.utils.concurrency import gather_bounded
 
@@ -372,6 +373,91 @@ async def _fetch_holding_data(symbol: str, exchange: str) -> dict:
     return data
 
 
+def _as_utc_iso(value: datetime | None) -> str | None:
+    """Serialise a (possibly naive-UTC) timestamp as an offset-aware ISO string.
+
+    The DB columns are naive UTC, and a naive ISO string is parsed by browsers
+    as *local* time — which shifted every "last updated" reading by the client's
+    UTC offset. Stamping the offset makes the value unambiguous.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.isoformat()
+
+
+def _price_update_payload(item) -> dict:
+    """Build the WebSocket ``price_update`` payload for a refreshed row.
+
+    Shared by holdings and watchlist items — both expose ``stock_symbol``,
+    ``exchange``, ``current_price``, ``current_rsi`` and ``action_needed``.
+    """
+    return {
+        "symbol": item.stock_symbol,
+        "exchange": item.exchange,
+        "current_price": float(item.current_price)
+        if item.current_price is not None
+        else None,
+        "rsi": float(item.current_rsi) if item.current_rsi is not None else None,
+        "action_needed": item.action_needed,
+        "last_price_update": _as_utc_iso(getattr(item, "last_price_update", None)),
+    }
+
+
+async def _store_price_history(
+    db: AsyncSession,
+    symbol: str,
+    exchange: str,
+    ohlcv: list[dict],
+    rsi: float | None,
+    today,
+) -> None:
+    """Upsert fetched OHLCV bars into ``price_history``.
+
+    Extracted so holdings and watchlist refreshes share one implementation.
+    """
+    for bar in ohlcv:
+        bar_date = bar.get("date") or today
+        hist_result = await db.execute(
+            select(PriceHistory).where(
+                PriceHistory.stock_symbol == symbol,
+                PriceHistory.exchange == exchange,
+                PriceHistory.date == bar_date,
+            )
+        )
+        existing = hist_result.scalar_one_or_none()
+        # RSI is only meaningful for the most recent bar (it is the
+        # value computed for "now"); older back-filled bars keep
+        # whatever RSI they already had rather than being stamped with
+        # today's figure.
+        is_latest = bar is ohlcv[-1]
+        if existing is None:
+            db.add(
+                PriceHistory(
+                    stock_symbol=symbol,
+                    exchange=exchange,
+                    date=bar_date,
+                    open=bar["open"],
+                    high=bar["high"],
+                    low=bar["low"],
+                    close=bar["close"],
+                    volume=bar["volume"],
+                    rsi_14=rsi if is_latest else None,
+                )
+            )
+        else:
+            # Intraday row for the same bar date: update with the
+            # latest values so the EOD close replaces the midday one.
+            existing.open = bar["open"]
+            existing.high = bar["high"]
+            existing.low = bar["low"]
+            existing.close = bar["close"]
+            existing.volume = bar["volume"]
+            if is_latest:
+                existing.rsi_14 = rsi
+
+
 async def refresh_all_prices(
     db: AsyncSession, *, user_id: int | None = None
 ) -> dict:
@@ -383,7 +469,11 @@ async def refresh_all_prices(
     Fetches external data for all holdings in parallel, then writes to DB
     sequentially (async sessions are not safe for concurrent writes).
 
-    Returns a summary dict with counts of updated / failed holdings.
+    Returns a summary dict with counts of updated / failed holdings plus an
+    ``updates`` list carrying one ``price_update`` payload per holding whose
+    price actually changed hands, so callers (``fetch_prices_task``) can push
+    the new numbers to subscribed WebSocket clients instead of leaving the
+    browser frozen until a manual reload.
     """
     stmt = select(Holding)
     if user_id is not None:
@@ -394,7 +484,7 @@ async def refresh_all_prices(
     holdings = list(result.scalars().all())
 
     if not holdings:
-        return {"updated": 0, "failed": 0, "total": 0}
+        return {"updated": 0, "failed": 0, "total": 0, "updates": []}
 
     # ── Parallel fetch: bounded concurrency, timers start on slot acquire ──
     fetch_results = await gather_bounded(
@@ -408,6 +498,7 @@ async def refresh_all_prices(
     # ── Sequential DB writes ─────────────────────────────────────────
     updated = 0
     failed = 0
+    updates: list[dict] = []
     today = datetime.now(UTC).date()
 
     for holding, fetch_result in zip(holdings, fetch_results):
@@ -437,52 +528,122 @@ async def refresh_all_prices(
 
             # Store price in history table under the bar's own trading date —
             # not "today", which would fabricate rows on weekends/holidays.
-            ohlcv = fetch_result.get("ohlcv", [])
-            for bar in ohlcv:
-                bar_date = bar.get("date") or today
-                hist_result = await db.execute(
-                    select(PriceHistory).where(
-                        PriceHistory.stock_symbol == holding.stock_symbol,
-                        PriceHistory.exchange == holding.exchange,
-                        PriceHistory.date == bar_date,
-                    )
-                )
-                existing = hist_result.scalar_one_or_none()
-                # RSI is only meaningful for the most recent bar (it is the
-                # value computed for "now"); older back-filled bars keep
-                # whatever RSI they already had rather than being stamped with
-                # today's figure.
-                is_latest = bar is ohlcv[-1]
-                if existing is None:
-                    db.add(
-                        PriceHistory(
-                            stock_symbol=holding.stock_symbol,
-                            exchange=holding.exchange,
-                            date=bar_date,
-                            open=bar["open"],
-                            high=bar["high"],
-                            low=bar["low"],
-                            close=bar["close"],
-                            volume=bar["volume"],
-                            rsi_14=holding.current_rsi if is_latest else None,
-                        )
-                    )
-                else:
-                    # Intraday row for the same bar date: update with the
-                    # latest values so the EOD close replaces the midday one.
-                    existing.open = bar["open"]
-                    existing.high = bar["high"]
-                    existing.low = bar["low"]
-                    existing.close = bar["close"]
-                    existing.volume = bar["volume"]
-                    if is_latest:
-                        existing.rsi_14 = holding.current_rsi
+            await _store_price_history(
+                db,
+                holding.stock_symbol,
+                holding.exchange,
+                fetch_result.get("ohlcv", []),
+                holding.current_rsi,
+                today,
+            )
 
             updated += 1
+            updates.append(_price_update_payload(holding))
         except Exception:
             logger.exception("DB update failed for %s", holding.stock_symbol)
             failed += 1
 
     await db.flush()
 
-    return {"updated": updated, "failed": failed, "total": len(holdings)}
+    return {
+        "updated": updated,
+        "failed": failed,
+        "total": len(holdings),
+        "updates": updates,
+    }
+
+
+async def refresh_watchlist_prices(
+    db: AsyncSession, *, user_id: int | None = None
+) -> dict:
+    """Update current_price, current_rsi, and action_needed for watchlist items.
+
+    ``refresh_all_prices`` only ever selected ``Holding``, so
+    ``WatchlistItem.current_price`` was never written by any code path — and
+    ``alert_service`` skips a watchlist alert whose item has no price. The net
+    effect was that "alert me when INFY drops below X" on a watched-but-unheld
+    stock was accepted and then silently never fired.
+
+    Distinct ``(symbol, exchange)`` pairs are fetched once and applied to every
+    watchlist row that references them (the same symbol is commonly watched by
+    several users), reusing the same bounded-concurrency machinery as the
+    holdings refresh.
+
+    Returns the same shape as ``refresh_all_prices``.
+    """
+    stmt = select(WatchlistItem)
+    if user_id is not None:
+        stmt = stmt.where(WatchlistItem.user_id == user_id)
+    result = await db.execute(stmt)
+    items = list(result.scalars().all())
+
+    if not items:
+        return {"updated": 0, "failed": 0, "total": 0, "updates": []}
+
+    # ── One fetch per distinct symbol, shared across duplicate rows ──
+    pairs: list[tuple[str, str]] = []
+    for item in items:
+        pair = (item.stock_symbol, item.exchange)
+        if pair not in pairs:
+            pairs.append(pair)
+
+    fetch_results = await gather_bounded(
+        [partial(_fetch_holding_data, symbol, exchange) for symbol, exchange in pairs],
+        limit=_MAX_CONCURRENT_FETCHES,
+    )
+    by_pair = dict(zip(pairs, fetch_results))
+
+    updated = 0
+    failed = 0
+    updates: list[dict] = []
+    today = datetime.now(UTC).date()
+    history_done: set[tuple[str, str]] = set()
+
+    for item in items:
+        pair = (item.stock_symbol, item.exchange)
+        fetch_result = by_pair.get(pair)
+        if (
+            isinstance(fetch_result, Exception)
+            or not isinstance(fetch_result, dict)
+            or not fetch_result.get("ok")
+        ):
+            failed += 1
+            continue
+
+        try:
+            quote = fetch_result["quote"]
+            if quote.get("current_price") is None:
+                # Keep the last known price rather than wiping it.
+                failed += 1
+                continue
+            item.current_price = quote["current_price"]
+            item.current_rsi = fetch_result.get("rsi")
+            item.action_needed = determine_action_needed(item.current_price, item)
+
+            # Only once per distinct symbol — the bars are identical for every
+            # row referencing it.
+            if pair not in history_done:
+                history_done.add(pair)
+                await _store_price_history(
+                    db,
+                    item.stock_symbol,
+                    item.exchange,
+                    fetch_result.get("ohlcv", []),
+                    item.current_rsi,
+                    today,
+                )
+
+            updated += 1
+            updates.append(_price_update_payload(item))
+        except Exception:
+            logger.exception("DB update failed for watchlist %s", item.stock_symbol)
+            failed += 1
+
+    await db.flush()
+
+    return {
+        "updated": updated,
+        "failed": failed,
+        "total": len(items),
+        "updates": updates,
+    }

@@ -478,21 +478,39 @@ async def test_goal_unachieves_when_target_raised(db: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_comparison_zero_day_change_not_none(monkeypatch):
-    def _fake_fetch(yf_symbol: str, days: int):
-        info = {
+    # NOTE: the fetch seam moved — price history is now delegated to
+    # market_data_service.fetch_historical_data (so the comparison chart picks
+    # up the padded window + pending-bar repair), leaving
+    # ``_sync_fetch_stock_info`` responsible only for ``.info``. The assertion
+    # below is unchanged.
+    from app.services import market_data_service
+
+    def _fake_info(yf_symbol: str):
+        return {
             "currentPrice": 100.0,
             "previousClose": 100.0,  # flat day -> 0.0 % change
             "shortName": "Flat Corp",
         }
-        return info, [{"date": "2026-08-01", "close": 100.0}]
 
-    monkeypatch.setattr(
-        comparison_service, "_sync_fetch_stock_data", _fake_fetch
-    )
+    async def _fake_history(symbol, exchange="NSE", days=30, quote=None):
+        return [
+            {
+                "date": date(2026, 8, 1),
+                "open": 100.0,
+                "high": 100.0,
+                "low": 100.0,
+                "close": 100.0,
+                "volume": 0,
+            }
+        ]
+
+    monkeypatch.setattr(comparison_service, "_sync_fetch_stock_info", _fake_info)
+    monkeypatch.setattr(market_data_service, "fetch_historical_data", _fake_history)
 
     result = await comparison_service.compare_stocks(["TCS"], ["NSE"], days=30)
     assert len(result.stocks) == 1
     assert result.stocks[0].day_change_pct == 0.0  # not None
+    assert result.price_history["TCS"] == [{"date": "2026-08-01", "close": 100.0}]
 
 
 # ===========================================================================
