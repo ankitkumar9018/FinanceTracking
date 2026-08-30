@@ -370,9 +370,12 @@ pub fn run() {
             // (PyInstaller extraction + Gatekeeper/AV scan on first run);
             // without feedback users see a blank window and assume the app
             // is broken.
-            let _ = window.eval(
-                "document.documentElement.innerHTML = '<head><style>body{margin:0;font-family:system-ui;background:#09090b;color:#fafafa;display:flex;align-items:center;justify-content:center;height:100vh}.sp{width:40px;height:40px;border:3px solid #333;border-top-color:#6366f1;border-radius:50%;animation:r 1s linear infinite;margin:0 auto 16px}@keyframes r{to{transform:rotate(360deg)}}p{color:#888;font-size:14px}</style></head><body><div style=\"text-align:center\"><div class=\"sp\"></div><h2 style=\"margin:0 0 8px\">FinanceTracker</h2><p>Setting things up\\u2026<br>FinanceTracker runs its own private server on this computer, so your data never leaves it.<br>The first launch can take a minute or two; later ones are faster.</p></div></body>';"
-            );
+            // NO loading-screen injection here. It used to do
+            // `document.documentElement.innerHTML = ...`, which DESTROYS the
+            // document: on `about:blank` WebKit rendered nothing at all, and
+            // once the real UI was bundled it wiped the app's own DOM — either
+            // way the window stayed blank. The bundled frontend renders its own
+            // UI immediately, which is better than a fake splash anyway.
 
             // If the sidecar failed to spawn there is no backend to reach, so
             // polling /health would spin forever behind the loading screen.
@@ -394,9 +397,24 @@ pub fn run() {
                 // during extraction, we navigate to where it actually is.
                 if wait_for_backend(&nav_port, 120) {
                     let port = nav_port.load(Ordering::SeqCst);
-                    let url = format!("http://localhost:{}/#ftport={}", port, port);
+                    // 127.0.0.1, not "localhost": the backend binds IPv4 only,
+                    // and the literal address avoids any resolver/ATS detour.
+                    let url = format!("http://127.0.0.1:{}/#ftport={}", port, port);
                     println!("Backend ready -- navigating window to {}", url);
-                    let _ = window.eval(&format!("window.location.replace('{}');", url));
+                    // Use the NATIVE navigation API rather than injecting
+                    // `location.replace` via eval(). On an `about:blank` page the
+                    // injected script silently did nothing — the webview issued
+                    // no request at all and the window stayed blank — so errors
+                    // here are logged instead of being discarded.
+                    // The UI is served from the BUNDLED frontend
+                    // (tauri://localhost) — see frontendDist. We do NOT
+                    // navigate the window to the backend's http origin:
+                    // WebKit loads that page's assets but never executes its
+                    // JavaScript inside the Tauri webview (verified — the same
+                    // URL runs fine in Safari), leaving a blank window. The
+                    // frontend discovers the API port over IPC (get_api_port)
+                    // instead.
+                    println!("Backend ready on port {} -- UI served from bundle", port);
                 } else {
                     eprintln!("WARNING: Backend did not respond within 120 seconds");
                     // Self-healing error page: keeps polling /health in the
