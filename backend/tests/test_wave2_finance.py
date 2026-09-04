@@ -657,6 +657,11 @@ def test_replay_fifo_open_and_consumed_lots_coherent():
     open_lots = build_open_lots(txns)
     assert [(lot["qty"], lot["price"]) for lot in open_lots] == [(5.0, 200.0)]
 
+    # Brokerage apportionment reads the field defensively (these stand-ins
+    # carry no ``brokerage``), so lots always expose a per-unit figure.
+    assert [lot["brokerage_per_unit"] for lot in consumed] == [0.0, 0.0]
+    assert [lot["brokerage_per_unit"] for lot in open_lots] == [0.0]
+
     # Conservation: bought 20 == consumed 15 + still open 5.
     assert sum(lot["qty"] for lot in consumed) + sum(
         lot["qty"] for lot in open_lots

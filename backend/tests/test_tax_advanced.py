@@ -219,7 +219,9 @@ async def test_grandfathering_does_not_touch_stcg(db, monkeypatch):
     # actual cost, not grandfathered
     assert float(stcg.purchase_price) == 1000.0
     assert float(stcg.gain_amount) == 5000.0
-    assert float(stcg.tax_amount) == 1000.0          # 20% of 5000
+    # 15% of 5000: the transfer is dated 1-Jun-2018, BEFORE the Finance
+    # (No. 2) Act 2024 cutover that raised s.111A STCG to 20%.
+    assert float(stcg.tax_amount) == 750.0
 
 
 # ===========================================================================

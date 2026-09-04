@@ -6,8 +6,10 @@ import csv
 import io
 import logging
 import re
+from collections import defaultdict
 from collections.abc import Mapping
 from datetime import date as date_cls
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -249,6 +251,55 @@ def _parse_bool(value: object) -> bool:
         return value
     s = str(value).strip().lower()
     return s in ("yes", "true", "1", "y")
+
+
+_QUANT4 = Decimal("0.0001")
+
+
+def _round4_variants(value: object) -> tuple[object, ...]:
+    """Every scale-4 form a value may take once the database has stored it.
+
+    The money columns natural keys are built from are ``Numeric(18, 4)``, so a
+    full-precision CSV float has to be normalised to scale 4 before it can be
+    compared with what comes back out of the column. The catch is that the two
+    backends round a tie differently, and the CSV side cannot know which one it
+    is talking to:
+
+    - PostgreSQL ``numeric`` rounds half away from zero — ``2.50005`` is stored
+      as ``2.5001``.
+    - SQLite gets the value as a binary double and formats it to 4 places, i.e.
+      nearest-with-ties-to-even on the *binary* value — the same ``2.50005`` is
+      stored as ``2.5000``.
+
+    So this returns the half-up form first (the canonical key) and the
+    binary-rounded form after it when they disagree, which happens only for
+    exact-half values at the 5th decimal. Callers look up every variant, so
+    dedup works on either backend instead of silently missing.
+
+    ``None`` stays ``None``; a value that is not a number is returned unchanged
+    rather than collapsed to ``None``, so two different unparseable values never
+    collide into the same key.
+    """
+    if value is None:
+        return (None,)
+    try:
+        half_up = Decimal(str(value)).quantize(_QUANT4, rounding=ROUND_HALF_UP)
+    except (TypeError, ValueError, ArithmeticError):
+        return (value,)
+    try:
+        binary = Decimal(f"{float(value):.4f}")  # type: ignore[arg-type]
+    except (TypeError, ValueError, ArithmeticError, OverflowError):
+        return (half_up,)
+    return (half_up,) if binary == half_up else (half_up, binary)
+
+
+def _round4(value: object) -> object:
+    """Canonical scale-4 form of a numeric — see :func:`_round4_variants`.
+
+    Values read back from the database are already at scale 4, so quantizing
+    them again is the identity and this single form is exact for them.
+    """
+    return _round4_variants(value)[0]
 
 
 def _decode_csv_bytes(file_bytes: bytes) -> str:
@@ -624,13 +675,198 @@ def parse_csv_tax_records(file_bytes: bytes) -> list[dict]:
     return parsed
 
 
+def _tax_fingerprint(
+    financial_year: object,
+    tax_jurisdiction: object,
+    gain_type: object,
+    purchase_date: object,
+    sale_date: object,
+    purchase_price: object,
+    sale_price: object,
+    gain_amount: object,
+    currency: object,
+) -> tuple[object, ...]:
+    """Natural key identifying a tax record for import dedup.
+
+    Same shape ``backup_service`` uses for the very same table, widened by
+    jurisdiction / gain type / proceeds / currency — widening only ever reduces
+    false skips, so the two write paths stay compatible.
+
+    ``tax_amount`` is deliberately NOT part of the key: a broker that reissues
+    a statement with a corrected tax figure for the same disposal must update
+    that row, not insert a second copy of the gain.  (``import_tax_records``
+    refreshes ``tax_amount`` on a match — see there.)  The model carries no
+    symbol or quantity column, so ``purchase_price`` (the aggregated cost
+    basis) is the best available stand-in for lot identity.
+    """
+    return (
+        str(financial_year),
+        str(tax_jurisdiction).upper(),
+        str(gain_type).upper(),
+        purchase_date,
+        sale_date,
+        _round4(purchase_price),
+        _round4(sale_price),
+        _round4(gain_amount),
+        str(currency).upper(),
+    )
+
+
+def _tax_fingerprint_candidates(row: Mapping) -> list[tuple[object, ...]]:
+    """Every natural key a parsed CSV row could match an existing record under.
+
+    One per combination of the scale-4 roundings in :func:`_round4_variants` —
+    a single key in all but the exact-half tie cases, where the CSV float and
+    the stored column can legitimately disagree in the 4th decimal.
+    """
+    head = (
+        str(row["financial_year"]),
+        str(row["tax_jurisdiction"]).upper(),
+        str(row["gain_type"]).upper(),
+        row["purchase_date"],
+        row["sale_date"],
+    )
+    tail = (str(row["currency"]).upper(),)
+    candidates: list[tuple[object, ...]] = []
+    for purchase in _round4_variants(row["purchase_price"]):
+        for sale in _round4_variants(row["sale_price"]):
+            for gain in _round4_variants(row["gain_amount"]):
+                key = (*head, purchase, sale, gain, *tail)
+                if key not in candidates:
+                    candidates.append(key)
+    return candidates
+
+
+def _describe_tax_row(row: Mapping) -> str:
+    """One-line human description of a CSV row, for the skipped-rows report."""
+    sale = row.get("sale_date")
+    return (
+        f"{row.get('gain_type')} {row.get('purchase_date')}"
+        f"->{sale if sale else 'open'} "
+        f"gain {row.get('gain_amount')} {row.get('currency')} "
+        f"({row.get('financial_year')}/{row.get('tax_jurisdiction')})"
+    )
+
+
+# Cap on how many skipped rows are echoed back, so a huge re-upload cannot
+# return a megabyte of detail.
+_MAX_SKIP_DETAIL = 25
+
+
 async def import_tax_records(
-    parsed_data: list[dict], user_id: int, db: AsyncSession
+    parsed_data: list[dict],
+    user_id: int,
+    db: AsyncSession,
+    allow_duplicates: bool = False,
 ) -> dict:
-    """Import tax records (always inserts, no dedup)."""
+    """Import tax records, skipping rows the user already has.
+
+    Re-importing the same file must not double-count.  A row matching an
+    existing *imported* record on the natural key (financial year, jurisdiction,
+    gain type, purchase/sale dates, cost basis, proceeds, gain, currency) is
+    skipped instead of inserted, so a second upload of the same statement is a
+    no-op and the FY summary / ITR export are unchanged.  This matters in money:
+    the Rs 1,25,000 s.112A exemption and the EUR 1,000 Sparer-Pauschbetrag are
+    both per-assessee-per-year, so a duplicated row wrongly consumes an
+    allowance that a later, genuine disposal then has to pay tax on.
+
+    Multiplicity is preserved — matching is a multiset drain, not a set
+    membership test — so a file that legitimately contains two identical
+    disposals still creates two records on the first upload and skips both on
+    the second.
+
+    Only records with ``transaction_id IS NULL`` (i.e. previously imported ones)
+    are candidates for a match.  Records the FIFO engine computed from the
+    user's own transactions are deliberately excluded: they are deleted and
+    rewritten whenever the underlying sale is recomputed, so letting one absorb
+    a CSV row would make the imported disposal vanish on the next recompute.
+    Over-reporting a gain is visible and repairable; silently dropping one is
+    neither.
+
+    On a match the stored ``tax_amount`` is refreshed from the CSV when the file
+    carries a different (non-blank) figure, so a corrected broker statement
+    still lands without duplicating the gain; the count is reported separately
+    as ``tax_records_updated``.
+
+    Pass ``allow_duplicates=True`` to bypass matching entirely — the escape
+    hatch for two genuinely distinct disposals whose numbers coincide, which
+    this schema cannot otherwise tell apart from a re-upload.
+
+    Returns ``tax_records_created`` / ``tax_records_skipped`` /
+    ``tax_records_updated`` plus ``tax_records_skipped_detail``, a capped list
+    of one-line descriptions so a partial or repeated import is visible rather
+    than silent.
+    """
     created = 0
+    skipped = 0
+    updated = 0
+    detail: list[str] = []
+
+    if not parsed_data:
+        return {
+            "tax_records_created": 0,
+            "tax_records_skipped": 0,
+            "tax_records_updated": 0,
+            "tax_records_skipped_detail": detail,
+        }
+
+    # Preload the user's existing IMPORTED records for just the financial years
+    # and jurisdictions this file touches — one indexed query per import.
+    existing_by_key: dict[tuple[object, ...], list[TaxRecord]] = defaultdict(list)
+    if not allow_duplicates:
+        result = await db.execute(
+            select(TaxRecord).where(
+                TaxRecord.user_id == user_id,
+                TaxRecord.transaction_id.is_(None),
+                TaxRecord.financial_year.in_(
+                    {r["financial_year"] for r in parsed_data}
+                ),
+                TaxRecord.tax_jurisdiction.in_(
+                    {r["tax_jurisdiction"] for r in parsed_data}
+                ),
+            )
+        )
+        for tr in result.scalars().all():
+            existing_by_key[
+                _tax_fingerprint(
+                    tr.financial_year, tr.tax_jurisdiction, tr.gain_type,
+                    tr.purchase_date, tr.sale_date, tr.purchase_price,
+                    tr.sale_price, tr.gain_amount, tr.currency,
+                )
+            ].append(tr)
 
     for row in parsed_data:
+        bucket = next(
+            (
+                b
+                for key in _tax_fingerprint_candidates(row)
+                if (b := existing_by_key.get(key))
+            ),
+            None,
+        )
+        if bucket:
+            # Drain the multiset: this CSV row is accounted for by that record,
+            # and a second identical row in the same file will need its own.
+            match = bucket.pop()
+            skipped += 1
+            note = "already imported"
+            incoming_tax = row["tax_amount"]
+            if incoming_tax is not None and not (
+                set(_round4_variants(incoming_tax))
+                & set(_round4_variants(match.tax_amount))
+            ):
+                # Correction to an existing disposal: refresh the tax figure
+                # rather than leave a stale number in the ITR export. A blank
+                # tax column never wipes a stored value.
+                match.tax_amount = incoming_tax
+                updated += 1
+                note = "already imported; tax_amount updated"
+            description = f"{_describe_tax_row(row)} - {note}"
+            logger.info("Tax record import skipped: %s", description)
+            if len(detail) < _MAX_SKIP_DETAIL:
+                detail.append(description)
+            continue
+
         tr = TaxRecord(
             user_id=user_id,
             financial_year=row["financial_year"],
@@ -647,8 +883,16 @@ async def import_tax_records(
         db.add(tr)
         created += 1
 
+    if skipped > len(detail):
+        detail.append(f"...and {skipped - len(detail)} more skipped row(s)")
+
     await db.flush()
-    return {"tax_records_created": created}
+    return {
+        "tax_records_created": created,
+        "tax_records_skipped": skipped,
+        "tax_records_updated": updated,
+        "tax_records_skipped_detail": detail,
+    }
 
 
 def generate_tax_record_template() -> str:

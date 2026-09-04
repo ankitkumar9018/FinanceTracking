@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -16,6 +17,12 @@ from app.models.transaction import Transaction
 from app.models.user import User
 from app.schemas.transaction import TransactionCreate, TransactionPatch, TransactionResponse
 from app.services.portfolio_service import calculate_cumulative_holding
+from app.services.tax_service import (
+    recompute_tax_after_ledger_change,
+    snapshot_tax_anchors,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -183,6 +190,9 @@ async def update_transaction(
     # Same guard as POST: replay the (patched) ledger and reject any SELL
     # that exceeds the quantity held at that point. Raising rolls back the
     # patch via get_db, so no partial edit is persisted.
+    # BEFORE mutating: record where this holding's tax records currently sit.
+    tax_anchors = await snapshot_tax_anchors(tx.holding_id, user.id, db)
+
     ledger_result = await db.execute(
         select(Transaction)
         .where(Transaction.holding_id == tx.holding_id)
@@ -209,6 +219,19 @@ async def update_transaction(
     # Recalculate holding after modification
     await calculate_cumulative_holding(tx.holding_id, db)
 
+    # Any TaxRecord derived from this holding's ledger is now stale — the edit
+    # may have changed a sale's price, quantity, date or type. Re-derive every
+    # affected financial year (the anchors were taken BEFORE the edit, so a
+    # date change that moved a sale out of an FY still refreshes the FY it
+    # left). Never fail the edit itself because tax could not be re-derived.
+    if tax_anchors:
+        try:
+            await recompute_tax_after_ledger_change(tax_anchors, user.id, db)
+        except Exception:
+            logger.exception(
+                "Tax re-derive failed after editing transaction %s", tx.id
+            )
+
     return tx
 
 
@@ -222,8 +245,23 @@ async def delete_transaction(
     tx = await _get_user_transaction(transaction_id, user, db)
     holding_id = tx.holding_id
 
+    # Drop this transaction's tax records while the foreign key still points at
+    # it — TaxRecord.transaction_id is ondelete=SET NULL, so deleting first
+    # would strand them as ghosts that keep consuming the annual exemption.
+    tax_anchors = await snapshot_tax_anchors(
+        holding_id, user.id, db, dropping_transaction_id=tx.id
+    )
+
     await db.delete(tx)
     await db.flush()
 
     # Recalculate holding after removing the transaction
     await calculate_cumulative_holding(holding_id, db)
+
+    if tax_anchors:
+        try:
+            await recompute_tax_after_ledger_change(tax_anchors, user.id, db)
+        except Exception:
+            logger.exception(
+                "Tax re-derive failed after deleting transaction %s", holding_id
+            )
