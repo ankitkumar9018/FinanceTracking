@@ -166,3 +166,72 @@ jobs:
         run: pnpm --filter @finance-tracker/web test:e2e
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
+
+  desktop-build:
+    # The desktop shell was never compiled in CI: a Rust change that does not
+    # build, or a static export that does not produce apps/web/out, only showed
+    # up when someone pushed a release tag (or built an installer by hand).
+    # This job does exactly the two steps the release workflow depends on —
+    # STATIC_EXPORT of the web app, then compiling src-tauri against it — plus
+    # the Rust unit tests for the sidecar-reaping logic.
+    name: Desktop Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # Version comes from "packageManager" in package.json — specifying it here
+        # too makes pnpm/action-setup@v4 fail with "Multiple versions specified".
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install system dependencies
+        # Tauri v2 on Linux links against webkit2gtk 4.1 and friends.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libcairo2-dev pkg-config
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build static frontend for desktop
+        # This is the export the desktop app actually ships — different config
+        # from the regular `pnpm build` the frontend job runs.
+        run: STATIC_EXPORT=true pnpm --filter @finance-tracker/web build
+        env:
+          STATIC_EXPORT: 'true'
+
+      - name: Stage static frontend
+        run: |
+          set -euo pipefail
+          test -f apps/web/out/index.html
+          rm -rf apps/desktop/dist
+          cp -r apps/web/out apps/desktop/dist
+          # tauri.conf.json declares an externalBin; a placeholder with the
+          # right target-triple suffix is enough to compile (we are not
+          # bundling an installer here, only type-checking the shell).
+          mkdir -p apps/desktop/src-tauri/binaries
+          printf '#!/bin/sh\nexit 0\n' > apps/desktop/src-tauri/binaries/financetracker-backend-x86_64-unknown-linux-gnu
+          chmod +x apps/desktop/src-tauri/binaries/financetracker-backend-x86_64-unknown-linux-gnu
+
+      - name: Compile desktop shell
+        working-directory: apps/desktop/src-tauri
+        run: cargo check --all-targets --locked
+
+      - name: Desktop shell unit tests
+        working-directory: apps/desktop/src-tauri
+        # Covers the stale-sidecar reaping rules (identity + owner checks) and
+        # the startup-recovery page, which are easy to regress and impossible to
+        # notice until an installed app misbehaves on a user's machine.
+        run: cargo test --locked

@@ -40,6 +40,25 @@ def _as_utc_iso(value: datetime | None) -> str | None:
     return value.isoformat()
 
 
+def _as_response(alert: Alert) -> AlertResponse:
+    """Build an ``AlertResponse`` with offset-aware timestamps.
+
+    ``Alert.created_at`` / ``Alert.last_triggered`` are naive-UTC columns, and
+    Pydantic serialises a naive datetime bare (``2026-08-29T10:00:00``), which
+    JavaScript's ``Date`` parses as *local* time — so "Last triggered" landed on
+    the wrong calendar day for any viewer whose UTC offset spanned the trigger.
+    Stamping the offset on the response model (never on the ORM instance, which
+    would dirty the row) makes the instant unambiguous, exactly as
+    ``_as_utc_iso`` already does for /alerts/history.
+    """
+    response = AlertResponse.model_validate(alert)
+    if response.created_at.tzinfo is None:
+        response.created_at = response.created_at.replace(tzinfo=UTC)
+    if response.last_triggered is not None and response.last_triggered.tzinfo is None:
+        response.last_triggered = response.last_triggered.replace(tzinfo=UTC)
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -72,7 +91,7 @@ async def list_alerts(
     limit: int = Query(200, ge=1, le=1000, description="Max records to return"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[Alert]:
+) -> list[AlertResponse]:
     """List all alerts for the current user."""
     result = await db.execute(
         select(Alert)
@@ -81,7 +100,7 @@ async def list_alerts(
         .offset(skip)
         .limit(limit)
     )
-    return list(result.scalars().all())
+    return [_as_response(a) for a in result.scalars().all()]
 
 
 @router.post("/", response_model=AlertResponse, status_code=status.HTTP_201_CREATED)
@@ -89,7 +108,7 @@ async def create_alert(
     body: AlertCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> Alert:
+) -> AlertResponse:
     """Create a new alert.
 
     At least one of ``holding_id`` or ``watchlist_item_id`` should be provided
@@ -125,7 +144,7 @@ async def create_alert(
     db.add(alert)
     await db.flush()
     await db.refresh(alert)
-    return alert
+    return _as_response(alert)
 
 
 @router.put("/{alert_id}", response_model=AlertResponse)
@@ -134,7 +153,7 @@ async def update_alert(
     body: AlertUpdate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> Alert:
+) -> AlertResponse:
     """Update an alert's type, condition, or active status."""
     alert = await _get_user_alert(alert_id, user, db)
 
@@ -144,7 +163,7 @@ async def update_alert(
 
     await db.flush()
     await db.refresh(alert)
-    return alert
+    return _as_response(alert)
 
 
 @router.put("/{alert_id}/channels", response_model=AlertResponse)
@@ -153,7 +172,7 @@ async def update_alert_channels(
     body: AlertChannelUpdate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> Alert:
+) -> AlertResponse:
     """Update the notification channels for a specific alert."""
     alert = await _get_user_alert(alert_id, user, db)
 
@@ -162,7 +181,7 @@ async def update_alert_channels(
     alert.channels = body.channels
     await db.flush()
     await db.refresh(alert)
-    return alert
+    return _as_response(alert)
 
 
 @router.delete("/{alert_id}", status_code=status.HTTP_204_NO_CONTENT)

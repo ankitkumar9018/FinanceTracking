@@ -169,21 +169,28 @@ def run_async[T](coro_factory: Callable[[], Coroutine[Any, Any, T]]) -> T:
     ``check_alerts.py`` (which used to duplicate this 16-line dance). Takes a
     coroutine *factory* so the coroutine is created inside whichever event
     loop actually runs it.
+
+    The ``RuntimeError`` probe deliberately covers ``get_running_loop()`` and
+    nothing else. It previously wrapped the task run itself, so *any*
+    RuntimeError raised by the task fell into the "no event loop" handler,
+    which called the factory a second time and re-ran the entire task — a
+    duplicate price refresh, or a second round of alert emails/SMS for
+    everything already dispatched, before Celery's retry policy even saw the
+    failure.
     """
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Inside an already-running loop (unlikely in a Celery worker,
-            # but handle defensively via a new thread)
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(asyncio.run, coro_factory())
-                return future.result()
-        return loop.run_until_complete(coro_factory())
+        asyncio.get_running_loop()
     except RuntimeError:
-        # No current event loop — create a fresh one
+        # No loop running in this thread — the normal Celery worker case.
         return asyncio.run(coro_factory())
+
+    # Called from inside an already-running loop (unlikely in a Celery worker,
+    # but handle defensively): run it in a dedicated thread with its own loop.
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(lambda: asyncio.run(coro_factory()))
+        return future.result()
 
 
 def is_celery_available() -> bool:

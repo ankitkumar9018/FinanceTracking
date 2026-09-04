@@ -17,18 +17,37 @@ jobs:
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
             target_triple: aarch64-apple-darwin
-          - platform: macos-latest
+            rust_targets: aarch64-apple-darwin
+          # INTEL runner, on purpose. The Python sidecar is built here by
+          # PyInstaller, which does NOT cross-compile: it freezes the
+          # interpreter and native wheels of the machine it runs on. Building
+          # this entry on macos-latest (Apple Silicon) produced an arm64 sidecar
+          # inside the x86_64 .dmg, so the app could never start on an Intel Mac
+          # — arm64 binaries do not run there (Rosetta translates the other way).
+          # If this runner label is ever retired, move the job to whatever the
+          # current Intel macOS image is; do NOT point it back at an
+          # Apple-Silicon runner. The "Verify sidecar architecture" step below
+          # fails the build if that happens anyway.
+          - platform: macos-15-intel
             args: '--target x86_64-apple-darwin'
             target_triple: x86_64-apple-darwin
+            rust_targets: x86_64-apple-darwin
           - platform: ubuntu-22.04
             args: ''
             target_triple: x86_64-unknown-linux-gnu
+            rust_targets: ''
           - platform: windows-latest
             args: ''
             target_triple: x86_64-pc-windows-msvc
+            rust_targets: ''
+          # Rust cross-compiles the shell to ARM64 fine, but PyInstaller still
+          # emits an x64 sidecar here. That one is tolerated: Windows on ARM
+          # runs x64 executables under emulation, so the app works (just slower
+          # to boot). The verify step below prints a warning rather than failing.
           - platform: windows-latest
             args: '--target aarch64-pc-windows-msvc'
             target_triple: aarch64-pc-windows-msvc
+            rust_targets: aarch64-pc-windows-msvc
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -55,7 +74,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || (matrix.target_triple == 'aarch64-pc-windows-msvc' && 'aarch64-pc-windows-msvc' || '') }}
+          targets: ${{ matrix.rust_targets }}
 
       - name: Install dependencies (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
@@ -63,7 +82,56 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libcairo2-dev pkg-config
 
-      # --- Backend sidecar build ---
+      # --- Version ---------------------------------------------------------
+      # tauri.conf.json is pinned at 0.1.0, and __VERSION__ interpolation reads
+      # from there — so every release used to be published under the tag v0.1.0
+      # no matter which tag was pushed, and every installer was named
+      # FinanceTracker_0.1.0_*. Stamp the pushed tag in instead; the release
+      # itself is created at the pushed tag (see tagName below).
+      - name: Stamp the pushed tag into the app version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "Tag '$GITHUB_REF_NAME' is not semver-shaped; keeping the version in tauri.conf.json."
+            exit 0
+          fi
+          python - "$version" <<'PY'
+          import json, sys, pathlib
+          path = pathlib.Path("apps/desktop/src-tauri/tauri.conf.json")
+          conf = json.loads(path.read_text())
+          conf["version"] = sys.argv[1]
+          path.write_text(json.dumps(conf, indent=2) + "\n")
+          print("app version ->", sys.argv[1])
+          PY
+
+      # --- Frontend static export ------------------------------------------
+      # Moved AHEAD of the sidecar build: the PyInstaller spec bundles
+      # backend/static into the binary only if that directory already exists.
+      # build-installer.sh stages it (and orders the steps this way for the same
+      # reason); CI did not, so a released build answered GET / on the backend
+      # port with {"detail":"Not Found"} while a locally built installer served
+      # the UI. The desktop window itself loads the bundled copy either way —
+      # this is the browser fallback, and 4 MB on a 110 MB sidecar.
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      - name: Build static frontend for desktop
+        run: STATIC_EXPORT=true pnpm --filter @finance-tracker/web build
+        env:
+          STATIC_EXPORT: 'true'
+
+      - name: Stage static frontend (desktop bundle + backend sidecar)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f apps/web/out/index.html  # fail loudly if the export produced nothing
+          rm -rf apps/desktop/dist backend/static
+          cp -r apps/web/out apps/desktop/dist
+          cp -r apps/web/out backend/static
+
+      # --- Backend sidecar build -------------------------------------------
       - name: Install backend dependencies
         working-directory: backend
         # --extra cas bundles casparser so the released desktop app can import
@@ -91,29 +159,59 @@ jobs:
           New-Item -ItemType Directory -Force -Path ../apps/desktop/src-tauri/binaries
           Copy-Item dist/financetracker-backend.exe ../apps/desktop/src-tauri/binaries/financetracker-backend-${{ matrix.target_triple }}.exe
 
-      # --- Frontend static export ---
-      - name: Install frontend dependencies
-        run: pnpm install
-
-      - name: Build static frontend for desktop
-        run: STATIC_EXPORT=true pnpm --filter @finance-tracker/web build
-        env:
-          STATIC_EXPORT: 'true'
-
-      - name: Copy static frontend to desktop dist
+      # A sidecar of the wrong architecture makes the whole installer dead on
+      # arrival, and nothing else in this pipeline would notice: Tauri happily
+      # bundles any file with the right name suffix. Fail here instead of
+      # shipping an app that cannot start.
+      - name: Verify sidecar architecture (Unix)
+        if: runner.os != 'Windows'
+        working-directory: backend
         shell: bash
         run: |
-          rm -rf apps/desktop/dist
-          cp -r apps/web/out apps/desktop/dist
+          set -euo pipefail
+          case "${{ matrix.target_triple }}" in
+            aarch64-apple-darwin)     want=arm64 ;;
+            x86_64-apple-darwin)      want=x86_64 ;;
+            x86_64-unknown-linux-gnu) want=x86-64 ;;
+            *) echo "no architecture expectation for ${{ matrix.target_triple }}"; exit 0 ;;
+          esac
+          got=$(file -b dist/financetracker-backend)
+          echo "sidecar: $got"
+          if ! printf '%s' "$got" | grep -q -- "$want"; then
+            echo "::error::Sidecar for ${{ matrix.target_triple }} is not $want (got: $got). PyInstaller cannot cross-compile, so this job must run on a native runner."
+            exit 1
+          fi
 
-      # --- Tauri build + release ---
+      - name: Verify sidecar architecture (Windows)
+        if: runner.os == 'Windows'
+        working-directory: backend
+        shell: pwsh
+        run: |
+          # Read the PE header's Machine field: 0x8664 = x64, 0xAA64 = ARM64.
+          $bytes = [System.IO.File]::ReadAllBytes("dist/financetracker-backend.exe")
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          $arch = switch ($machine) { 0x8664 { "x64" } 0xAA64 { "arm64" } default { "0x{0:X4}" -f $machine } }
+          Write-Host "sidecar: $arch"
+          if ("${{ matrix.target_triple }}" -eq "x86_64-pc-windows-msvc" -and $arch -ne "x64") {
+            Write-Host "::error::Sidecar for x86_64-pc-windows-msvc is $arch, not x64."
+            exit 1
+          }
+          if ("${{ matrix.target_triple }}" -eq "aarch64-pc-windows-msvc" -and $arch -ne "arm64") {
+            Write-Host "::warning::ARM64 installer ships an $arch sidecar (PyInstaller cannot cross-compile). It runs under Windows-on-ARM x64 emulation, so the app works but starts more slowly."
+          }
+
+      # --- Tauri build + release -------------------------------------------
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/desktop
-          tagName: v__VERSION__
-          releaseName: 'FinanceTracker v__VERSION__'
+          # The PUSHED tag, not v__VERSION__ — __VERSION__ expands to the version
+          # in tauri.conf.json, so every release landed on the tag v0.1.0 and all
+          # five matrix jobs uploaded into that one stale draft.
+          tagName: ${{ github.ref_name }}
+          releaseName: 'FinanceTracker ${{ github.ref_name }}'
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: true
           prerelease: false

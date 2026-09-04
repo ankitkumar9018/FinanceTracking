@@ -45,6 +45,51 @@ def _num(value: object) -> float | None:
         return None
 
 
+def _cost_from_transactions(scheme: object) -> float | None:
+    """Derive a cost basis by replaying the scheme's CAS transaction section.
+
+    CAS statements carry a per-scheme transaction list (purchases, SIP
+    instalments, switch-ins, redemptions, switch-outs). Purchases have positive
+    ``units``, redemptions negative. Replaying them keeps a running
+    (units, cost) pair and reduces cost proportionally on the way out, which is
+    the same weighted-average basis the rest of the app uses.
+
+    Returns ``None`` when the statement has no usable transaction rows.
+    """
+    transactions = _get(scheme, "transactions") or []
+    units_held = 0.0
+    cost = 0.0
+    saw_any = False
+
+    for txn in transactions:
+        units = _num(_get(txn, "units"))
+        amount = _num(_get(txn, "amount"))
+        if not units:
+            # Dividend payouts, stamp duty, tax rows: no unit movement, so no
+            # effect on the cost basis.
+            continue
+        if amount is None:
+            # A unit movement with no amount (e.g. a bonus allotment) adds
+            # units at zero cost rather than invalidating the whole replay.
+            amount = 0.0
+        saw_any = True
+        if units > 0:
+            units_held += units
+            cost += abs(amount)
+        else:
+            sold = min(-units, units_held)
+            if units_held > 0:
+                cost -= cost * (sold / units_held)
+            units_held -= sold
+            if units_held <= 0:
+                units_held = 0.0
+                cost = 0.0
+
+    if not saw_any:
+        return None
+    return round(cost, 4)
+
+
 def _map_cas_to_mf(data: object) -> list[dict]:
     """Flatten parsed CAS folios/schemes into mutual-fund import rows."""
     rows: list[dict] = []
@@ -67,8 +112,27 @@ def _map_cas_to_mf(data: object) -> list[dict]:
             nav = _num(_get(valuation, "nav"))
             value = _num(_get(valuation, "value"))
             invested = _num(_get(valuation, "cost"))
+
+            # A missing cost figure used to fall back to the CURRENT valuation
+            # (``value``, or units * nav) — which is the market value, not the
+            # amount invested, so every such fund imported showing exactly zero
+            # gain/loss. Replay the statement's own transaction section
+            # instead; only if that is unavailable do we fall back, and then
+            # the row is flagged as an estimate.
+            estimated = False
             if invested is None:
+                invested = _cost_from_transactions(scheme)
+            if invested is None:
+                estimated = True
                 invested = value if value is not None else units * (nav or 0.0)
+                logger.warning(
+                    "CAS scheme %s (folio %s) has no cost and no transaction "
+                    "history; invested_amount falls back to current value "
+                    "%.2f and will show zero gain/loss",
+                    name,
+                    folio_no,
+                    invested,
+                )
 
             rows.append({
                 "scheme_code": code,
@@ -77,6 +141,11 @@ def _map_cas_to_mf(data: object) -> list[dict]:
                 "units": units,
                 "nav": nav if nav is not None else 0.0,
                 "invested_amount": invested,
+                # Consumed by nothing yet: the MF upsert in
+                # csv_import_service.import_mutual_funds should use it to stop
+                # overwriting a user's real cost with a derived one (see the
+                # handoff note in the stream report).
+                "invested_amount_is_estimate": estimated,
             })
     return rows
 

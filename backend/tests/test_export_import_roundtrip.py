@@ -212,9 +212,14 @@ async def test_transactions_csv_reimport_is_deduped(db: AsyncSession):
 async def test_holdings_csv_imports_as_position_snapshot(db: AsyncSession):
     source = await _seed_source(db)
     csv_text = await export_holdings_csv(source.id, db)
+    # The six zone levels and notes trail the computed columns: they are user
+    # input, so the export has to carry them or a CSV restore silently wipes
+    # the 5-zone configuration (see test_stream_c_import_export.py).
     assert csv_text.splitlines()[0] == (
         "Stock Symbol,Stock Name,Exchange,Quantity,Avg Price,"
-        "Current Price,P&L %,Action Needed,RSI,Sector"
+        "Current Price,P&L %,Action Needed,RSI,Sector,"
+        "Lower Mid 1,Lower Mid 2,Upper Mid 1,Upper Mid 2,"
+        "Base Level,Top Level,Notes"
     )
 
     parsed = parse_csv(csv_text.encode())

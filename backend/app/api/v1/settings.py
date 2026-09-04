@@ -175,7 +175,12 @@ async def test_telegram(
     user: User = Depends(get_current_user),
 ) -> dict:
     """Send a test message via Telegram bot."""
-    if not app_settings.telegram_bot_token or not app_settings.telegram_chat_id:
+    # Resolve the destination exactly as real delivery does
+    # (notification_service.send_telegram: ``chat_id or settings.telegram_chat_id``),
+    # so the test validates the chat the user configured in Settings rather than
+    # a global env fallback they never set.
+    chat_id = user.telegram_chat_id or app_settings.telegram_chat_id
+    if not app_settings.telegram_bot_token or not chat_id:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Telegram bot token or chat ID not configured",
@@ -189,7 +194,7 @@ async def test_telegram(
             f"/sendMessage"
         )
         payload = {
-            "chat_id": app_settings.telegram_chat_id,
+            "chat_id": chat_id,
             "text": (
                 f"FinanceTracker Test\n\n"
                 f"Hello {user.display_name or user.email}!\n"
@@ -204,15 +209,23 @@ async def test_telegram(
 
         return {
             "status": "sent",
-            "chat_id": app_settings.telegram_chat_id,
+            "chat_id": chat_id,
         }
     except ImportError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="httpx package not installed",
         )
-    except Exception:
-        logger.exception("Test Telegram send failed")
+    except Exception as exc:
+        # Log the exception type and HTTP status only — never the traceback.
+        # httpx.HTTPStatusError embeds the full request URL in its message, and
+        # that URL carries the bot token. Same treatment as the delivery path in
+        # notification_service.send_telegram.
+        logger.warning(
+            "Test Telegram send failed: %s (status=%s)",
+            type(exc).__name__,
+            getattr(getattr(exc, "response", None), "status_code", None),
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to send Telegram message",

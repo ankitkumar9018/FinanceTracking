@@ -39,6 +39,11 @@ class BacktestResult:
     win_rate: float
     trades: list[dict] = field(default_factory=list)
     equity_curve: list[float] = field(default_factory=list)
+    # How many bars the strategy burns before it can emit its first signal,
+    # and how many bars it actually got. Reported so the UI can explain a
+    # no-trade run instead of showing a flat, green "0.00% / Low Risk" card.
+    warmup_bars_required: int = 0
+    bars_available: int = 0
 
 
 @dataclass
@@ -139,18 +144,45 @@ STRATEGY_REGISTRY: dict[str, dict] = {
         "function": rsi_strategy,
         "description": "RSI-based strategy: buy when RSI is oversold, sell when overbought.",
         "default_params": {"buy_threshold": 30, "sell_threshold": 70},
+        # calculate_rsi needs `period` deltas, i.e. period + 1 closes.
+        "warmup": lambda p: int(p.get("period", 14)) + 1,
     },
     "sma_crossover": {
         "function": sma_crossover_strategy,
         "description": "SMA crossover strategy: buy when short SMA crosses above long SMA.",
         "default_params": {"short_window": 20, "long_window": 50},
+        # The long SMA needs `long_window` closes; the crossover test compares
+        # against the previous bar, so one more.
+        "warmup": lambda p: max(int(p.get("short_window", 20)), int(p.get("long_window", 50))) + 1,
     },
     "bollinger": {
         "function": bollinger_strategy,
         "description": "Bollinger Bands strategy: buy at lower band, sell at upper band.",
         "default_params": {"window": 20, "num_std": 2.0},
+        "warmup": lambda p: int(p.get("window", 20)),
     },
 }
+
+# Bars the strategy must have AFTER its warm-up before a backtest is
+# meaningful. Signals are shifted one bar to avoid look-ahead, so a handful of
+# post-warm-up bars is the bare minimum for a round trip to be possible at all.
+MIN_TRADABLE_BARS = 5
+
+
+def strategy_warmup_bars(strategy_name: str, params: dict | None = None) -> int:
+    """Bars consumed before ``strategy_name`` can emit its first real signal.
+
+    Derived from the RESOLVED params (defaults merged with the caller's
+    overrides), so a caller asking for ``long_window=200`` is held to 200.
+    """
+    info = STRATEGY_REGISTRY[strategy_name]
+    resolved = {**info["default_params"], **(params or {})}
+    try:
+        return max(1, int(info["warmup"](resolved)))
+    except (TypeError, ValueError):
+        # A non-numeric override (validated elsewhere) must not crash the
+        # pre-flight check; fall back to the strategy's own defaults.
+        return max(1, int(info["warmup"](info["default_params"])))
 
 
 # ---------------------------------------------------------------------------
@@ -162,8 +194,12 @@ def _compute_backtest_metrics(
     trades: list[dict],
     equity_curve: list[float],
     days: int,
+    warmup_bars_required: int = 0,
+    bars_available: int | None = None,
 ) -> BacktestResult:
     """Compute backtest metrics from trade list and equity curve."""
+    if bars_available is None:
+        bars_available = len(equity_curve)
     if not equity_curve or len(equity_curve) < 2:
         return BacktestResult(
             total_return=0.0,
@@ -174,6 +210,8 @@ def _compute_backtest_metrics(
             win_rate=0.0,
             trades=trades,
             equity_curve=equity_curve,
+            warmup_bars_required=warmup_bars_required,
+            bars_available=bars_available,
         )
 
     initial = equity_curve[0]
@@ -218,6 +256,8 @@ def _compute_backtest_metrics(
         win_rate=round(win_rate, 2),
         trades=trades,
         equity_curve=[round(e, 4) for e in equity_curve],
+        warmup_bars_required=warmup_bars_required,
+        bars_available=bars_available,
     )
 
 
@@ -315,6 +355,30 @@ async def run_backtest(
             f"Found {len(rows)} records, need at least 2."
         )
 
+    # Resolve strategy (needed BEFORE the data check: the amount of history a
+    # backtest requires is a property of the strategy's longest window).
+    strategy_info = STRATEGY_REGISTRY[strategy_name]
+    strategy_fn = strategy_info["function"]
+    params = {**strategy_info["default_params"]}
+    if strategy_params:
+        params.update(strategy_params)
+
+    # Refuse to "run" a strategy whose warm-up exceeds the available bars.
+    # Every indicator would be NaN, the signal series all zeros and no trade
+    # would fire — and the old code reported that as total_return 0.00%,
+    # max_drawdown 0.00% and a green "Low Risk" card, which reads as "flat and
+    # safe" rather than "there was not enough price history".
+    warmup = strategy_warmup_bars(strategy_name, params)
+    if len(rows) < warmup + MIN_TRADABLE_BARS:
+        raise ValueError(
+            f"Insufficient price data for {symbol} on {exchange}: the "
+            f"'{strategy_name}' strategy needs {warmup} bars of warm-up plus "
+            f"at least {MIN_TRADABLE_BARS} tradable bars "
+            f"({warmup + MIN_TRADABLE_BARS} total), but only {len(rows)} "
+            "daily bars are stored. Refresh prices for this symbol or choose "
+            "a shorter-window strategy."
+        )
+
     # Build DataFrame
     data = {
         "date": [r.date for r in rows],
@@ -330,13 +394,6 @@ async def run_backtest(
     prices_df = pd.DataFrame(data)
     prices_df.set_index("date", inplace=True)
 
-    # Resolve strategy
-    strategy_info = STRATEGY_REGISTRY[strategy_name]
-    strategy_fn = strategy_info["function"]
-    params = {**strategy_info["default_params"]}
-    if strategy_params:
-        params.update(strategy_params)
-
     # Generate signals
     signals = strategy_fn(prices_df, **params)
 
@@ -350,4 +407,10 @@ async def run_backtest(
     trades, equity_curve = _simulate_trades(prices_df, signals, initial_capital)
 
     # Compute and return metrics
-    return _compute_backtest_metrics(trades, equity_curve, days)
+    return _compute_backtest_metrics(
+        trades,
+        equity_curve,
+        days,
+        warmup_bars_required=warmup,
+        bars_available=len(rows),
+    )

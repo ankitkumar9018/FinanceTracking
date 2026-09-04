@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::Manager;
-use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandChild;
+use tauri_plugin_shell::ShellExt;
 
 struct AppState {
     /// The port the backend is ACTUALLY serving on. Starts as the pre-found
@@ -104,52 +104,146 @@ fn descendants_of(pid: u32) -> Vec<u32> {
     found
 }
 
-/// Path of the file recording the PID of the sidecar we spawned.
-fn pid_file(app_data_dir: &std::path::Path) -> std::path::PathBuf {
-    app_data_dir.join("backend.pid")
+/// Path of the file recording the PID of the sidecar THIS instance spawned.
+///
+/// The name carries our own app PID (`backend-<app_pid>.pid`) so that a second,
+/// concurrently running instance can tell our record apart from its own. With a
+/// single shared `backend.pid` it could not: every launch read the one record
+/// and killed the process named in it, so starting a second instance SIGKILLed
+/// the first instance's live backend mid-flight.
+fn sidecar_pid_file(app_data_dir: &std::path::Path) -> std::path::PathBuf {
+    app_data_dir.join(format!("backend-{}.pid", std::process::id()))
 }
 
-/// Reap a sidecar left behind by a PRIOR crash (where `kill_sidecar` never ran).
+/// Which app instance wrote a pid file, as encoded in its file name.
+#[derive(Debug, PartialEq, Eq)]
+enum PidFileOwner {
+    /// `backend.pid` — written by an older build that recorded no owner.
+    Legacy,
+    /// `backend-<app_pid>.pid` — written by the app process with that PID.
+    Instance(u32),
+}
+
+/// Classify a file name inside the app-data dir. `None` = not one of ours.
+fn pid_file_owner(file_name: &str) -> Option<PidFileOwner> {
+    if file_name == "backend.pid" {
+        return Some(PidFileOwner::Legacy);
+    }
+    let rest = file_name.strip_prefix("backend-")?.strip_suffix(".pid")?;
+    rest.parse::<u32>().ok().map(PidFileOwner::Instance)
+}
+
+/// File name of the running executable — the needle that identifies another
+/// instance of THIS app when checking whether a recorded owner is still alive.
+fn own_process_name() -> Option<String> {
+    std::env::current_exe()
+        .ok()?
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+}
+
+/// Does `tasklist /FO CSV /NH` output describe a process matching `needle`?
 ///
-/// Only ever targets the exact PID we ourselves recorded, and only after
-/// confirming that PID is still our backend binary — so a recycled PID
-/// belonging to an unrelated process is never touched. This is the safe
-/// equivalent of the name-based sweep we deliberately refuse to do.
+/// Split out from the Windows branch of `process_matches` so it is testable on
+/// any host. Windows process names are case-insensitive, and the "no such PID"
+/// banner must never be mistaken for a match.
+// Only the Windows branch of `process_matches` calls it at runtime; the unit
+// tests below exercise it on every platform.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn tasklist_matches(stdout: &str, needle: &str) -> bool {
+    let lower = stdout.to_ascii_lowercase();
+    if lower.contains("no tasks are running") {
+        return false;
+    }
+    lower.contains(&needle.to_ascii_lowercase())
+}
+
+/// Is `pid` a LIVE process whose image / command line contains `needle`?
+///
+/// `Some(true)`/`Some(false)` are definite answers; `None` means the query tool
+/// itself did not run, so the answer is unknown. Callers must treat `None` as
+/// "leave it alone" — we never signal a process we cannot positively identify.
 #[cfg(not(target_os = "windows"))]
-fn reap_stale_sidecar(app_data_dir: &std::path::Path) {
-    let path = pid_file(app_data_dir);
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    let _ = std::fs::remove_file(&path);
-    let Ok(pid) = text.trim().parse::<u32>() else {
-        return;
-    };
-    // Verify identity before signalling: the recorded PID must still be OUR
-    // binary (guards against PID reuse after a reboot).
-    let is_ours = std::process::Command::new("ps")
+fn process_matches(pid: u32, needle: &str) -> Option<bool> {
+    // `ps` exits non-zero with empty stdout when the PID is gone; that is a
+    // definite "no", not a failure, so only a spawn error yields `None`.
+    let out = std::process::Command::new("ps")
         .args(["-o", "command=", "-p", &pid.to_string()])
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("financetracker-backend"))
-        .unwrap_or(false);
-    if !is_ours {
-        return;
-    }
-    eprintln!("[sidecar] reaping orphaned backend from a previous run (pid {})", pid);
-    terminate_tree(pid);
+        .ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).contains(needle))
 }
 
 #[cfg(target_os = "windows")]
-fn reap_stale_sidecar(app_data_dir: &std::path::Path) {
-    let path = pid_file(app_data_dir);
-    let Ok(text) = std::fs::read_to_string(&path) else {
+fn process_matches(pid: u32, needle: &str) -> Option<bool> {
+    use std::os::windows::process::CommandExt;
+    let out = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output()
+        .ok()?;
+    Some(tasklist_matches(
+        &String::from_utf8_lossy(&out.stdout),
+        needle,
+    ))
+}
+
+/// Reap sidecars left behind by a PRIOR crash — and only those.
+///
+/// Two independent checks must BOTH pass before anything is signalled:
+///
+/// 1. **The owning app instance is gone.** The app PID in the file name must no
+///    longer be a live process running this same executable. If it is, another
+///    FinanceTracker window is using that backend right now, so both the
+///    process and its record are left untouched. (Without this, launching a
+///    second instance killed the first one's backend: the "is it still our
+///    binary" check below is just as true for a LIVE sidecar as for an orphan.)
+/// 2. **The recorded PID is still our backend binary**, so a PID recycled by
+///    the OS — guaranteed after a reboot, routine on Windows — is never
+///    touched. This check previously existed only on Unix; the Windows path
+///    went straight to `taskkill /T /F` on whatever happened to own the PID.
+///
+/// Anything that cannot be positively determined is left alone. A `backend.pid`
+/// from an older build carries no owner, so it can only be identity-checked;
+/// that is a one-off at upgrade time and still never touches a foreign process.
+fn reap_stale_sidecars(app_data_dir: &std::path::Path) {
+    let me = std::process::id();
+    let own_name = own_process_name();
+    let Ok(entries) = std::fs::read_dir(app_data_dir) else {
         return;
     };
-    let _ = std::fs::remove_file(&path);
-    let Ok(pid) = text.trim().parse::<u32>() else {
-        return;
-    };
-    terminate_tree(pid);
+    for entry in entries.flatten() {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        let Some(owner) = pid_file_owner(&file_name) else {
+            continue;
+        };
+        if let PidFileOwner::Instance(owner_pid) = owner {
+            // Only a DEFINITE "that app process is gone" lets us proceed; an
+            // unknown answer (`None`) keeps our hands off.
+            let owner_gone = owner_pid == me
+                || match own_name.as_deref() {
+                    Some(name) => process_matches(owner_pid, name) == Some(false),
+                    None => false,
+                };
+            if !owner_gone {
+                continue;
+            }
+        }
+        let path = entry.path();
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = std::fs::remove_file(&path);
+        let Ok(pid) = text.trim().parse::<u32>() else {
+            continue;
+        };
+        if process_matches(pid, "financetracker-backend") != Some(true) {
+            continue;
+        }
+        eprintln!(
+            "[sidecar] reaping orphaned backend from a previous run (pid {})",
+            pid
+        );
+        terminate_tree(pid);
+    }
 }
 
 /// Terminate `pid` AND its descendants: graceful first, then forced.
@@ -229,6 +323,50 @@ fn kill_sidecar(state: &AppState) {
     // terminating another process.
 }
 
+/// Build the self-healing "still starting up" page injected when the backend
+/// misses its 120s deadline.
+///
+/// It polls `/health` and, when the backend answers, RELOADS the bundled origin
+/// so the real UI comes back.
+///
+/// It must NOT navigate to `http://<host>:{port}/`. That is exactly the
+/// blank-window trap documented in `run()` (WebKit loads that page's assets but
+/// never runs its JavaScript inside the Tauri webview), and CI-built releases do
+/// not bundle `backend/static` at all, so the same URL renders a raw
+/// `{"detail":"Not Found"}`. Reloading keeps us on the bundled origin, where the
+/// app re-discovers the port over IPC (`get_api_port`) — which is also why the
+/// poll asks IPC for the CURRENT port each time instead of trusting the baked-in
+/// one.
+///
+/// The poll uses 127.0.0.1, not "localhost": the backend binds IPv4 only, so on
+/// a host that resolves localhost to ::1 first the retry would never succeed
+/// (the same reason `wait_for_backend` uses the literal address).
+fn recovery_script(port: u16) -> String {
+    format!(
+            "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888;background:#09090b\"><div style=\"text-align:center\"><h2 style=\"color:#fafafa\">Still starting up\\u2026</h2><p id=\"ft-status\">This is taking longer than usual. On the first launch, security software often scans the app before it can start \\u2014 that is normal and only happens once.</p><button onclick=\"window.__ftCheck&&window.__ftCheck()\" style=\"margin-top:16px;padding:8px 24px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px\">Retry now</button></div></div>';\
+            window.__ftPort = {port};\
+            window.__ftCheck = function() {{\
+                var internals = window.__TAURI_INTERNALS__;\
+                var ask = (internals && internals.invoke)\
+                    ? Promise.resolve(internals.invoke('get_api_port')).catch(function() {{ return window.__ftPort; }})\
+                    : Promise.resolve(window.__ftPort);\
+                ask.then(function(p) {{\
+                    if (p) {{ window.__ftPort = p; }}\
+                    return fetch('http://127.0.0.1:' + window.__ftPort + '/health');\
+                }}).then(function(r) {{\
+                    if (!r.ok) {{ throw new Error('backend not ready'); }}\
+                    clearInterval(window.__ftTimer);\
+                    window.location.reload();\
+                }}).catch(function() {{\
+                    var el = document.getElementById('ft-status');\
+                    if (el) {{ el.textContent = 'Server not reachable yet \\u2014 retrying\\u2026 (' + new Date().toLocaleTimeString() + ')'; }}\
+                }});\
+            }};\
+            window.__ftTimer = setInterval(window.__ftCheck, 2000);",
+            port = port
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -242,9 +380,11 @@ pub fn run() {
             std::fs::create_dir_all(&app_data_dir).ok();
 
             // A crash or force-quit can leave last run's backend alive, still
-            // holding its port. Reap it now — strictly by the PID we recorded
-            // ourselves, and only after confirming it is still our binary.
-            reap_stale_sidecar(&app_data_dir);
+            // holding its port. Reap it now — strictly by a PID we recorded
+            // ourselves, only after confirming it is still our binary, and only
+            // when the instance that recorded it is no longer running (so a
+            // second window never kills the first one's backend).
+            reap_stale_sidecars(&app_data_dir);
             let db_path = app_data_dir.join("finance.db");
 
             let port = find_port();
@@ -289,7 +429,8 @@ pub fn run() {
                 Ok((mut rx, child)) => {
                     // Record the PID so a future launch can reap this process
                     // if we never get to run kill_sidecar (crash / force-quit).
-                    let _ = std::fs::write(pid_file(&app_data_dir), child.pid().to_string());
+                    let _ =
+                        std::fs::write(sidecar_pid_file(&app_data_dir), child.pid().to_string());
                     let pump_port = Arc::clone(&api_port);
                     tauri::async_runtime::spawn(async move {
                         use tauri_plugin_shell::process::CommandEvent;
@@ -417,26 +558,8 @@ pub fn run() {
                     println!("Backend ready on port {} -- UI served from bundle", port);
                 } else {
                     eprintln!("WARNING: Backend did not respond within 120 seconds");
-                    // Self-healing error page: keeps polling /health in the
-                    // webview and navigates as soon as the backend comes up —
-                    // a plain reload would return to the static shell with no
-                    // monitor thread left to navigate, stranding the user.
-                    // Baked with the LATEST known port (the backend may have
-                    // announced a move while we were waiting).
                     let port = nav_port.load(Ordering::SeqCst);
-                    let recovery = format!(
-                        "document.body.innerHTML = '<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#888;background:#09090b\"><div style=\"text-align:center\"><h2 style=\"color:#fafafa\">Still starting up\\u2026</h2><p id=\"ft-status\">This is taking longer than usual. On the first launch, security software often scans the app before it can start \\u2014 that is normal and only happens once.</p><button onclick=\"window.__ftCheck&&window.__ftCheck()\" style=\"margin-top:16px;padding:8px 24px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px\">Retry now</button></div></div>';\
-                        window.__ftCheck = function() {{\
-                            fetch('http://localhost:{port}/health').then(function(r) {{\
-                                if (r.ok) {{ window.location.replace('http://localhost:{port}/#ftport={port}'); }}\
-                            }}).catch(function() {{\
-                                var el = document.getElementById('ft-status');\
-                                if (el) {{ el.textContent = 'Server not reachable yet \\u2014 retrying\\u2026 (' + new Date().toLocaleTimeString() + ')'; }}\
-                            }});\
-                        }};\
-                        window.__ftTimer = setInterval(window.__ftCheck, 2000);",
-                        port = port
-                    );
+                    let recovery = recovery_script(port);
                     let _ = window.eval(&recovery);
                 }
             });
@@ -456,8 +579,126 @@ pub fn run() {
             // Clean shutdown: drop the PID record so the next launch has
             // nothing stale to reap.
             if let Ok(dir) = app_handle.path().app_data_dir() {
-                let _ = std::fs::remove_file(pid_file(&dir));
+                // Our own per-instance record only — a co-running instance's
+                // record must survive our exit.
+                let _ = std::fs::remove_file(sidecar_pid_file(&dir));
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recovery_page_never_navigates_to_the_backend_origin() {
+        let js = recovery_script(8423);
+        // Navigating the webview to the backend's http origin is the documented
+        // blank-window trap, and in CI-built releases that URL is a bare
+        // {"detail":"Not Found"} because backend/static is not bundled.
+        assert!(
+            !js.contains("location.replace"),
+            "must not navigate away: {}",
+            js
+        );
+        assert!(
+            !js.contains("ftport="),
+            "the #ftport hash only makes sense on the backend origin"
+        );
+        // Coming back to the bundled origin is the only safe recovery.
+        assert!(js.contains("window.location.reload()"));
+        assert!(js.contains("clearInterval(window.__ftTimer)"));
+    }
+
+    #[test]
+    fn recovery_page_polls_ipv4_loopback_on_the_live_port() {
+        let js = recovery_script(8423);
+        // The backend binds IPv4 only — "localhost" can resolve to ::1 first.
+        assert!(js.contains("http://127.0.0.1:"), "{}", js);
+        assert!(!js.contains("localhost"), "{}", js);
+        // The baked port seeds the poll...
+        assert!(js.contains("window.__ftPort = 8423;"));
+        // ...but each attempt re-asks the shell, so a port move during the slow
+        // startup we are recovering from is followed rather than missed.
+        assert!(js.contains("invoke('get_api_port')"));
+    }
+
+    #[test]
+    fn pid_file_owner_recognises_per_instance_records() {
+        assert_eq!(
+            pid_file_owner("backend-1234.pid"),
+            Some(PidFileOwner::Instance(1234))
+        );
+        assert_eq!(pid_file_owner("backend.pid"), Some(PidFileOwner::Legacy));
+    }
+
+    #[test]
+    fn pid_file_owner_ignores_unrelated_files() {
+        // Anything that is not one of our records must be skipped outright —
+        // the reaper never opens, deletes or signals on a foreign file.
+        for name in [
+            "finance.db",
+            "backend.pid.bak",
+            "backend-.pid",
+            "backend-abc.pid",
+            "backend-12x.pid",
+            "other-1234.pid",
+        ] {
+            assert_eq!(
+                pid_file_owner(name),
+                None,
+                "{} should not be a pid record",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn sidecar_pid_file_is_scoped_to_this_process() {
+        let path = sidecar_pid_file(std::path::Path::new("/tmp/appdata"));
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(name, format!("backend-{}.pid", std::process::id()));
+        // ...and it round-trips through the classifier as OUR record, which is
+        // what keeps a second instance from reaping the first one's backend.
+        assert_eq!(
+            pid_file_owner(&name),
+            Some(PidFileOwner::Instance(std::process::id()))
+        );
+    }
+
+    #[test]
+    fn tasklist_matches_reads_a_live_process() {
+        let out = "\"financetracker-backend.exe\",\"7412\",\"Console\",\"1\",\"120,004 K\"\r\n";
+        assert!(tasklist_matches(out, "financetracker-backend"));
+        // Case-insensitive: Windows image names are.
+        assert!(tasklist_matches(out, "FinanceTracker-Backend.exe"));
+        // A different image on that PID must NOT be treated as ours.
+        assert!(!tasklist_matches(out, "FinanceTracker.exe"));
+    }
+
+    #[test]
+    fn tasklist_matches_rejects_the_no_such_pid_banner() {
+        // The banner names the filter, so a naive `contains` on a needle that
+        // appears in it would force-kill an unrelated recycled PID.
+        let out = "INFO: No tasks are running which match the specified criteria.\r\n";
+        assert!(!tasklist_matches(out, "financetracker-backend"));
+        assert!(!tasklist_matches(out, "criteria"));
+    }
+
+    #[test]
+    fn process_matches_is_definite_about_this_process_and_a_dead_pid() {
+        // Our own PID is alive; a PID that is certainly not a process is not.
+        assert_eq!(
+            process_matches(std::process::id(), "definitely-not-this-binary"),
+            Some(false)
+        );
+        // PID 0 is never a normal user process on any platform we ship.
+        assert_eq!(process_matches(0, "financetracker-backend"), Some(false));
+        // ...and the positive direction: our own executable name DOES match our
+        // own PID. This is the exact check that decides whether a recorded
+        // owner instance is still running.
+        let name = own_process_name().expect("current_exe should resolve in tests");
+        assert_eq!(process_matches(std::process::id(), &name), Some(true));
+    }
 }

@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.markets import CURRENCY
@@ -125,6 +126,97 @@ def _is_stale(rate_row: ForexRate) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Cache write (concurrency-safe)
+# ---------------------------------------------------------------------------
+
+async def _select_cached(
+    db: AsyncSession,
+    from_currency: str,
+    to_currency: str,
+    lookup_date: date,
+) -> ForexRate | None:
+    """Read the cache row for one (from, to, date) triple, or None."""
+    result = await db.execute(
+        select(ForexRate).where(
+            ForexRate.from_currency == from_currency,
+            ForexRate.to_currency == to_currency,
+            ForexRate.date == lookup_date,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _cache_rate(
+    db: AsyncSession,
+    from_currency: str,
+    to_currency: str,
+    lookup_date: date,
+    rate: float,
+) -> float:
+    """Persist a freshly fetched rate, tolerating a concurrent writer.
+
+    ``get_exchange_rate`` SELECTs the cache, then awaits a yfinance fetch that
+    can take seconds, then INSERTs — and ``forex_rates`` has a UNIQUE
+    constraint on (from_currency, to_currency, date). On the first
+    currency-converting request of the day the dashboard fires several
+    converting endpoints in parallel, each on its own session; they all miss
+    the cache, all fetch, and the losers used to hit an IntegrityError that
+    500'd /forex/rate or silently dropped every EUR asset from a net-worth
+    total.
+
+    So: re-read the cache after the network round-trip, and wrap the INSERT in
+    a SAVEPOINT so a lost race can be caught and turned back into a read
+    instead of poisoning the enclosing transaction's flush.
+    """
+    winner = await _select_cached(db, from_currency, to_currency, lookup_date)
+    if winner is not None:
+        logger.debug(
+            "Concurrent fetch of %s/%s for %s already cached; reusing it",
+            from_currency,
+            to_currency,
+            lookup_date,
+        )
+        return float(winner.rate)
+
+    try:
+        async with db.begin_nested():
+            db.add(
+                ForexRate(
+                    from_currency=from_currency,
+                    to_currency=to_currency,
+                    rate=rate,
+                    date=lookup_date,
+                    source="yfinance",
+                )
+            )
+    except IntegrityError:
+        # Another session committed the same (from, to, date) between our
+        # re-read and this flush. The savepoint rolled back, so the session is
+        # still usable: serve whichever row landed, or the value we fetched if
+        # the winner's transaction is not visible to us yet.
+        winner = await _select_cached(db, from_currency, to_currency, lookup_date)
+        if winner is not None:
+            return float(winner.rate)
+        logger.warning(
+            "Lost the cache-insert race for %s/%s on %s but cannot read the "
+            "winning row; serving the freshly fetched rate uncached",
+            from_currency,
+            to_currency,
+            lookup_date,
+        )
+        return rate
+
+    logger.info(
+        "Cached forex rate %s/%s = %.6f for %s",
+        from_currency,
+        to_currency,
+        rate,
+        lookup_date,
+    )
+    return rate
+
+
+# ---------------------------------------------------------------------------
 # Get exchange rate (with DB cache)
 # ---------------------------------------------------------------------------
 
@@ -163,14 +255,7 @@ async def get_exchange_rate(
     lookup_date = target_date or date.today()
 
     # Check DB cache
-    result = await db.execute(
-        select(ForexRate).where(
-            ForexRate.from_currency == from_currency,
-            ForexRate.to_currency == to_currency,
-            ForexRate.date == lookup_date,
-        )
-    )
-    cached = result.scalar_one_or_none()
+    cached = await _select_cached(db, from_currency, to_currency, lookup_date)
 
     if cached is not None:
         # Historical closes are immutable — always serve them from cache. Only
@@ -210,25 +295,7 @@ async def get_exchange_rate(
     # Not cached — fetch from yfinance (historical close for past dates)
     rate = await _fetch_rate_yfinance(from_currency, to_currency, lookup_date)
 
-    # Store in cache
-    forex_record = ForexRate(
-        from_currency=from_currency,
-        to_currency=to_currency,
-        rate=rate,
-        date=lookup_date,
-        source="yfinance",
-    )
-    db.add(forex_record)
-    await db.flush()
-
-    logger.info(
-        "Cached forex rate %s/%s = %.6f for %s",
-        from_currency,
-        to_currency,
-        rate,
-        lookup_date,
-    )
-    return rate
+    return await _cache_rate(db, from_currency, to_currency, lookup_date, rate)
 
 
 # ---------------------------------------------------------------------------

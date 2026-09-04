@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 # app's primary market. Cash/bank fallback rows use a distinct "CASH" exchange.
 _DEFAULT_EXCHANGE = "NSE"
 
+# Bank-statement lines are parsed (so a caller can see what a file contains and
+# report it), but they are NOT positions: the "symbol" is a payee, the quantity
+# is a placeholder 1.0 and the "price" is a cash amount. Feeding them to
+# ``import_to_portfolio`` would create one junk holding per payee and add every
+# credit to Total Invested — see :func:`split_cash_rows`.
+CASH_EXCHANGE = "CASH"
+
 # Numeric fields are parsed with the shared locale-aware parser so European
 # statements ("1234,56") are read as 1234.56 rather than 123456.0.
 _safe_float = parse_number
@@ -69,8 +76,9 @@ def parse_ofx(file_bytes: bytes) -> list[dict]:
 
     Prefers investment transactions (``BUYSTOCK``/``BUYMF``/``SELLSTOCK``/…);
     if none are present, falls back to bank statement lines (``STMTTRN``),
-    mapping each cash movement to a single-unit pseudo-transaction. Returns
-    ``[]`` when nothing usable is found.
+    mapping each cash movement to a single-unit pseudo-transaction tagged
+    ``exchange == "CASH"``. Those cash rows are reported, not imported — see
+    :func:`import_statement`. Returns ``[]`` when nothing usable is found.
     """
     text = file_bytes.decode("utf-8", errors="ignore")
 
@@ -140,7 +148,7 @@ def parse_ofx(file_bytes: bytes) -> list[dict]:
         rows.append({
             "stock_symbol": symbol,
             "stock_name": payee,
-            "exchange": "CASH",
+            "exchange": CASH_EXCHANGE,
             "transaction_type": "BUY" if amount >= 0 else "SELL",
             "date": dt,
             "quantity": 1.0,
@@ -251,7 +259,7 @@ def _build_qif_row(
     return {
         "stock_symbol": symbol,
         "stock_name": payee,
-        "exchange": "CASH",
+        "exchange": CASH_EXCHANGE,
         "transaction_type": "BUY" if amount >= 0 else "SELL",
         "date": dt,
         "quantity": 1.0,
@@ -325,6 +333,22 @@ def parse_qif(file_bytes: bytes) -> list[dict]:
 # Import — delegate to the shared holding/transaction creation logic
 # ---------------------------------------------------------------------------
 
+def is_cash_row(row: dict) -> bool:
+    """True when a parsed row came from a bank/cash statement line."""
+    return str(row.get("exchange") or "").strip().upper() == CASH_EXCHANGE
+
+
+def split_cash_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split parsed statement rows into ``(investment_rows, cash_rows)``.
+
+    A bank line describes a cash movement to a payee, not a trade in a
+    security, so it must never reach the holdings table.
+    """
+    investment = [row for row in rows if not is_cash_row(row)]
+    cash = [row for row in rows if is_cash_row(row)]
+    return investment, cash
+
+
 async def import_statement(
     rows: list[dict],
     portfolio_id: int,
@@ -337,5 +361,22 @@ async def import_statement(
     Delegates to ``excel_service.import_to_portfolio`` so creation logic is
     shared with the Excel/CSV importers. ``source`` ("OFX" or "QIF") is
     stamped on every created transaction for provenance.
+
+    Bank/cash rows (``exchange == "CASH"``) are **not** imported: they would
+    become one holding per payee, with each credit's full amount landing in
+    ``cumulative_quantity``/``average_price`` and therefore in Total Invested
+    and Net Worth, and each debit becoming a SELL against a lot that never
+    existed. Their count is reported as ``cash_rows_skipped`` so the caller can
+    tell the user what was left out instead of silently dropping it.
     """
-    return await import_to_portfolio(rows, portfolio_id, db, source=source)
+    investment_rows, cash_rows = split_cash_rows(rows)
+    if cash_rows:
+        logger.info(
+            "%s import: skipping %d bank/cash statement line(s) — not positions",
+            source, len(cash_rows),
+        )
+    summary = await import_to_portfolio(
+        investment_rows, portfolio_id, db, source=source
+    )
+    summary["cash_rows_skipped"] = len(cash_rows)
+    return summary

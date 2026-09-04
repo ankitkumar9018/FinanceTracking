@@ -15,8 +15,17 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
+from app.core.logging_config import configure_logging
 from app.database import create_tables, dispose_engine
 from app.utils.rate_limiter import limiter
+
+# Configure logging BEFORE anything else in this module logs. Neither uvicorn
+# nor this app ever configured the root logger, so every logger.info() in the
+# codebase — including the whole audit trail — was silently discarded and the
+# warnings that did fire came out through logging.lastResort with no timestamp,
+# level or logger name. Done at import time so it covers every entry point
+# (`python -m app`, `uvicorn app.main:app`, the PyInstaller sidecar, tests).
+LOG_LEVEL = configure_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +60,12 @@ def _enforce_secret_key(secret_key: str | None = None, debug: bool | None = None
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application startup and shutdown events."""
     # ── Startup ──────────────────────────────────────────────────────
+    # Re-assert our root handler: a host (uvicorn's own dictConfig, gunicorn,
+    # a systemd wrapper) may have reconfigured logging between importing this
+    # module and starting the app.
+    configure_logging(reinstall=True)
     logger.info("Starting %s v%s", settings.app_name, settings.app_version)
+    logger.info("Log level: %s (override with LOG_LEVEL)", LOG_LEVEL)
 
     # Security: fail closed on the default JWT secret outside debug mode.
     _enforce_secret_key()
@@ -142,6 +156,36 @@ for candidate in [
         _static_dir = candidate
         break
 
+
+_DOC_PATHS: tuple[str, ...] = tuple(
+    p
+    for p in (
+        app.docs_url,
+        app.redoc_url,
+        app.openapi_url,
+        app.swagger_ui_oauth2_redirect_url,
+    )
+    if p
+)
+
+
+def _backend_owned(path: str) -> bool:
+    """Should ``path`` be handled by FastAPI rather than the static frontend?
+
+    API, WebSocket and health routes are obvious. The interactive docs are the
+    subtle one: ``/docs``, ``/redoc`` and ``/openapi.json`` are FastAPI's own
+    routes, and the static middleware used to swallow all three and answer them
+    with the SPA's index.html and a 200 — so every doc that says "open
+    http://localhost:8420/docs" showed the dashboard instead, and any tool
+    fetching /openapi.json (client generation, Postman import) got HTML with a
+    success status. The doc paths are read off the app object so they cannot
+    drift if they are ever renamed or disabled.
+    """
+    if path.startswith(("/api/", "/ws/", "/health")):
+        return True
+    return any(path == p or path.startswith(f"{p}/") for p in _DOC_PATHS)
+
+
 if _static_dir:
     # Narrowed to a non-None Path for use inside the closure below (mypy does
     # not carry the outer truthiness check into the nested function).
@@ -157,8 +201,8 @@ if _static_dir:
     async def serve_static_frontend(request, call_next):
         path = request.url.path
 
-        # Let API, WebSocket, and health routes pass through to FastAPI
-        if path.startswith(("/api/", "/ws/", "/health")):
+        # Let API, WebSocket, health and OpenAPI-docs routes pass through
+        if _backend_owned(path):
             return await call_next(request)
 
         # Try to serve a static file

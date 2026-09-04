@@ -5,19 +5,25 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.brokers import BROKER_REGISTRY, get_broker
-from app.brokers.base import BrokerAdapter
+from app.brokers.base import BrokerAdapter, BrokerHolding
 from app.core.markets import currency_for
 from app.models.broker_connection import BrokerConnection
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
+from app.models.transaction import Transaction
 from app.utils.security import decrypt_value as _decrypt
 from app.utils.security import encrypt_value as _encrypt
 
 logger = logging.getLogger(__name__)
+
+# Quantity difference below which a broker position is considered unchanged.
+# Fractional units (mutual-fund style) are stored at 6 dp, so this is well
+# under one displayable unit while absorbing float noise.
+_QTY_EPSILON = 1e-6
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +180,84 @@ async def disconnect_broker(
 # sync_holdings
 # ---------------------------------------------------------------------------
 
+async def _transaction_count(holding_id: int, db: AsyncSession) -> int:
+    """How many ledger rows a holding already has."""
+    result = await db.execute(
+        select(func.count())
+        .select_from(Transaction)
+        .where(Transaction.holding_id == holding_id)
+    )
+    return int(result.scalar() or 0)
+
+
+async def _reconcile_holding_to_broker(
+    holding: Holding,
+    bh: BrokerHolding,
+    db: AsyncSession,
+) -> None:
+    """Move ``holding`` to the broker's quantity THROUGH the transaction ledger.
+
+    ``cumulative_quantity`` / ``average_price`` are derived columns:
+    ``portfolio_service.calculate_cumulative_holding`` rebuilds both from
+    ``transactions`` alone. Broker sync used to assign them directly and write
+    no ledger at all, so the next code path that recomputed a holding — a
+    recorded dividend, an AI-logged trade, a CSV import — replaced 246
+    broker-synced shares with whatever the (empty) ledger said, i.e. zero, and
+    took the portfolio value, P&L and tax basis with it.
+
+    So write the ledger instead:
+
+    * a holding that has no ledger yet is seeded with a BUY for the quantity it
+      already shows (the same heal the ``/transactions/backfill`` route does),
+      which also repairs positions created by earlier broker syncs;
+    * any remaining difference against the broker's figure is recorded as a
+      reconciling BUY or SELL.
+    """
+    from app.services.portfolio_service import calculate_cumulative_holding
+
+    today = datetime.now(UTC).date()
+    existing_qty = float(holding.cumulative_quantity or 0)
+
+    if existing_qty > 0 and await _transaction_count(holding.id, db) == 0:
+        db.add(
+            Transaction(
+                holding_id=holding.id,
+                transaction_type="BUY",
+                date=holding.created_at.date() if holding.created_at else today,
+                quantity=existing_qty,
+                price=float(holding.average_price or 0),
+                brokerage=0,
+                source="BROKER",
+                notes="Seeded from existing holding during broker sync",
+            )
+        )
+        await db.flush()
+
+    delta = float(bh.quantity) - existing_qty
+    if abs(delta) > _QTY_EPSILON:
+        db.add(
+            Transaction(
+                holding_id=holding.id,
+                transaction_type="BUY" if delta > 0 else "SELL",
+                date=today,
+                quantity=abs(delta),
+                price=float(bh.average_price),
+                brokerage=0,
+                source="BROKER",
+                notes=(
+                    "Opening position from broker sync"
+                    if existing_qty == 0
+                    else "Broker sync reconciliation"
+                ),
+            )
+        )
+        await db.flush()
+
+    # Rebuild the derived columns from the ledger we just wrote, so the two can
+    # never disagree again.
+    await calculate_cumulative_holding(holding.id, db)
+
+
 async def sync_holdings(
     connection_id: int,
     user_id: int,
@@ -219,11 +303,11 @@ async def sync_holdings(
 
             if existing_holding:
                 # Update existing holding
-                existing_holding.cumulative_quantity = bh.quantity
-                existing_holding.average_price = bh.average_price
                 if bh.last_price is not None:
                     existing_holding.current_price = bh.last_price
                     existing_holding.last_price_update = datetime.now(UTC)
+                # Quantity/average price come from the ledger, never assigned.
+                await _reconcile_holding_to_broker(existing_holding, bh, db)
                 updated_count += 1
             else:
                 # Create new holding
@@ -233,14 +317,19 @@ async def sync_holdings(
                     stock_name=bh.symbol,  # Use symbol as name; can be enriched later
                     exchange=bh.exchange,
                     currency=currency_for(bh.exchange),
-                    cumulative_quantity=bh.quantity,
-                    average_price=bh.average_price,
+                    cumulative_quantity=0,
+                    average_price=0,
                     current_price=bh.last_price,
                     last_price_update=(
                         datetime.now(UTC) if bh.last_price else None
                     ),
                 )
                 db.add(new_holding)
+                await db.flush()  # assign new_holding.id for the ledger row
+                # Seed the opening BUY, then derive the totals from it — a
+                # holding created with bare cumulative_quantity and no ledger
+                # is exactly the position that later gets wiped to zero.
+                await _reconcile_holding_to_broker(new_holding, bh, db)
                 new_count += 1
         except Exception as exc:
             error_msg = f"Error syncing {bh.symbol}: {exc}"

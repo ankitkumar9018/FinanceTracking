@@ -32,6 +32,33 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+# The user-entered inputs behind the computed action zone. Exported (and
+# re-imported) together so a CSV/XLSX round-trip keeps the zone configuration.
+_ZONE_FIELDS = (
+    "lower_mid_range_1", "lower_mid_range_2",
+    "upper_mid_range_1", "upper_mid_range_2",
+    "base_level", "top_level",
+)
+
+
+def _num_or_none(value: object) -> float | None:
+    """Render a nullable Numeric column as a plain float (or an empty cell)."""
+    return float(value) if value is not None else None  # type: ignore[arg-type]
+
+
+def _zone_cells(holding: Holding) -> list[object]:
+    """The six zone levels plus notes, in the exported column order.
+
+    Notes go through the same neutralisation as the CSV: openpyxl turns a
+    string starting with ``=`` into a live formula, so free text has to be
+    escaped there too.
+    """
+    return [
+        *(_num_or_none(getattr(holding, field)) for field in _ZONE_FIELDS),
+        _sanitize_csv_cell(holding.notes),
+    ]
+
+
 def _sanitize_csv_cell(value: object) -> object:
     """Prevent CSV formula injection by prefixing dangerous characters.
 
@@ -62,9 +89,16 @@ async def export_holdings_csv(portfolio_id: int, db: AsyncSession) -> str:
 
     output = io.StringIO()
     writer = csv.writer(output)
+    # The six zone levels and the notes are exported alongside the computed
+    # action zone: they are the *inputs* the zone is derived from, they are
+    # user-entered, and the CSV importer maps these exact header spellings back
+    # (``csv_import_service._COLUMN_ALIASES``). Without them, exporting and
+    # re-importing holdings.csv silently wipes the whole 5-zone configuration.
     writer.writerow([
         "Stock Symbol", "Stock Name", "Exchange", "Quantity", "Avg Price",
         "Current Price", "P&L %", "Action Needed", "RSI", "Sector",
+        "Lower Mid 1", "Lower Mid 2", "Upper Mid 1", "Upper Mid 2",
+        "Base Level", "Top Level", "Notes",
     ])
 
     for h in portfolio.holdings:
@@ -82,6 +116,8 @@ async def export_holdings_csv(portfolio_id: int, db: AsyncSession) -> str:
             _sanitize_csv_cell(h.action_needed),
             h.current_rsi,
             _sanitize_csv_cell(h.sector),
+            *(_num_or_none(getattr(h, field)) for field in _ZONE_FIELDS),
+            _sanitize_csv_cell(h.notes),
         ])
 
     return output.getvalue()
@@ -647,6 +683,10 @@ async def export_workbook_xlsx(portfolio_id: int, db: AsyncSession) -> bytes:
     _xlsx_header(ws_h, [
         "Symbol", "Exchange", "Quantity", "Avg Price", "Current Price",
         "Invested", "Current Value", "P&L", "P&L %",
+        # Same reason as the holdings CSV: the zone levels are user input, not
+        # derived data, so a workbook that omits them cannot round-trip.
+        "Lower Mid 1", "Lower Mid 2", "Upper Mid 1", "Upper Mid 2",
+        "Base Level", "Top Level", "Notes",
     ])
 
     # Same policy as the HTML report: unpriced holdings render "—" for
@@ -666,6 +706,7 @@ async def export_workbook_xlsx(portfolio_id: int, db: AsyncSession) -> bytes:
             ws_h.append([
                 h.stock_symbol, h.exchange, qty, avg, "—",
                 round(invested, 2), "—", "—", "—",
+                *_zone_cells(h),
             ])
             continue
         cur = float(h.current_price)  # type: ignore[arg-type]
@@ -677,6 +718,7 @@ async def export_workbook_xlsx(portfolio_id: int, db: AsyncSession) -> bytes:
             h.stock_symbol, h.exchange, qty, avg, cur,
             round(invested, 2), round(current_value, 2),
             round(pnl, 2), round(pnl_pct, 2),
+            *_zone_cells(h),
         ])
 
     # ── Transactions ────────────────────────────────────────────────────

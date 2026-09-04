@@ -467,7 +467,14 @@ async def change_password(
     user.password_hash = hash_password(body.new_password)
     # Bump the password-change stamp so tokens minted before now (carrying an
     # older "pcat") are rejected by get_current_user.
-    user.password_changed_at = datetime.now(UTC)
+    #
+    # Stored as *naive* UTC to match how the DateTime column round-trips (both
+    # SQLite and a TIMESTAMP-WITHOUT-TIME-ZONE column drop the offset). The
+    # replacement pair below is minted from this same value, so its "pcat"
+    # equals what ``validate_pcat`` recomputes from the reloaded row on the very
+    # next request — mint it from an aware value instead and, on a server west
+    # of UTC, the fresh token is rejected the moment it is used.
+    user.password_changed_at = datetime.now(UTC).replace(tzinfo=None)
     await db.flush()
     await audit_log(
         db,
@@ -476,11 +483,23 @@ async def change_password(
         resource_type="user",
         resource_id=user.id,
     )
-    return {"message": "Password updated successfully"}
+    # Changing the password revokes every token minted before now — including
+    # the access token that authenticated this request and the refresh token in
+    # the client's storage. Hand back a fresh pair so the caller can stay signed
+    # in instead of being silently bounced to the login screen on its next call.
+    token_data = _token_payload(user)
+    return {
+        "message": "Password updated successfully",
+        "access_token": create_access_token(token_data),
+        "refresh_token": create_refresh_token(token_data),
+        "token_type": "bearer",
+    }
 
 
 @router.post("/2fa/setup")
+@limiter.limit("10/minute")
 async def setup_2fa(
+    request: Request,
     user: User = Depends(get_current_user),
 ) -> dict:
     """Generate a TOTP secret and return the provisioning URI.
@@ -555,7 +574,9 @@ async def backup_codes_status(
 
 
 @router.post("/2fa/backup-codes/regenerate", response_model=BackupCodesResponse)
+@limiter.limit("10/minute")
 async def regenerate_backup_codes(
+    request: Request,
     body: BackupCodesRegenerateRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -563,6 +584,12 @@ async def regenerate_backup_codes(
     """Generate a fresh set of backup codes, invalidating any previous ones.
 
     Requires a current TOTP code. The raw codes are returned exactly once.
+
+    Throttled like every other credential-verifying route: this endpoint checks
+    a 6-digit TOTP (valid_window=1, so 3 codes live at a time out of 10^6), and
+    success both mints codes for the caller and invalidates the owner's existing
+    ones. Unthrottled, a stolen access token could brute-force the second factor
+    in minutes and lock the real owner out of recovery.
     """
     if not user.totp_secret:
         raise HTTPException(status_code=400, detail="2FA is not enabled")

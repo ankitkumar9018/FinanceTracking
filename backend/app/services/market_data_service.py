@@ -416,36 +416,49 @@ async def _store_price_history(
     """Upsert fetched OHLCV bars into ``price_history``.
 
     Extracted so holdings and watchlist refreshes share one implementation.
+
+    The existing rows for the whole batch are read in ONE query keyed by date;
+    this used to be a SELECT per bar (~21 round-trips per symbol per refresh).
     """
-    for bar in ohlcv:
-        bar_date = bar.get("date") or today
-        hist_result = await db.execute(
+    if not ohlcv:
+        return
+
+    bar_dates = [bar.get("date") or today for bar in ohlcv]
+    existing_rows = (
+        await db.execute(
             select(PriceHistory).where(
                 PriceHistory.stock_symbol == symbol,
                 PriceHistory.exchange == exchange,
-                PriceHistory.date == bar_date,
+                PriceHistory.date.in_(set(bar_dates)),
             )
         )
-        existing = hist_result.scalar_one_or_none()
+    ).scalars().all()
+    existing_by_date = {row.date: row for row in existing_rows}
+
+    for bar, bar_date in zip(ohlcv, bar_dates, strict=True):
+        existing = existing_by_date.get(bar_date)
         # RSI is only meaningful for the most recent bar (it is the
         # value computed for "now"); older back-filled bars keep
         # whatever RSI they already had rather than being stamped with
         # today's figure.
         is_latest = bar is ohlcv[-1]
         if existing is None:
-            db.add(
-                PriceHistory(
-                    stock_symbol=symbol,
-                    exchange=exchange,
-                    date=bar_date,
-                    open=bar["open"],
-                    high=bar["high"],
-                    low=bar["low"],
-                    close=bar["close"],
-                    volume=bar["volume"],
-                    rsi_14=rsi if is_latest else None,
-                )
+            row = PriceHistory(
+                stock_symbol=symbol,
+                exchange=exchange,
+                date=bar_date,
+                open=bar["open"],
+                high=bar["high"],
+                low=bar["low"],
+                close=bar["close"],
+                volume=bar["volume"],
+                rsi_14=rsi if is_latest else None,
             )
+            db.add(row)
+            # Two bars with the same date in one payload must update the row we
+            # just queued, not insert a duplicate (the per-bar SELECT used to
+            # find it via autoflush).
+            existing_by_date[bar_date] = row
         else:
             # Intraday row for the same bar date: update with the
             # latest values so the EOD close replaces the midday one.
@@ -474,6 +487,14 @@ async def refresh_all_prices(
     price actually changed hands, so callers (``fetch_prices_task``) can push
     the new numbers to subscribed WebSocket clients instead of leaving the
     browser frozen until a manual reload.
+
+    Distinct ``(symbol, exchange)`` pairs are fetched ONCE and applied to every
+    holding that references them — the same stock held in two portfolios (or by
+    two users in the background-task mode) used to cost a full triple fetch
+    (quote + RSI history + 30-day history) and a full price-history rewrite per
+    holding, burning N× the Yahoo rate-limit budget that pushes yfinance into
+    the throttling that leaves holdings unpriced. Same treatment
+    ``refresh_watchlist_prices`` already gives its rows.
     """
     stmt = select(Holding)
     if user_id is not None:
@@ -486,22 +507,30 @@ async def refresh_all_prices(
     if not holdings:
         return {"updated": 0, "failed": 0, "total": 0, "updates": []}
 
+    # ── One fetch per distinct symbol, shared across duplicate holdings ──
+    pairs: list[tuple[str, str]] = []
+    for h in holdings:
+        pair = (h.stock_symbol, h.exchange)
+        if pair not in pairs:
+            pairs.append(pair)
+
     # ── Parallel fetch: bounded concurrency, timers start on slot acquire ──
     fetch_results = await gather_bounded(
-        [
-            partial(_fetch_holding_data, h.stock_symbol, h.exchange)
-            for h in holdings
-        ],
+        [partial(_fetch_holding_data, symbol, exchange) for symbol, exchange in pairs],
         limit=_MAX_CONCURRENT_FETCHES,
     )
+    by_pair = dict(zip(pairs, fetch_results, strict=True))
 
     # ── Sequential DB writes ─────────────────────────────────────────
     updated = 0
     failed = 0
     updates: list[dict] = []
     today = datetime.now(UTC).date()
+    history_done: set[tuple[str, str]] = set()
 
-    for holding, fetch_result in zip(holdings, fetch_results):
+    for holding in holdings:
+        pair = (holding.stock_symbol, holding.exchange)
+        fetch_result = by_pair.get(pair)
         if (
             isinstance(fetch_result, Exception)
             or not isinstance(fetch_result, dict)
@@ -528,14 +557,18 @@ async def refresh_all_prices(
 
             # Store price in history table under the bar's own trading date —
             # not "today", which would fabricate rows on weekends/holidays.
-            await _store_price_history(
-                db,
-                holding.stock_symbol,
-                holding.exchange,
-                fetch_result.get("ohlcv", []),
-                holding.current_rsi,
-                today,
-            )
+            # Only once per distinct symbol: the bars are identical for every
+            # holding referencing it.
+            if pair not in history_done:
+                history_done.add(pair)
+                await _store_price_history(
+                    db,
+                    holding.stock_symbol,
+                    holding.exchange,
+                    fetch_result.get("ohlcv", []),
+                    holding.current_rsi,
+                    today,
+                )
 
             updated += 1
             updates.append(_price_update_payload(holding))

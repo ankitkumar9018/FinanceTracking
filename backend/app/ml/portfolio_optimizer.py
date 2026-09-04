@@ -47,6 +47,11 @@ class OptimizationResult:
     expected_volatility: float
     sharpe_ratio: float
     efficient_frontier: list[dict] = field(default_factory=list)
+    # False when scipy is missing and the sampling fallback produced these
+    # weights — the answer is then an approximation, not a solved optimum.
+    # scipy lives in the optional [ml] extra, so a default install ships the
+    # approximate path and the caller deserves to be told.
+    exact: bool = True
 
 
 @dataclass
@@ -142,6 +147,33 @@ def _optimize_scipy(
         return np.ones(n) / n
 
 
+# Dirichlet concentration for the sampling fallback. alpha < 1 pushes mass
+# toward the EDGES of the simplex; alpha == 1 is uniform-on-the-simplex and
+# `rng.random(n) / sum` (the old sampler) is even more centre-heavy than that —
+# with 12 assets it effectively never visited a corner, so the min-variance and
+# max-return optima (which are corner or near-corner solutions) were
+# unreachable and every answer collapsed toward equal weight.
+_DIRICHLET_ALPHA = 0.3
+
+
+def _sample_weights(n: int, num_samples: int, seed: int = 42) -> np.ndarray:
+    """Long-only weight samples that actually cover the simplex.
+
+    Returns a ``(m, n)`` array whose rows each sum to 1: the ``n`` single-asset
+    corners first (so a corner optimum is always found EXACTLY), then equal
+    weight, then Dirichlet(alpha<1) draws for the interior and the edges.
+    Deterministic for a given seed.
+    """
+    rng = np.random.default_rng(seed)
+    corners = np.eye(n)
+    equal = np.ones((1, n)) / n
+    remaining = max(num_samples - n - 1, 0)
+    if remaining:
+        interior = rng.dirichlet(np.full(n, _DIRICHLET_ALPHA), size=remaining)
+        return np.vstack([corners, equal, interior])
+    return np.vstack([corners, equal])
+
+
 def _optimize_fallback(
     mean_daily: np.ndarray,
     cov_daily: np.ndarray,
@@ -151,17 +183,13 @@ def _optimize_fallback(
 ) -> np.ndarray:
     """Monte Carlo fallback when scipy is not available.
 
-    Generates random portfolios and selects the best one according to objective.
+    Generates random portfolios (corners included — see :func:`_sample_weights`)
+    and selects the best one according to objective.
     """
     best_weights = np.ones(n) / n
     best_metric = float("-inf") if objective != "min_variance" else float("inf")
 
-    rng = np.random.default_rng(42)
-
-    for _ in range(num_samples):
-        w = rng.random(n)
-        w = w / w.sum()
-
+    for w in _sample_weights(n, num_samples):
         if objective == "min_variance":
             metric = float(w @ cov_daily @ w)
             if metric < best_metric:
@@ -198,16 +226,18 @@ def _generate_efficient_frontier(
 
     Deterministic (fixed RNG seed) so the same inputs always yield the same
     frontier, and dependency-free (numpy only — no scipy required).
+
+    Uses the same corner-inclusive sampler as the optimiser fallback, so the
+    envelope reaches the real high-return / low-volatility ends instead of
+    hugging the equal-weight cloud in the middle.
     """
-    rng = np.random.default_rng(42)
-    num_samples = max(num_points * 500, 5000)
+    samples = _sample_weights(n, max(num_points * 500, 5000))
+    num_samples = len(samples)
 
     rets = np.empty(num_samples)
     vols = np.empty(num_samples)
     sharpes = np.empty(num_samples)
-    for i in range(num_samples):
-        w = rng.random(n)
-        w = w / w.sum()
+    for i, w in enumerate(samples):
         rets[i] = _portfolio_return(mean_daily, w)
         vols[i] = _annualized_volatility(cov_daily, w)
         sharpes[i] = _portfolio_sharpe(mean_daily, cov_daily, w)
@@ -357,7 +387,12 @@ async def optimize_portfolio(
     if HAS_SCIPY:
         optimal_raw = _optimize_scipy(mean_daily, cov_daily, n, objective)
     else:
-        logger.info("scipy not available — using Monte Carlo fallback for optimisation")
+        logger.warning(
+            "scipy not available — optimising %d holdings by sampling; the "
+            "result is an approximation (install the 'ml' extra for an exact "
+            "solve)",
+            n,
+        )
         optimal_raw = _optimize_fallback(mean_daily, cov_daily, n, objective)
 
     optimal_by_key = {
@@ -399,6 +434,7 @@ async def optimize_portfolio(
         expected_volatility=round(exp_volatility * 100, 2),
         sharpe_ratio=round(sharpe, 4),
         efficient_frontier=frontier,
+        exact=HAS_SCIPY,
     )
 
     # Generate rebalance suggestions

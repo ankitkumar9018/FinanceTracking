@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
@@ -57,6 +60,7 @@ from app.services.ofx_qif_import_service import (
     import_statement,
     parse_ofx,
     parse_qif,
+    split_cash_rows,
 )
 
 logger = logging.getLogger(__name__)
@@ -124,6 +128,72 @@ async def _read_upload(file: UploadFile, allowed_exts: tuple[str, ...]) -> bytes
     return file_bytes
 
 
+def _parse_upload(
+    parser: Callable[[bytes], list[dict]], file_bytes: bytes, *, kind: str
+) -> list[dict]:
+    """Run an import parser, mapping any parse failure to an actionable 400.
+
+    Parsers raise a spread of low-level errors on malformed input — ``_csv.Error``
+    ("field larger than field limit") on an over-long quoted field, openpyxl's
+    ``BadZipFile`` on a mis-named upload, ``AttributeError``/``TypeError`` deeper
+    in — and the app registers no catch-all handler, so anything not caught here
+    reaches the user as a bare 500 plus a traceback in the log.
+    """
+    try:
+        return parser(file_bytes)
+    except Exception as exc:
+        logger.warning("%s parse failed: %s", kind, exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to parse {kind} file. Please check the format.",
+        ) from exc
+
+
+def _count_csv_data_rows(file_bytes: bytes) -> int | None:
+    """Count the non-empty data rows (header excluded) in an uploaded CSV.
+
+    Used only to tell the user how many rows the parser dropped. Decoding is
+    deliberately lossy (``errors="replace"``) because delimiters and quotes are
+    ASCII in every encoding the importer accepts, so the row structure survives
+    even when a byte does not. Returns ``None`` when the file cannot be counted
+    at all — the caller then simply omits the skipped-row report.
+    """
+    try:
+        reader = csv.reader(io.StringIO(file_bytes.decode("utf-8-sig", errors="replace")))
+        if next(reader, None) is None:
+            return 0
+        return sum(
+            1 for row in reader
+            if any(str(cell).strip() for cell in row if cell is not None)
+        )
+    except Exception:
+        logger.debug("Could not count CSV data rows for the skip report", exc_info=True)
+        return None
+
+
+def _row_report(rows_parsed: int, rows_read: int | None, *, noun: str = "rows") -> dict:
+    """Build the row-accounting part of an import response.
+
+    The parsers drop unusable rows with a log warning and return only the
+    survivors, so ``rows_parsed`` alone cannot distinguish "imported all 400
+    trades" from "imported 10 of 400". Reporting what was read and what was
+    skipped — plus a plain-language warning — is what makes a partial import
+    visible instead of a green "Import Successful".
+    """
+    report: dict = {"rows_parsed": rows_parsed}
+    if rows_read is None or rows_read < rows_parsed:
+        return report
+    report["rows_read"] = rows_read
+    report["rows_skipped"] = rows_read - rows_parsed
+    if report["rows_skipped"]:
+        report["warning"] = (
+            f"{report['rows_skipped']} of {rows_read} {noun} could not be read "
+            "and were skipped (missing required fields, an unrecognised date, "
+            "or a non-numeric amount). Check the file against the template."
+        )
+    return report
+
+
 # ===========================================================================
 # EXCEL IMPORT / EXPORT
 # ===========================================================================
@@ -138,14 +208,7 @@ async def upload_excel(
     await verify_portfolio_ownership(portfolio_id, user, db)
     file_bytes = await _read_upload(file, (".xlsx",))
 
-    try:
-        parsed = parse_excel(file_bytes)
-    except Exception as exc:
-        logger.warning("Excel parse failed: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to parse Excel file. Please check the format.",
-        )
+    parsed = _parse_upload(parse_excel, file_bytes, kind="Excel")
 
     if not parsed:
         raise HTTPException(
@@ -250,14 +313,7 @@ async def upload_csv(
     await verify_portfolio_ownership(portfolio_id, user, db)
     file_bytes = await _read_upload(file, (".csv",))
 
-    try:
-        parsed = parse_csv(file_bytes)
-    except Exception as exc:
-        logger.warning("CSV parse failed: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to parse CSV file. Please check the format.",
-        )
+    parsed = _parse_upload(parse_csv, file_bytes, kind="CSV")
 
     if not parsed:
         raise HTTPException(
@@ -266,7 +322,11 @@ async def upload_csv(
         )
 
     summary = await import_to_portfolio(parsed, portfolio_id, db, source="CSV")
-    return {"status": "success", "rows_parsed": len(parsed), **summary}
+    return {
+        "status": "success",
+        **_row_report(len(parsed), _count_csv_data_rows(file_bytes)),
+        **summary,
+    }
 
 
 @router.get("/export/template/csv")
@@ -333,7 +393,7 @@ async def upload_csv_dividends(
     await verify_portfolio_ownership(portfolio_id, user, db)
     file_bytes = await _read_upload(file, (".csv",))
 
-    parsed = parse_csv_dividends(file_bytes)
+    parsed = _parse_upload(parse_csv_dividends, file_bytes, kind="dividend CSV")
     if not parsed:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -341,7 +401,13 @@ async def upload_csv_dividends(
         )
 
     summary = await import_dividends(parsed, portfolio_id, db)
-    return {"status": "success", "rows_parsed": len(parsed), **summary}
+    return {
+        "status": "success",
+        **_row_report(
+            len(parsed), _count_csv_data_rows(file_bytes), noun="dividend rows"
+        ),
+        **summary,
+    }
 
 
 @router.post("/csv/mutual-funds")
@@ -354,7 +420,9 @@ async def upload_csv_mutual_funds(
     await verify_portfolio_ownership(portfolio_id, user, db)
     file_bytes = await _read_upload(file, (".csv",))
 
-    parsed = parse_csv_mutual_funds(file_bytes)
+    parsed = _parse_upload(
+        parse_csv_mutual_funds, file_bytes, kind="mutual fund CSV"
+    )
     if not parsed:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -362,7 +430,13 @@ async def upload_csv_mutual_funds(
         )
 
     summary = await import_mutual_funds(parsed, portfolio_id, db)
-    return {"status": "success", "rows_parsed": len(parsed), **summary}
+    return {
+        "status": "success",
+        **_row_report(
+            len(parsed), _count_csv_data_rows(file_bytes), noun="mutual fund rows"
+        ),
+        **summary,
+    }
 
 
 @router.post("/csv/tax-records")
@@ -374,7 +448,9 @@ async def upload_csv_tax_records(
     """Upload a CSV file to import tax records (user-level, no portfolio needed)."""
     file_bytes = await _read_upload(file, (".csv",))
 
-    parsed = parse_csv_tax_records(file_bytes)
+    parsed = _parse_upload(
+        parse_csv_tax_records, file_bytes, kind="tax record CSV"
+    )
     if not parsed:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -382,7 +458,13 @@ async def upload_csv_tax_records(
         )
 
     summary = await import_tax_records(parsed, user.id, db)
-    return {"status": "success", "rows_parsed": len(parsed), **summary}
+    return {
+        "status": "success",
+        **_row_report(
+            len(parsed), _count_csv_data_rows(file_bytes), noun="tax record rows"
+        ),
+        **summary,
+    }
 
 
 @router.get("/export/template/dividends")
@@ -419,6 +501,44 @@ async def download_tax_record_template(user: User = Depends(get_current_user)) -
 # OFX / QIF / CAS STATEMENT IMPORT
 # ===========================================================================
 
+async def _import_statement_upload(
+    parsed: list[dict], portfolio_id: int, db: AsyncSession, *, fmt: str
+) -> dict:
+    """Import parsed OFX/QIF rows, refusing a statement that is all cash.
+
+    Bank lines carry a payee, not a security (see
+    ``ofx_qif_import_service.split_cash_rows``). A file with nothing else is a
+    bank statement, not a broker statement: importing it would create one junk
+    holding per payee, so it is rejected with an explanation instead.
+    """
+    investment_rows, cash_rows = split_cash_rows(parsed)
+    if not investment_rows:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"This {fmt} file contains only bank/cash transactions "
+                f"({len(cash_rows)} line(s)) and no investment trades. A cash "
+                "movement is a payee, not a position — importing it would add one "
+                "holding per payee and inflate Total Invested. Upload a broker "
+                "statement with buy/sell transactions instead."
+            ),
+        )
+
+    summary = await import_statement(parsed, portfolio_id, db, source=fmt)
+    result = {
+        "status": "success",
+        "rows_parsed": len(investment_rows),
+        "rows_read": len(parsed),
+        **summary,
+    }
+    if cash_rows:
+        result["warning"] = (
+            f"{len(cash_rows)} bank/cash line(s) were read but not imported — a "
+            "cash movement is a payee, not a security, so it is not a holding."
+        )
+    return result
+
+
 @router.post("/import/ofx")
 async def import_ofx_statement(
     file: UploadFile, portfolio_id: int,
@@ -429,14 +549,7 @@ async def import_ofx_statement(
     await verify_portfolio_ownership(portfolio_id, user, db)
     file_bytes = await _read_upload(file, (".ofx", ".qfx"))
 
-    try:
-        parsed = parse_ofx(file_bytes)
-    except Exception as exc:
-        logger.warning("OFX parse failed: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to parse OFX file. Please check the format.",
-        )
+    parsed = _parse_upload(parse_ofx, file_bytes, kind="OFX")
 
     if not parsed:
         raise HTTPException(
@@ -444,8 +557,7 @@ async def import_ofx_statement(
             detail="No valid rows found in the OFX file",
         )
 
-    summary = await import_statement(parsed, portfolio_id, db, source="OFX")
-    return {"status": "success", "rows_parsed": len(parsed), **summary}
+    return await _import_statement_upload(parsed, portfolio_id, db, fmt="OFX")
 
 
 @router.post("/import/qif")
@@ -458,14 +570,7 @@ async def import_qif_statement(
     await verify_portfolio_ownership(portfolio_id, user, db)
     file_bytes = await _read_upload(file, (".qif",))
 
-    try:
-        parsed = parse_qif(file_bytes)
-    except Exception as exc:
-        logger.warning("QIF parse failed: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to parse QIF file. Please check the format.",
-        )
+    parsed = _parse_upload(parse_qif, file_bytes, kind="QIF")
 
     if not parsed:
         raise HTTPException(
@@ -473,8 +578,7 @@ async def import_qif_statement(
             detail="No valid rows found in the QIF file",
         )
 
-    summary = await import_statement(parsed, portfolio_id, db, source="QIF")
-    return {"status": "success", "rows_parsed": len(parsed), **summary}
+    return await _import_statement_upload(parsed, portfolio_id, db, fmt="QIF")
 
 
 @router.post("/import/cas")
@@ -569,6 +673,24 @@ async def upload_json(
         summary = await import_portfolio_json(data, user.id, db)
     except ValueError as exc:
         raise map_value_error(exc) from exc
+    except KeyError as exc:
+        # The restorer indexes required keys directly (h_data["stock_symbol"],
+        # tx_data["price"], …), so a hand-edited or truncated backup would
+        # otherwise surface as a bare 500.
+        logger.warning("JSON backup is missing a required field: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Malformed backup file: missing required field {exc}.",
+        ) from exc
+    except TypeError as exc:
+        logger.warning("JSON backup has a field of the wrong type: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Malformed backup file: a field has the wrong type "
+                "(expected a number, date or object)."
+            ),
+        ) from exc
 
     return {"status": "success", **summary}
 

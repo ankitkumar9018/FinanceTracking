@@ -58,6 +58,17 @@ async def websocket_alert_stream(
                 await websocket.send_json({"type": "error", "message": "Invalid JSON"})
                 continue
 
+            # A well-formed but non-object frame ([1,2], "hi", 5) is valid JSON,
+            # so it never raises above. Reject it here: calling .get() on it
+            # raises AttributeError, which escapes to the broad handler below and
+            # tears down the whole stream over one malformed client message.
+            if not isinstance(raw, dict):
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Expected a JSON object",
+                })
+                continue
+
             action: str | None = raw.get("action")
 
             if action == "ack":

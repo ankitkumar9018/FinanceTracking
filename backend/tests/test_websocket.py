@@ -311,3 +311,54 @@ async def test_close_quietly_swallows_close_errors() -> None:
 
     # Must not raise.
     await ConnectionManager._close_quietly(_ExplodingWS())  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Malformed (non-object) JSON frames must not kill the stream
+# ---------------------------------------------------------------------------
+
+
+class TestNonObjectFrames:
+    """A valid-JSON but non-object frame is rejected, not fatal.
+
+    ``receive_json`` only raises ValueError for *unparseable* JSON, so a frame
+    like ``[1, 2]`` or ``"hi"`` used to reach ``raw.get("action")`` and raise
+    AttributeError — which escaped to the broad handler, logged a traceback and
+    tore down that user's whole live stream over one bad client message.
+    """
+
+    @pytest.mark.parametrize("frame", [[1, 2], "hi", 5, None])
+    def test_price_stream_survives_non_object_frame(
+        self, ws_client: TestClient, valid_ws_token: str, frame
+    ) -> None:
+        with ws_client.websocket_connect(
+            f"/ws/prices?token={valid_ws_token}"
+        ) as ws:
+            ws.send_json(frame)
+            data = ws.receive_json()
+            assert data["type"] == "error"
+            assert data["message"] == "Expected a JSON object"
+
+            # The connection is still usable afterwards.
+            ws.send_json({"action": "subscribe", "symbols": ["RELIANCE"]})
+            follow_up = ws.receive_json()
+            assert follow_up["type"] == "subscribed"
+            assert "RELIANCE" in follow_up["symbols"]
+
+    @pytest.mark.parametrize("frame", [[1, 2], "hi", 5, None])
+    def test_alert_stream_survives_non_object_frame(
+        self, ws_client: TestClient, valid_ws_token: str, frame
+    ) -> None:
+        with ws_client.websocket_connect(
+            f"/ws/alerts?token={valid_ws_token}"
+        ) as ws:
+            ws.send_json(frame)
+            data = ws.receive_json()
+            assert data["type"] == "error"
+            assert data["message"] == "Expected a JSON object"
+
+            # The connection is still usable afterwards.
+            ws.send_json({"action": "ack", "alert_id": 7})
+            follow_up = ws.receive_json()
+            assert follow_up["type"] == "ack_confirmed"
+            assert follow_up["alert_id"] == 7

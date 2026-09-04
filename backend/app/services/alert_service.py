@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,116 @@ logger = logging.getLogger(__name__)
 
 # Cooldown: don't re-trigger the same alert within this many seconds
 ALERT_COOLDOWN_SECONDS = 300  # 5 minutes
+
+# Condition keys that ask for a single notification: ``{"above": 1400,
+# "once": true}``. ``Alert.condition`` is a free-form JSON dict that the API
+# passes through untouched, so this needs no schema or model change.
+ONE_SHOT_KEYS = ("one_shot", "once")
+
+# ---------------------------------------------------------------------------
+# Edge-trigger state
+# ---------------------------------------------------------------------------
+# Alerts used to be purely *level*-triggered: the 5-minute cooldown was the
+# only de-duplication, so a threshold that got crossed once and then simply
+# stayed crossed re-notified every 5 minutes forever — up to 288 emails/SMS a
+# day for one alert. Dispatch now happens only on a false -> true transition
+# of the condition (a *rising edge*).
+#
+# The previous truth value lives in this process-local map rather than in a new
+# ``Alert`` column (that model is not owned here). Both consequences are
+# benign: a restart forgets the latch, so a still-true alert notifies once more
+# after startup (the cooldown still applies), and only the single scheduler
+# process evaluates alerts, so there is no cross-process consistency problem.
+# For a durable latch, see ``one_shot`` below, which persists via ``is_active``.
+#
+# Keyed by alert id *and* the alert's ``created_at`` so a recycled primary key
+# (SQLite hands out max(id)+1 again once the last row is deleted) cannot
+# inherit the latch of the alert it replaced and swallow its first
+# notification.
+_CONDITION_WAS_TRUE: dict[int, tuple[datetime | None, bool]] = {}
+
+
+def reset_edge_state(alert_id: int | None = None) -> None:
+    """Forget the latched truth value for one alert, or for all of them.
+
+    Call this after an alert's condition is edited so the next evaluation is
+    treated as a fresh rising edge rather than a continuation of the old one.
+    """
+    if alert_id is None:
+        _CONDITION_WAS_TRUE.clear()
+    else:
+        _CONDITION_WAS_TRUE.pop(alert_id, None)
+
+
+def _alert_identity(alert: Alert) -> datetime | None:
+    """The alert's ``created_at``, or None if it isn't loaded on this instance.
+
+    Guarded because a lazy attribute load from this synchronous helper would
+    raise ``MissingGreenlet`` under the async session, and losing the identity
+    check must never be able to take the alert job down.
+    """
+    try:
+        return getattr(alert, "created_at", None)
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _remembered_condition_state(alert: Alert) -> tuple[datetime | None, bool]:
+    """Return ``(identity, was_true)`` for *alert*'s remembered truth value."""
+    identity = _alert_identity(alert)
+    remembered_identity, was_true = _CONDITION_WAS_TRUE.get(alert.id, (None, False))
+    if remembered_identity != identity:
+        was_true = False  # recycled id — the remembered state isn't ours
+    return identity, was_true
+
+
+def _record_condition_state(alert: Alert, condition_true: bool) -> bool:
+    """Store *alert*'s current truth value; report whether it just rose."""
+    identity, was_true = _remembered_condition_state(alert)
+    if condition_true:
+        _CONDITION_WAS_TRUE[alert.id] = (identity, True)
+    else:
+        _CONDITION_WAS_TRUE.pop(alert.id, None)
+    return condition_true and not was_true
+
+
+def _in_cooldown(alert: Alert, now: datetime) -> bool:
+    """Was this alert triggered less than ``ALERT_COOLDOWN_SECONDS`` ago?"""
+    last_triggered = alert.last_triggered
+    if not last_triggered:
+        return False
+    if last_triggered.tzinfo is None:
+        last_triggered = last_triggered.replace(tzinfo=UTC)
+    return (now - last_triggered).total_seconds() < ALERT_COOLDOWN_SECONDS
+
+
+def _is_one_shot(condition: Any) -> bool:
+    """Does this condition ask to fire only once and then deactivate?"""
+    if not isinstance(condition, dict):
+        return False
+    return any(bool(condition.get(key)) for key in ONE_SHOT_KEYS)
+
+
+def _as_float(value: Any, *, alert_id: int, key: str) -> float | None:
+    """Coerce a stored condition value to float, or None when it isn't numeric.
+
+    ``Alert.condition`` is a bare JSON dict with no value validation at the API
+    boundary, so a threshold saved as text used to raise ValueError straight
+    out of the evaluation — which aborted the alert cycle for *every* user, not
+    just the owner of the malformed alert.
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "alert %s: ignoring non-numeric condition value %r for key %r",
+            alert_id,
+            value,
+            key,
+        )
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +204,114 @@ def determine_action_needed(current_price: float | None, holding_or_item) -> str
 
 
 # ---------------------------------------------------------------------------
+# Condition evaluation (shared by holdings and watchlist items)
+# ---------------------------------------------------------------------------
+
+def _evaluate_alert(
+    alert: Alert, item: Any, price: float, rsi: float | None
+) -> str | None:
+    """Return the notification message when *alert*'s condition holds, else None.
+
+    Shared by the holding and the watchlist paths, which used to carry two
+    near-identical copies of this logic — and the watchlist copy silently
+    ignored CUSTOM (zone) alerts entirely, so a watchlist zone alert could
+    never fire.
+    """
+    condition = alert.condition if isinstance(alert.condition, dict) else {}
+    symbol = getattr(item, "stock_symbol", "?")
+
+    if alert.alert_type == "PRICE_RANGE":
+        above = _as_float(condition.get("above"), alert_id=alert.id, key="above")
+        below = _as_float(condition.get("below"), alert_id=alert.id, key="below")
+        if above is not None and price >= above:
+            return f"{symbol} price {price:.2f} is above threshold {above:.2f}"
+        if below is not None and price <= below:
+            return f"{symbol} price {price:.2f} is below threshold {below:.2f}"
+        return None
+
+    if alert.alert_type == "RSI":
+        if rsi is None:
+            return None
+        rsi_above = _as_float(
+            condition.get("rsi_above"), alert_id=alert.id, key="rsi_above"
+        )
+        rsi_below = _as_float(
+            condition.get("rsi_below"), alert_id=alert.id, key="rsi_below"
+        )
+        if rsi_above is not None and rsi >= rsi_above:
+            return f"{symbol} RSI {rsi:.1f} is above threshold {rsi_above:g}"
+        if rsi_below is not None and rsi <= rsi_below:
+            return f"{symbol} RSI {rsi:.1f} is below threshold {rsi_below:g}"
+        return None
+
+    if alert.alert_type == "CUSTOM":
+        action = determine_action_needed(price, item)
+        expected_action = condition.get("action_needed")
+        if expected_action and action == expected_action:
+            return f"{symbol} entered zone: {action} (price={price:.2f})"
+        return None
+
+    return None
+
+
+def _consider_alert(
+    alert: Alert,
+    item: Any,
+    price: float,
+    rsi: float | None,
+    now: datetime,
+    *,
+    update_state: bool,
+) -> dict | None:
+    """Evaluate one alert and decide whether it should notify right now.
+
+    ``update_state=False`` is the read-only view used by the alerts UI: it
+    reports every condition that currently holds and neither stamps
+    ``last_triggered`` nor touches the edge-trigger latch.  The dispatcher path
+    (``update_state=True``) additionally requires a *rising edge*, so an alert
+    whose condition merely stays true does not re-notify.
+    """
+    # The cooldown is checked before the latch is touched, so a rising edge
+    # that lands inside the cooldown window is deferred rather than consumed.
+    if _in_cooldown(alert, now):
+        return None
+
+    message = _evaluate_alert(alert, item, price, rsi)
+
+    if not update_state:
+        if message is None:
+            return None
+        return _triggered_payload(alert, item, message, now)
+
+    if not _record_condition_state(alert, message is not None) or message is None:
+        return None
+
+    triggered_at = datetime.now(UTC)
+    alert.last_triggered = triggered_at
+    if _is_one_shot(alert.condition):
+        # Durable one-shot: the latch above is process-local, is_active is not.
+        alert.is_active = False
+        reset_edge_state(alert.id)
+        logger.info("alert %s deactivated after its one-shot trigger", alert.id)
+    return _triggered_payload(alert, item, message, triggered_at)
+
+
+def _triggered_payload(
+    alert: Alert, item: Any, message: str, triggered_at: datetime
+) -> dict:
+    """Build the dict the background dispatcher and the API both consume."""
+    return {
+        "alert_id": alert.id,
+        "alert_type": alert.alert_type,
+        "condition": alert.condition,
+        "triggered_at": triggered_at,
+        "stock_symbol": getattr(item, "stock_symbol", None),
+        "message": message,
+        "channels": alert.channels,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Check alerts for a specific holding
 # ---------------------------------------------------------------------------
 
@@ -103,9 +322,9 @@ async def check_alerts_for_holding(
     they should trigger based on the holding's current price.
 
     ``update_state=False`` makes the check a pure read: ``last_triggered``
-    is not stamped. Use this from GET endpoints so a user viewing their
-    alerts doesn't put alerts into cooldown and suppress the background
-    dispatcher's real notifications.
+    is not stamped and the edge-trigger latch is not updated. Use this from
+    GET endpoints so a user viewing their alerts doesn't put alerts into
+    cooldown and suppress the background dispatcher's real notifications.
 
     Returns a list of triggered alert descriptions (dicts).
     """
@@ -123,85 +342,15 @@ async def check_alerts_for_holding(
         return triggered
 
     price = float(price)
-
+    rsi = float(holding.current_rsi) if holding.current_rsi is not None else None
     now = datetime.now(UTC)
 
     for alert in alerts:
-        # Deduplication: skip if triggered recently
-        if alert.last_triggered:
-            last_triggered = alert.last_triggered
-            if last_triggered.tzinfo is None:
-                last_triggered = last_triggered.replace(tzinfo=UTC)
-            elapsed = (now - last_triggered).total_seconds()
-            if elapsed < ALERT_COOLDOWN_SECONDS:
-                continue
-
-        should_trigger = False
-        message = ""
-
-        if alert.alert_type == "PRICE_RANGE":
-            # Check condition keys: above, below, between
-            above = alert.condition.get("above")
-            below = alert.condition.get("below")
-
-            if above is not None and price >= float(above):
-                should_trigger = True
-                message = (
-                    f"{holding.stock_symbol} price {price:.2f} is above "
-                    f"threshold {float(above):.2f}"
-                )
-            elif below is not None and price <= float(below):
-                should_trigger = True
-                message = (
-                    f"{holding.stock_symbol} price {price:.2f} is below "
-                    f"threshold {float(below):.2f}"
-                )
-
-        elif alert.alert_type == "RSI":
-            rsi = holding.current_rsi
-            if rsi is not None:
-                rsi_above = alert.condition.get("rsi_above")
-                rsi_below = alert.condition.get("rsi_below")
-
-                if rsi_above is not None and rsi >= float(rsi_above):
-                    should_trigger = True
-                    message = (
-                        f"{holding.stock_symbol} RSI {rsi:.1f} is above "
-                        f"threshold {float(rsi_above)}"
-                    )
-                elif rsi_below is not None and rsi <= float(rsi_below):
-                    should_trigger = True
-                    message = (
-                        f"{holding.stock_symbol} RSI {rsi:.1f} is below "
-                        f"threshold {float(rsi_below)}"
-                    )
-
-        elif alert.alert_type == "CUSTOM":
-            # Action-needed change detection
-            action = determine_action_needed(price, holding)
-            expected_action = alert.condition.get("action_needed")
-            if expected_action and action == expected_action:
-                should_trigger = True
-                message = (
-                    f"{holding.stock_symbol} entered zone: {action} "
-                    f"(price={price:.2f})"
-                )
-
-        if should_trigger:
-            triggered_at = datetime.now(UTC)
-            if update_state:
-                alert.last_triggered = triggered_at
-            triggered.append(
-                {
-                    "alert_id": alert.id,
-                    "alert_type": alert.alert_type,
-                    "condition": alert.condition,
-                    "triggered_at": triggered_at,
-                    "stock_symbol": holding.stock_symbol,
-                    "message": message,
-                    "channels": alert.channels,
-                }
-            )
+        payload = _consider_alert(
+            alert, holding, price, rsi, now, update_state=update_state
+        )
+        if payload is not None:
+            triggered.append(payload)
 
     if triggered and update_state:
         await db.flush()
@@ -219,7 +368,7 @@ async def check_all_alerts_for_user(
     """Check alerts across all holdings and watchlist items for a given user.
 
     ``update_state=False`` performs a pure read-only evaluation (no
-    ``last_triggered`` stamping) — see ``check_alerts_for_holding``.
+    ``last_triggered`` stamping, no edge latch) — see ``check_alerts_for_holding``.
 
     Returns a flat list of all triggered alert dicts.
     """
@@ -255,13 +404,16 @@ async def check_all_alerts_for_user(
     wl_alerts = wl_result.scalars().all()
 
     if wl_alerts:
-        wl_ids = {a.watchlist_item_id for a in wl_alerts if a.watchlist_item_id is not None}
+        wl_ids = {
+            a.watchlist_item_id for a in wl_alerts if a.watchlist_item_id is not None
+        }
         wl_items_result = await db.execute(
             select(WatchlistItem).where(WatchlistItem.id.in_(wl_ids))
         )
         wl_items = {w.id: w for w in wl_items_result.scalars().all()}
 
         now = datetime.now(UTC)
+        wl_triggered = 0
 
         for alert in wl_alerts:
             wl_item = (
@@ -272,54 +424,27 @@ async def check_all_alerts_for_user(
             if not wl_item or wl_item.current_price is None:
                 continue
 
-            # Cooldown check
-            if alert.last_triggered:
-                lt = alert.last_triggered
-                if lt.tzinfo is None:
-                    lt = lt.replace(tzinfo=UTC)
-                elapsed = (now - lt).total_seconds()
-                if elapsed < ALERT_COOLDOWN_SECONDS:
-                    continue
+            rsi = (
+                float(wl_item.current_rsi)
+                if wl_item.current_rsi is not None
+                else None
+            )
+            payload = _consider_alert(
+                alert,
+                wl_item,
+                float(wl_item.current_price),
+                rsi,
+                now,
+                update_state=update_state,
+            )
+            if payload is not None:
+                wl_triggered += 1
+                all_triggered.append(payload)
 
-            price = float(wl_item.current_price)
-            should_trigger = False
-            message = ""
-
-            if alert.alert_type == "PRICE_RANGE":
-                above = alert.condition.get("above")
-                below = alert.condition.get("below")
-                if above is not None and price >= float(above):
-                    should_trigger = True
-                    message = f"{wl_item.stock_symbol} price {price:.2f} above {float(above):.2f}"
-                elif below is not None and price <= float(below):
-                    should_trigger = True
-                    message = f"{wl_item.stock_symbol} price {price:.2f} below {float(below):.2f}"
-            elif alert.alert_type == "RSI" and wl_item.current_rsi is not None:
-                rsi = float(wl_item.current_rsi)
-                rsi_above = alert.condition.get("rsi_above")
-                rsi_below = alert.condition.get("rsi_below")
-                if rsi_above is not None and rsi >= float(rsi_above):
-                    should_trigger = True
-                    message = f"{wl_item.stock_symbol} RSI {rsi:.1f} above {float(rsi_above)}"
-                elif rsi_below is not None and rsi <= float(rsi_below):
-                    should_trigger = True
-                    message = f"{wl_item.stock_symbol} RSI {rsi:.1f} below {float(rsi_below)}"
-
-            if should_trigger:
-                triggered_at = datetime.now(UTC)
-                if update_state:
-                    alert.last_triggered = triggered_at
-                all_triggered.append({
-                    "alert_id": alert.id,
-                    "alert_type": alert.alert_type,
-                    "condition": alert.condition,
-                    "triggered_at": triggered_at,
-                    "stock_symbol": wl_item.stock_symbol,
-                    "message": message,
-                    "channels": alert.channels,
-                })
-
-        if update_state and any(a.last_triggered for a in wl_alerts):
+        # Flush only when this pass actually changed something. The old
+        # condition ("any alert has a last_triggered") flushed on every call
+        # once a single alert had ever fired.
+        if wl_triggered and update_state:
             await db.flush()
 
     return all_triggered

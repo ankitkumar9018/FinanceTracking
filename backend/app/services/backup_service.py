@@ -112,6 +112,15 @@ async def export_portfolio_json(
                     "stock_name": h.stock_name,
                     "exchange": h.exchange,
                     "currency": h.currency,
+                    # Persisted, user-owned configuration — NOT derived data.
+                    # ``fund_type`` selects the German Teilfreistellung class
+                    # (an equity ETF is 30% partially exempt; an unset value is
+                    # 0%), and ``custom_fields`` carries the stop-loss price and
+                    # target-allocation percentage. Dropping either from the
+                    # backup silently overstates tax and wipes the user's
+                    # stop-loss/allocation config on restore.
+                    "fund_type": h.fund_type,
+                    "custom_fields": h.custom_fields or {},
                     "sector": h.sector,
                     "notes": h.notes,
                     "lower_mid_range_1": _ser(h.lower_mid_range_1),
@@ -247,6 +256,17 @@ def _round4(value: object) -> float | None:
         return None
 
 
+def _custom_fields(value: object) -> dict:
+    """Coerce a backup's ``custom_fields`` blob to the dict the column stores.
+
+    The column is a JSON object (stop-loss price, target allocation, any
+    user-defined column). A hand-edited backup can carry ``null`` or a scalar
+    there; storing that would break every reader that does ``.get(...)``, so
+    anything that is not an object becomes ``{}``.
+    """
+    return value if isinstance(value, dict) else {}
+
+
 async def import_portfolio_json(
     data: dict,
     user_id: int,
@@ -264,6 +284,10 @@ async def import_portfolio_json(
 
     Returns a summary dict with counts.
     """
+    if not isinstance(data, dict):
+        raise ValueError(
+            "Invalid backup file: expected a JSON object at the top level."
+        )
     if data.get("format") != "financetracker_backup":
         raise ValueError("Invalid backup format. Expected 'financetracker_backup'.")
 
@@ -300,6 +324,8 @@ async def import_portfolio_json(
             currency=currency_for(h_data.get("exchange"), h_data.get("currency")),
             cumulative_quantity=0.0,
             average_price=0.0,
+            fund_type=h_data.get("fund_type"),
+            custom_fields=_custom_fields(h_data.get("custom_fields")),
             sector=h_data.get("sector"),
             notes=h_data.get("notes"),
             lower_mid_range_1=h_data.get("lower_mid_range_1"),

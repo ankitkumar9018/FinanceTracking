@@ -40,36 +40,111 @@ function Find-FreePort {
 # instance of this one), which is a hard safety violation. We only ever stop our
 # OWN recorded PIDs (from the PID files in Do-Stop), never by port or by name.
 
+# Every live descendant PID of $ProcessId (children, grandchildren, ...).
+#
+# Direct children are NOT enough. The recorded backend PID is the `uv` wrapper,
+# and `uvicorn --reload` runs the actual server one level deeper:
+#     uv -> uvicorn reloader -> uvicorn worker
+# The worker is the process that BINDS THE PORT, holds the SQLite file and runs
+# the scheduler, so stopping only the direct children left it alive; because its
+# pid file was then deleted, no later stop could ever find it again and it
+# survived until reboot. The bash side walks the tree for the same reason
+# (scripts/lib.sh `_descendants_of`), as does the desktop shell (`taskkill /T`).
+#
+# Windows recycles PIDs, so Win32_Process can report a "child" that merely
+# inherited the parent's recycled PID. CreationDate rules those out: a real
+# child cannot have started before its parent.
+function Get-DescendantPids {
+    param(
+        [int]$ProcessId,
+        [object]$StartedAt = $null,
+        [int]$Depth = 0
+    )
+    $found = @()
+    if ($Depth -ge 16) { return $found }  # bounded walk; a service tree is tiny
+    $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue)
+    foreach ($c in $children) {
+        if ($StartedAt -and $c.CreationDate -and ($c.CreationDate -lt $StartedAt)) { continue }
+        $found += [int]$c.ProcessId
+        $found += @(Get-DescendantPids -ProcessId ([int]$c.ProcessId) -StartedAt $c.CreationDate -Depth ($Depth + 1))
+    }
+    return $found
+}
+
+# Stop the whole tree rooted at one of OUR recorded PIDs.
+#
+# The descendants are snapshotted BEFORE the root dies: once it exits its
+# children reparent and the Win32_Process parent link is gone. Deepest first, so
+# a parent cannot respawn a child we already stopped.
+function Stop-ProcessTree {
+    param(
+        [int]$ProcessId,
+        [object]$StartedAt = $null
+    )
+    $tree = @(Get-DescendantPids -ProcessId $ProcessId -StartedAt $StartedAt)
+    [array]::Reverse($tree)
+    foreach ($p in $tree) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+}
+
+# Resolve a recorded PID to a process we are actually entitled to stop.
+#
+# A pid file outlives a crash, and Windows hands PIDs out again aggressively —
+# guaranteed after a reboot — so the number in logs/backend.pid may well name a
+# stranger's process by the time we read it. Identity check: the process we
+# started must already have existed when we wrote its pid file, which a PID
+# recycled after a reboot cannot. Returns the CIM object, or $null if the PID is
+# gone or provably not ours.
+function Resolve-RecordedProcess {
+    param([string]$PidFilePath)
+    $raw = Get-Content $PidFilePath -ErrorAction SilentlyContinue | Select-Object -First 1
+    $procId = 0
+    if (-not [int]::TryParse("$raw".Trim(), [ref]$procId)) { return $null }
+    if ($procId -le 0) { return $null }
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue
+    if (-not $proc) { return $null }
+    $recordedAt = (Get-Item $PidFilePath -ErrorAction SilentlyContinue).LastWriteTime
+    # 60s of slack absorbs clock jitter; a reboot moves the gap into hours.
+    if ($proc.CreationDate -and $recordedAt -and ($proc.CreationDate -gt $recordedAt.AddSeconds(60))) {
+        return $null
+    }
+    return $proc
+}
+
+# Stop one recorded service by its pid file, then drop the file. Strictly OUR
+# recorded PID and its own descendants — never by port, never by process name.
+function Stop-RecordedService {
+    param(
+        [string]$Name,
+        [string]$Label = $null,
+        [switch]$Quiet
+    )
+    if (-not $Label) { $Label = $Name }
+    $pidFile = Join-Path $LogsDir "$Name.pid"
+    if (-not (Test-Path $pidFile)) { return }
+    $proc = Resolve-RecordedProcess -PidFilePath $pidFile
+    if ($proc) {
+        Stop-ProcessTree -ProcessId ([int]$proc.ProcessId) -StartedAt $proc.CreationDate
+        if (-not $Quiet) { Write-Ok "$Label stopped (PID: $($proc.ProcessId))" }
+    } elseif (-not $Quiet) {
+        Write-Info "$Label was not running (clearing stale PID file)"
+    }
+    Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
+}
+
 # -- STOP ---------------------------------------------------------------------
 
 function Do-Stop {
     Write-Host "Stopping FinanceTracker..." -ForegroundColor Yellow
 
-    # Kill by PID files. NOTE: use $procId, never $pid — $pid is a read-only
-    # PowerShell automatic variable holding THIS shell's PID, so assigning to it
-    # fails and Stop-Process -Id $pid would kill our own host, leaving the real
-    # service orphaned. Also kill the recorded process's children first: the
-    # backend PID is the `uv` wrapper and its uvicorn child would otherwise be
-    # orphaned and keep holding the port. Strictly OUR PID — never by port/name.
-    $backendPid = Join-Path $LogsDir "backend.pid"
-    if (Test-Path $backendPid) {
-        $procId = Get-Content $backendPid
-        Get-CimInstance Win32_Process -Filter "ParentProcessId=$procId" -ErrorAction SilentlyContinue |
-            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
-        Write-Ok "Backend stopped (PID: $procId)"
-        Remove-Item $backendPid -Force
-    }
-
-    $frontendPid = Join-Path $LogsDir "frontend.pid"
-    if (Test-Path $frontendPid) {
-        $procId = Get-Content $frontendPid
-        Get-CimInstance Win32_Process -Filter "ParentProcessId=$procId" -ErrorAction SilentlyContinue |
-            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
-        Write-Ok "Frontend stopped (PID: $procId)"
-        Remove-Item $frontendPid -Force
-    }
+    # Stop by PID file, whole tree. NOTE: never name a variable $pid — it is a
+    # read-only PowerShell automatic variable holding THIS shell's PID, so
+    # assigning to it fails and Stop-Process -Id $pid would kill our own host,
+    # leaving the real service orphaned. Stop-RecordedService identity-checks the
+    # recorded PID and walks its full descendant tree (the uvicorn worker is a
+    # GRANDchild of the recorded `uv` PID). Strictly OUR PID — never port/name.
+    Stop-RecordedService -Name "backend"  -Label "Backend"
+    Stop-RecordedService -Name "frontend" -Label "Frontend"
 
     # We only ever stop our OWN processes (via the PID files above) — we never
     # kill by port or by process name, so co-running apps are never touched.
@@ -85,10 +160,13 @@ function Do-Status {
     Write-Host "FinanceTracker Status" -ForegroundColor Cyan
     Write-Host ""
 
+    # Resolve-RecordedProcess, not a bare Get-Process: a pid file left by a crash
+    # can name a stranger's process after a reboot recycles the PID, and
+    # reporting that as "Running" would be a lie.
     $bPidFile = Join-Path $LogsDir "backend.pid"
     $bPortFile = Join-Path $LogsDir "backend.port"
     $bPort = if (Test-Path $bPortFile) { Get-Content $bPortFile } else { "8420" }
-    if ((Test-Path $bPidFile) -and (Get-Process -Id (Get-Content $bPidFile) -ErrorAction SilentlyContinue)) {
+    if ((Test-Path $bPidFile) -and (Resolve-RecordedProcess -PidFilePath $bPidFile)) {
         Write-Host "  Backend:  " -NoNewline; Write-Host "Running" -ForegroundColor Green -NoNewline; Write-Host " - http://localhost:$bPort"
     } else {
         Write-Host "  Backend:  " -NoNewline; Write-Host "Stopped" -ForegroundColor Red
@@ -97,7 +175,7 @@ function Do-Status {
     $fPidFile = Join-Path $LogsDir "frontend.pid"
     $fPortFile = Join-Path $LogsDir "frontend.port"
     $fPort = if (Test-Path $fPortFile) { Get-Content $fPortFile } else { "3000" }
-    if ((Test-Path $fPidFile) -and (Get-Process -Id (Get-Content $fPidFile) -ErrorAction SilentlyContinue)) {
+    if ((Test-Path $fPidFile) -and (Resolve-RecordedProcess -PidFilePath $fPidFile)) {
         Write-Host "  Frontend: " -NoNewline; Write-Host "Running" -ForegroundColor Green -NoNewline; Write-Host " - http://localhost:$fPort"
     } else {
         Write-Host "  Frontend: " -NoNewline; Write-Host "Stopped" -ForegroundColor Red
@@ -183,19 +261,12 @@ function Do-Start {
 
     # Only stop OUR own previous run (via PID files). We never kill by port or
     # process name, so co-running apps (on 8000, 3000, ...) are never touched.
-    foreach ($svc in @("backend", "frontend")) {
-        $pf = Join-Path $LogsDir "$svc.pid"
-        if (Test-Path $pf) {
-            $procId = Get-Content $pf
-            # Kill the uvicorn child of the `uv` wrapper too, else it is orphaned
-            # and keeps holding the port. Strictly OUR recorded PID — never by
-            # port or by process name, so co-running apps are untouched.
-            Get-CimInstance Win32_Process -Filter "ParentProcessId=$procId" -ErrorAction SilentlyContinue |
-                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
-            Remove-Item $pf -Force -ErrorAction SilentlyContinue
-        }
-    }
+    # Stop the recorded PID's ENTIRE descendant tree, not just its children: the
+    # uvicorn worker that actually holds the port is a grandchild of the `uv`
+    # wrapper we recorded. Strictly OUR recorded PID — never by port or process
+    # name, so co-running apps are untouched.
+    Stop-RecordedService -Name "backend"  -Quiet
+    Stop-RecordedService -Name "frontend" -Quiet
     Write-Ok "Ready to start (other apps left untouched)"
 
     # -- Step 3: Install dependencies -----------------------------------------

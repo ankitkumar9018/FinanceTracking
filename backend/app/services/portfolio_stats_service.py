@@ -14,11 +14,19 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.models.dividend import Dividend
 from app.models.holding import Holding
 from app.models.price_history import PriceHistory
 from app.services.xirr_service import CashFlow
 
 _NO_HOLDINGS_MESSAGE = "No holdings found in this portfolio"
+
+# ``dividend_service`` stamps every DRIP-created BUY transaction's notes with
+# ``_drip_marker(dividend_id)`` == f"DRIP dividend #{id}". Duplicated as a
+# prefix constant rather than imported to keep this module free of a
+# service→service import; ``tests/test_stream_i_backend_misc.py`` asserts the
+# two stay in step.
+DRIP_NOTE_PREFIX = "DRIP dividend #"
 
 
 @dataclass
@@ -43,6 +51,20 @@ async def build_xirr_cashflows(
     contribute no terminal value at all and drag the computed return toward a
     total loss.
 
+    Dividends are money the investor received and must be counted:
+
+    * a CASH dividend is a positive flow on its payment date (ex-date when no
+      payment date was recorded);
+    * a REINVESTED (DRIP) dividend is internal — the cash never left the
+      portfolio. ``dividend_service`` records the reinvestment as a real BUY
+      transaction, so booking only that BUY made a DRIP look like fresh
+      external money going OUT with nothing coming in. Both halves are
+      therefore skipped: the DRIP-marked BUY and the dividend that paid for it.
+
+    Ignoring dividends entirely (the previous behaviour) understated the return
+    of an income portfolio by percentage points, growing with yield and holding
+    period.
+
     Raises ``ValueError`` when the portfolio has no holdings.
     """
     result = await db.execute(
@@ -61,6 +83,9 @@ async def build_xirr_cashflows(
 
     for h in holdings:
         for tx in h.transactions:
+            if (tx.notes or "").startswith(DRIP_NOTE_PREFIX):
+                # Internal reinvestment, not new money from the investor.
+                continue
             amount = float(tx.quantity) * float(tx.price)
             if tx.transaction_type == "BUY":
                 cash_flows.append(CashFlow(date=tx.date, amount=-amount))
@@ -74,6 +99,24 @@ async def build_xirr_cashflows(
             used_stale_prices = True
         if terminal_price is not None and h.cumulative_quantity:
             total_current_value += float(terminal_price) * float(h.cumulative_quantity)
+
+    # Cash dividends received (one batched query for the whole portfolio).
+    dividend_rows = (
+        await db.execute(
+            select(Dividend)
+            .join(Holding, Dividend.holding_id == Holding.id)
+            .where(
+                Holding.portfolio_id == portfolio_id,
+                Dividend.is_reinvested.is_(False),
+            )
+        )
+    ).scalars().all()
+    for div in dividend_rows:
+        amount = float(div.total_amount or 0)
+        if amount:
+            cash_flows.append(
+                CashFlow(date=div.payment_date or div.ex_date, amount=amount)
+            )
 
     if total_current_value > 0:
         cash_flows.append(CashFlow(date=date.today(), amount=total_current_value))

@@ -6,10 +6,13 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 
+from sqlalchemy import func as sql_func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.notification_log import NotificationLog
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +135,23 @@ async def send_email(
 # ---------------------------------------------------------------------------
 
 
+async def _is_single_user_instance(db: AsyncSession) -> bool:
+    """Is there exactly one user account on this instance?
+
+    Gate for the instance-wide ``TELEGRAM_CHAT_ID``: on a single-user install
+    (the desktop app) that chat id unambiguously belongs to the only account,
+    so the ``.env`` value keeps working out of the box. On a multi-user
+    instance it belongs to whoever set up the server, and standing in with it
+    would push another user's alerts to that person's chat.
+    """
+    try:
+        total = await db.scalar(select(sql_func.count()).select_from(User))
+    except Exception:
+        logger.warning("Telegram: could not count users — refusing global chat id")
+        return False
+    return total == 1
+
+
 async def send_telegram(
     message: str,
     user_id: int,
@@ -139,7 +159,15 @@ async def send_telegram(
     alert_id: int | None = None,
     chat_id: str | None = None,
 ) -> bool:
-    """Send a Telegram message via the Bot API."""
+    """Send a Telegram message via the Bot API.
+
+    ``chat_id`` is the recipient's own ``User.telegram_chat_id``. When it is
+    missing, the instance-wide ``settings.telegram_chat_id`` is used *only* on
+    a single-user install — see ``_is_single_user_instance``. Every other
+    channel already refuses to guess a destination it wasn't given; Telegram
+    used to be the exception, and silently delivered user B's holdings, trigger
+    prices and AI explanations to the operator's chat.
+    """
     if not _HAS_HTTPX:
         logger.warning("httpx package not installed — skipping Telegram")
         await _log_notification(
@@ -149,7 +177,17 @@ async def send_telegram(
         return False
 
     token = settings.telegram_bot_token
-    target_chat = chat_id or settings.telegram_chat_id
+    target_chat = chat_id
+    if not target_chat and settings.telegram_chat_id:
+        if await _is_single_user_instance(db):
+            target_chat = settings.telegram_chat_id
+        else:
+            logger.warning(
+                "Telegram: user %d has no telegram_chat_id and this instance "
+                "has multiple accounts — refusing to fall back to the shared "
+                "chat id",
+                user_id,
+            )
     if not token or not target_chat:
         logger.warning("Telegram not configured — skipping")
         await _log_notification(

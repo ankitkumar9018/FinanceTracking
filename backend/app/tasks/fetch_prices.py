@@ -20,13 +20,37 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+# Fields of a refreshed row that are safe to fan out to every subscriber of a
+# symbol. Deliberately excludes ``action_needed``: that zone is derived from
+# the *owner's* private lower/upper mid-range levels, while
+# ``broadcast_price_update`` targets connections purely by subscription, never
+# by user. Two people holding the same ticker would each be shown whichever
+# holding the DB happened to return first — a wrong buy/sell signal on one
+# screen and a leak of the other's thresholds. Clients keep their own
+# ``action_needed`` (the web store only patches fields present in the payload)
+# until the next holdings fetch recomputes it.
+_PUBLIC_PRICE_FIELDS = (
+    "symbol",
+    "exchange",
+    "current_price",
+    "rsi",
+    "last_price_update",
+)
+
+
+def _public_price_payload(update: dict) -> dict:
+    """Strip per-holder private fields from a ``price_update`` payload."""
+    return {key: update[key] for key in _PUBLIC_PRICE_FIELDS if key in update}
+
+
 async def _broadcast_updates(updates: list[dict]) -> int:
     """Push one ``price_update`` message per refreshed symbol.
 
     Broadcasting is best effort: the DB write has already been committed by the
     time this runs, so a WebSocket failure must never fail (or roll back) the
     refresh. Each symbol is sent at most once — a symbol that is both held and
-    watchlisted would otherwise be delivered twice.
+    watchlisted would otherwise be delivered twice — and each payload carries
+    only symbol-level, user-agnostic fields (see ``_PUBLIC_PRICE_FIELDS``).
     """
     sent = 0
     seen: set[str] = set()
@@ -36,7 +60,9 @@ async def _broadcast_updates(updates: list[dict]) -> int:
             continue
         seen.add(symbol)
         try:
-            await manager.broadcast_price_update(symbol, update)
+            await manager.broadcast_price_update(
+                symbol, _public_price_payload(update)
+            )
             sent += 1
         except Exception:
             logger.warning(
