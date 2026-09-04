@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { Modal } from "@/components/shared/modal";
 import {
   Sparkles,
   Upload,
@@ -22,6 +23,8 @@ import Link from "next/link";
 /* ------------------------------------------------------------------ */
 
 interface OnboardingWizardProps {
+  /** Render the wizard. Kept mounted while false so the close animation runs. */
+  open: boolean;
   onComplete: () => void;
 }
 
@@ -95,7 +98,7 @@ function WelcomeStep({ onNext }: StepProps) {
 /*  Step 2: Import                                                     */
 /* ------------------------------------------------------------------ */
 
-function ImportStep({ onNext, onBack }: StepProps) {
+function ImportStep({ onNext, onBack, onSkip }: StepProps) {
   return (
     <div className="flex flex-col items-center text-center">
       <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-[hsl(var(--primary))]/10">
@@ -111,7 +114,7 @@ function ImportStep({ onNext, onBack }: StepProps) {
       <div className="mt-8 flex flex-col gap-3 sm:flex-row">
         <Link
           href="/import"
-          onClick={onNext}
+          onClick={onSkip}
           className="inline-flex items-center gap-2 rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 transition-colors"
         >
           <FileSpreadsheet className="h-4 w-4" />
@@ -119,7 +122,7 @@ function ImportStep({ onNext, onBack }: StepProps) {
         </Link>
         <Link
           href="/holdings"
-          onClick={onNext}
+          onClick={onSkip}
           className="inline-flex items-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-5 py-2.5 text-sm font-medium text-[hsl(var(--card-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
         >
           <PenLine className="h-4 w-4" />
@@ -210,7 +213,7 @@ function DashboardStep({ onNext, onBack }: StepProps) {
 /*  Step 4: Alerts                                                     */
 /* ------------------------------------------------------------------ */
 
-function AlertsStep({ onNext, onBack }: StepProps) {
+function AlertsStep({ onNext, onBack, onSkip }: StepProps) {
   return (
     <div className="flex flex-col items-center text-center">
       <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-[hsl(var(--primary))]/10">
@@ -219,19 +222,27 @@ function AlertsStep({ onNext, onBack }: StepProps) {
 
       <h2 className="mt-6 text-2xl font-bold">Stay Informed</h2>
       <p className="mt-3 max-w-sm text-sm text-[hsl(var(--muted-foreground))]">
-        Set up alerts and notifications to stay on top of your investments.
-        Configure price alerts, portfolio thresholds, and market updates
-        delivered via email, push notifications, or in-app.
+        Create price alerts and portfolio thresholds on the Alerts page, then
+        choose how they reach you — email, push notifications, or in-app — in
+        Settings.
       </p>
 
       <div className="mt-8 flex flex-col gap-3 sm:flex-row">
         <Link
-          href="/settings"
-          onClick={onNext}
+          href="/alerts"
+          onClick={onSkip}
           className="inline-flex items-center gap-2 rounded-lg bg-[hsl(var(--primary))] px-5 py-2.5 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))]/90 transition-colors"
         >
+          <Bell className="h-4 w-4" />
+          Create an Alert
+        </Link>
+        <Link
+          href="/settings"
+          onClick={onSkip}
+          className="inline-flex items-center gap-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-5 py-2.5 text-sm font-medium text-[hsl(var(--card-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
+        >
           <Settings className="h-4 w-4" />
-          Configure in Settings
+          Notification Settings
         </Link>
       </div>
 
@@ -356,21 +367,27 @@ function StepDots({
   total: number;
 }) {
   return (
-    <div className="flex items-center gap-2">
-      {Array.from({ length: total }, (_, i) => (
-        <button
-          key={i}
-          className={`h-2 rounded-full transition-all duration-300 ${
-            i === current
-              ? "w-6 bg-[hsl(var(--primary))]"
-              : i < current
-                ? "w-2 bg-[hsl(var(--primary))]/50"
-                : "w-2 bg-[hsl(var(--muted))]"
-          }`}
-          aria-label={`Step ${i + 1}`}
-        />
-      ))}
-    </div>
+    <>
+      {/* The dots are a picture of progress — they were <button>s that did
+        * nothing, so they are decorative now and the state is announced once. */}
+      <p className="sr-only" aria-live="polite">
+        Step {current + 1} of {total}
+      </p>
+      <div className="flex items-center gap-2" aria-hidden="true">
+        {Array.from({ length: total }, (_, i) => (
+          <span
+            key={i}
+            className={`h-2 rounded-full transition-all duration-300 ${
+              i === current
+                ? "w-6 bg-[hsl(var(--primary))]"
+                : i < current
+                  ? "w-2 bg-[hsl(var(--primary))]/50"
+                  : "w-2 bg-[hsl(var(--muted))]"
+            }`}
+          />
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -378,7 +395,7 @@ function StepDots({
 /*  Main Wizard Component                                              */
 /* ------------------------------------------------------------------ */
 
-export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
+export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
   const [currentStep, setCurrentStep] = useState(0);
   const [direction, setDirection] = useState(1); // 1 = forward, -1 = backward
 
@@ -432,53 +449,52 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+    // The shared Modal supplies role="dialog", aria-modal, Escape-to-close,
+    // the focus trap and focus restore. Backdrop clicks are ignored so a stray
+    // click can't silently mark onboarding complete. The card keeps the shared
+    // dialog's radius/shadow — only the roomier padding is overridden.
+    <Modal
+      open={open}
+      onClose={handleSkip}
+      maxWidth="max-w-lg"
+      ariaLabel="Getting started with FinanceTracker"
+      cardClassName="relative p-8"
+      closeOnBackdropClick={false}
     >
-      <motion.div
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 300, damping: 25 }}
-        className="relative mx-4 w-full max-w-lg rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-8 shadow-2xl"
-      >
-        {/* Skip button (hidden on last step) */}
-        {currentStep < TOTAL_STEPS - 1 && (
-          <button
-            onClick={handleSkip}
-            className="absolute right-4 top-4 rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] transition-colors"
-            title="Skip onboarding"
-            aria-label="Skip onboarding"
+      {/* Skip button (hidden on last step) */}
+      {currentStep < TOTAL_STEPS - 1 && (
+        <button
+          onClick={handleSkip}
+          className="absolute right-4 top-4 rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] transition-colors"
+          title="Skip onboarding"
+          aria-label="Skip onboarding"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      )}
+
+      {/* Step Content with Slide Transitions */}
+      <div className="relative min-h-90 overflow-hidden">
+        <AnimatePresence mode="wait" custom={direction}>
+          <motion.div
+            key={currentStep}
+            custom={direction}
+            variants={slideVariants}
+            initial="enter"
+            animate="center"
+            exit="exit"
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+            className="flex min-h-90 items-center justify-center"
           >
-            <X className="h-4 w-4" />
-          </button>
-        )}
+            {steps[currentStep]}
+          </motion.div>
+        </AnimatePresence>
+      </div>
 
-        {/* Step Content with Slide Transitions */}
-        <div className="relative min-h-90 overflow-hidden">
-          <AnimatePresence mode="wait" custom={direction}>
-            <motion.div
-              key={currentStep}
-              custom={direction}
-              variants={slideVariants}
-              initial="enter"
-              animate="center"
-              exit="exit"
-              transition={{ duration: 0.3, ease: "easeInOut" }}
-              className="flex min-h-90 items-center justify-center"
-            >
-              {steps[currentStep]}
-            </motion.div>
-          </AnimatePresence>
-        </div>
-
-        {/* Step Dots */}
-        <div className="mt-6 flex justify-center">
-          <StepDots current={currentStep} total={TOTAL_STEPS} />
-        </div>
-      </motion.div>
-    </motion.div>
+      {/* Step Dots */}
+      <div className="mt-6 flex flex-col items-center justify-center">
+        <StepDots current={currentStep} total={TOTAL_STEPS} />
+      </div>
+    </Modal>
   );
 }

@@ -140,40 +140,50 @@ This runs entirely on your computer. Your data never leaves your machine.
 Uses GPT-4 from OpenAI. Faster and more capable, but requires internet and an API key.
 
 - **Cost**: Pay per use (a few cents per conversation)
-- **Setup**: Get an API key from https://platform.openai.com and enter it in Settings -> AI
+- **Setup**: Get an API key from https://platform.openai.com, then set `LLM_PROVIDER=openai` and `OPENAI_API_KEY=sk-...` in `backend/.env` and restart the backend
 
 ### Claude (Optional -- Cloud)
 
 Uses Claude from Anthropic. Known for careful and thoughtful responses.
 
 - **Cost**: Pay per use
-- **Setup**: Get an API key from https://console.anthropic.com and enter it in Settings -> AI
+- **Setup**: Get an API key from https://console.anthropic.com, then set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=sk-ant-...` in `backend/.env` and restart the backend
 
 ### Gemini (Optional -- Cloud)
 
 Uses Gemini from Google.
 
 - **Cost**: Free tier available
-- **Setup**: Get an API key from Google AI Studio and enter it in Settings -> AI
+- **Setup**: Get an API key from Google AI Studio, then set `LLM_PROVIDER=google` and `GOOGLE_API_KEY=...` in `backend/.env` and restart the backend
 
 ### How the Fallback Works
 
 The AI tries providers in order:
-1. First, it tries your preferred provider (usually Ollama)
-2. If that fails, it tries the next available provider
-3. If all providers are unavailable, you see "AI assistant offline"
+1. First, your configured `LLM_PROVIDER` (default `ollama`)
+2. If that one does not answer, it walks a fixed fallback chain — **ollama → openai → anthropic → google** — and uses the first that responds
+3. If none are reachable, you see "AI assistant offline"
 
-The rest of the app works normally even when AI is offline.
+Setting `LLM_PROVIDER=none` disables AI entirely and skips the chain. The rest of the app works normally either way.
 
 ---
 
 ## Changing Your AI Provider
 
-1. Go to **Settings** then **AI Assistant**
-2. Under **Active Provider**, select your preferred provider from the dropdown
-3. If using a cloud provider, enter the API key
-4. Click **Test Connection** to verify it works
-5. Click **Save**
+The provider is **server configuration, not an app setting** — there is no dropdown, API-key box or Test button in the UI.
+
+1. Edit `backend/.env`:
+   ```bash
+   LLM_PROVIDER=openai        # ollama | openai | anthropic | google | none
+   OPENAI_API_KEY=sk-...      # or ANTHROPIC_API_KEY / GOOGLE_API_KEY
+   # For the local default:
+   OLLAMA_URL=http://localhost:11434
+   OLLAMA_MODEL=llama3.2
+   OLLAMA_TIMEOUT=300         # raise this on slow/CPU-only machines
+   ```
+   In the packaged desktop app there is no editable `.env` — set these as OS environment variables instead (see [desktop-app.md](../desktop-app.md#external-services-notifications-and-ai)).
+2. Restart the backend.
+3. Open **Settings → AI & Integrations** to confirm which provider the backend resolved. That block is **read-only** — it reports, it does not configure.
+4. API users can call `POST /settings/test/llm` to check the provider actually answers; there is no button for it in the UI.
 
 ---
 

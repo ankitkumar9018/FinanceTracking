@@ -67,6 +67,8 @@ function ResetPasswordForm() {
           </label>
           <input
             id="password"
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "form-error" : undefined}
             type="password"
             required
             minLength={8}
@@ -82,6 +84,8 @@ function ResetPasswordForm() {
           </label>
           <input
             id="confirm"
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "form-error" : undefined}
             type="password"
             required
             minLength={8}
@@ -93,7 +97,13 @@ function ResetPasswordForm() {
         </div>
 
         {error && (
-          <p className="text-sm text-[hsl(var(--destructive))]">{error}</p>
+          <p
+            id="form-error"
+            role="alert"
+            className="text-sm text-[hsl(var(--destructive))]"
+          >
+            {error}
+          </p>
         )}
 
         <button

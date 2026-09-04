@@ -3,16 +3,19 @@ import { tryRefresh } from "./api-client";
 
 type MessageHandler = (data: unknown) => void;
 
+/** Backoff ceiling: after ~5 doublings the delay parks at 30s and stays there,
+ *  so a long outage costs one attempt every 30s rather than giving up. */
+const MAX_RECONNECT_DELAY_MS = 30_000;
+
 export class WSConnection {
   private ws: WebSocket | null = null;
   private basePath: string;
   private handlers = new Map<string, Set<MessageHandler>>();
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   // Set true in disconnect() so the onclose handler knows the close was
   // requested and must NOT schedule a reconnect (a code-less close() reports
-  // 1005, which isn't in noReconnectCodes and would otherwise leak a socket).
+  // 1005, which is retryable and would otherwise leak a socket).
   private intentionalClose = false;
   // Guards against opening a second socket when connect() is called again while
   // the async getWsBaseAsync() handshake from a prior connect() is still pending
@@ -22,6 +25,9 @@ export class WSConnection {
   // refresh/reconnect loop when the refresh token itself is invalid; reset on
   // a successful connect so a later expiry gets one fresh retry again.
   private retriedAuth = false;
+  // Bound so add/removeEventListener see the same function identity.
+  private readonly wakeHandler = () => this.wake();
+  private wakeListenersAttached = false;
 
   constructor(path: string) {
     this.basePath = path;
@@ -41,7 +47,46 @@ export class WSConnection {
     this.connecting = true;
     // A fresh connect cancels any prior intentional-close intent.
     this.intentionalClose = false;
+    this.attachWakeListeners();
     this._resolveAndConnect();
+  }
+
+  /* ---- Wake-up triggers ------------------------------------------------ */
+
+  /** Reconnect eagerly when the machine comes back online or the tab is
+   *  brought to the front. A laptop that slept through the whole backoff
+   *  window (or a socket the server closed with a "normal" code) would
+   *  otherwise sit dead until the next scheduled attempt or a page reload. */
+  private attachWakeListeners(): void {
+    if (this.wakeListenersAttached || typeof window === "undefined") return;
+    window.addEventListener("online", this.wakeHandler);
+    document.addEventListener("visibilitychange", this.wakeHandler);
+    this.wakeListenersAttached = true;
+  }
+
+  private detachWakeListeners(): void {
+    if (!this.wakeListenersAttached || typeof window === "undefined") return;
+    window.removeEventListener("online", this.wakeHandler);
+    document.removeEventListener("visibilitychange", this.wakeHandler);
+    this.wakeListenersAttached = false;
+  }
+
+  /** Cancel any pending backoff and retry now (idempotent, and a no-op while
+   *  the socket is healthy or the close was requested). */
+  private wake(): void {
+    if (this.intentionalClose) return;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    const state = this.ws?.readyState;
+    if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) return;
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    // A deliberate wake starts a fresh backoff ladder rather than resuming at 30s.
+    this.reconnectAttempts = 0;
+    this.connecting = false;
+    this.connect();
   }
 
   /** Resolve the WS base (dynamic in Tauri) on every (re)connect, then open. */
@@ -49,10 +94,35 @@ export class WSConnection {
     getWsBaseAsync()
       .then((wsBase) => this._doConnect(wsBase))
       .catch(() => {
-        // Base resolution failed — degrade silently, but clear the guard so a
-        // later connect() can retry.
+        // Base resolution failed (backend not up yet). Clear the guard and keep
+        // the retry ladder going — giving up here is how the socket used to
+        // stay dead through a sidecar restart. Report it as a disconnect so the
+        // UI's offline indicator is right even when no socket ever opened.
         this.connecting = false;
+        this.emit("disconnected", { code: 0, reason: "ws base unavailable" });
+        this.scheduleReconnect();
       });
+  }
+
+  /** Queue the next attempt with an exponential, 30s-capped backoff. There is
+   *  no attempt limit: an outage longer than the ladder must not permanently
+   *  kill live prices and alerts. */
+  private scheduleReconnect(): void {
+    if (this.intentionalClose || this.reconnectTimeout) return;
+    const delay = Math.min(
+      1000 * Math.pow(2, Math.min(this.reconnectAttempts, 5)),
+      MAX_RECONNECT_DELAY_MS,
+    );
+    // Guard the whole backoff window: a manual connect() while a reconnect is
+    // pending must not open a second socket. disconnect() clears both the flag
+    // and the timer.
+    this.connecting = true;
+    this.reconnectTimeout = setTimeout(() => {
+      this.reconnectTimeout = null;
+      this.reconnectAttempts++;
+      // Re-resolve the base each attempt so a dynamic Tauri port is picked up.
+      this._resolveAndConnect();
+    }, delay);
   }
 
   private _doConnect(wsBase: string): void {
@@ -79,7 +149,6 @@ export class WSConnection {
 
     this.ws.onclose = (event) => {
       this.emit("disconnected", { code: event.code, reason: event.reason });
-      const noReconnectCodes = [1000, 1001, 4001]; // normal close, going away, auth failure
       // Never reconnect a socket we closed on purpose (disconnect/unmount).
       if (this.intentionalClose) return;
       // 4001 = auth failure. The access token may simply have expired, so try
@@ -107,18 +176,10 @@ export class WSConnection {
         });
         return;
       }
-      if (!noReconnectCodes.includes(event.code) && this.reconnectAttempts < this.maxReconnectAttempts) {
-        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-        // Guard the whole backoff window: a manual connect() while a reconnect
-        // is pending must not open a second socket. disconnect() clears both
-        // the flag and the timer.
-        this.connecting = true;
-        this.reconnectTimeout = setTimeout(() => {
-          this.reconnectAttempts++;
-          // Re-resolve the base each attempt so a dynamic Tauri port is picked up.
-          this._resolveAndConnect();
-        }, delay);
-      }
+      // 1000 is the only code the server uses to say "we're done, stay closed".
+      // 1001 (going away) is what a restarting/shutting-down server sends, so
+      // it MUST be retried — that is the sidecar-restart case.
+      if (event.code !== 1000) this.scheduleReconnect();
     };
 
     this.ws.onerror = () => {
@@ -142,12 +203,22 @@ export class WSConnection {
     this.handlers.get(event)?.forEach((h) => h(data));
   }
 
+  /** True while a socket is open — lets consumers render an honest
+   *  "live updates offline" state instead of guessing. */
+  get isOpen(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
   disconnect(): void {
     // Mark the close as intentional first so the onclose handler (which fires
     // synchronously or shortly after) skips the reconnect path.
     this.intentionalClose = true;
     this.connecting = false;
-    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+    this.detachWakeListeners();
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
     this.reconnectAttempts = 0;
     // Close with an explicit 1000 (normal) code rather than a code-less 1005.
     this.ws?.close(1000);

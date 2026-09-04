@@ -31,7 +31,7 @@ Click the **+ Add Stock** button on the dashboard. Search for a stock by name or
 
 ### Option C: Connect Your Broker (Automatic)
 
-If you have an account with Zerodha, ICICI Direct, Angel One, or another supported broker, you can connect it and your holdings will sync automatically. Go to **Settings** then **Brokers** to set this up. See the [Connecting Brokers](connecting-brokers.md) help article for step-by-step instructions.
+If you have a **Zerodha** or **ICICI Direct** account, you can connect it and your holdings will sync automatically. Open **Brokers** in the sidebar to set this up. Other brokers (Angel One, Upstox, 5Paisa, Groww, Deutsche Bank, comdirect) appear in the list with a **coming soon** badge and are not implemented yet — use Excel/CSV import for those. See the [Connecting Brokers](connecting-brokers.md) help article for step-by-step instructions.
 
 You can combine all three methods. For example, import your old stocks from Excel and then connect your broker for future automatic syncing.
 
@@ -58,11 +58,9 @@ Your dashboard now shows your portfolio with:
 ## Step 5: Optional Configuration
 
 When you are ready, you can also:
-- **Set up notifications**: Get alerts via email, WhatsApp, Telegram, or SMS when stocks enter your price ranges
-- **Enable the AI assistant**: Ask questions about your portfolio in plain English
-- **Configure your display**: Choose dark or light theme, customize which columns appear in the table
-
-All of these are available from the **Settings** page.
+- **Set up notifications**: get alerts via email, WhatsApp, Telegram, or SMS when stocks enter your price ranges. The channel toggles are on the **Settings** page, but the SendGrid/Twilio/Telegram credentials themselves go in `backend/.env` — see [Setting Up Notifications](notifications-setup.md).
+- **Enable the AI assistant**: ask questions about your portfolio in plain English. It runs on local Ollama by default; a cloud provider is configured with `LLM_PROVIDER` in `backend/.env`, not in the app.
+- **Configure your display**: choose dark or light theme and set your base currency on the **Settings** page. Column choice and table density live on the **Holdings** page, under the **Columns** and density controls above the table.
 
 ## What to Do Next
 

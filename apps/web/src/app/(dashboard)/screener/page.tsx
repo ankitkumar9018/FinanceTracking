@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { api } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import {
   formatCompact,
   formatCurrency,
@@ -17,11 +17,14 @@ import {
   ArrowUp,
   ArrowDown,
   SlidersHorizontal,
+  Star,
+  Check,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
+import { StockHoverCard } from "@/components/shared/stock-hover-card";
 
 interface ScreenerResult {
   symbol: string;
@@ -127,6 +130,10 @@ export default function ScreenerPage() {
   const [hasRun, setHasRun] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("week52_position_pct");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // Symbols already sent to the watchlist this session, so a found candidate
+  // reads as "saved" instead of inviting a duplicate POST.
+  const [watchlisted, setWatchlisted] = useState<Set<string>>(new Set());
+  const [savingSymbol, setSavingSymbol] = useState<string | null>(null);
 
   const set = (key: keyof FilterForm, value: string) =>
     setForm((f) => ({ ...f, [key]: value }));
@@ -193,6 +200,37 @@ export default function ScreenerPage() {
 
   function resetFilters() {
     setForm(EMPTY_FORM);
+  }
+
+  const rowKey = (r: ScreenerResult) => `${r.exchange}-${r.symbol}`;
+
+  /** The point of a screen is to act on what it finds — without this the only
+   *  next step was hand-copying symbols into the watchlist form. */
+  async function addToWatchlist(r: ScreenerResult) {
+    const key = rowKey(r);
+    setSavingSymbol(key);
+    try {
+      await api.post("/watchlist", {
+        stock_symbol: r.symbol,
+        stock_name: r.name || r.symbol,
+        exchange: r.exchange,
+        target_buy_price: null,
+        notes: null,
+      });
+      setWatchlisted((prev) => new Set(prev).add(key));
+      toast.success(`${r.symbol} added to your watchlist`);
+    } catch (err) {
+      // 409 = already there. That is the same end state the user wanted, so
+      // mark it saved rather than nagging with an error.
+      if (err instanceof ApiError && err.status === 409) {
+        setWatchlisted((prev) => new Set(prev).add(key));
+        toast(`${r.symbol} is already on your watchlist`);
+      } else {
+        toast.error(err instanceof Error ? err.message : "Failed to add to watchlist");
+      }
+    } finally {
+      setSavingSymbol(null);
+    }
   }
 
   function toggleSort(key: SortKey) {
@@ -474,28 +512,43 @@ export default function ScreenerPage() {
                 <SortableTh label="RSI" col="rsi" align="right" sortKey={sortKey} onSort={toggleSort} icon={<SortIcon col="rsi" />} />
                 <SortableTh label="52W Pos" col="week52_position_pct" align="right" sortKey={sortKey} onSort={toggleSort} icon={<SortIcon col="week52_position_pct" />} />
                 <SortableTh label="Day %" col="day_change_pct" align="right" sortKey={sortKey} onSort={toggleSort} icon={<SortIcon col="day_change_pct" />} />
+                <th className="px-4 py-3 text-right font-medium text-[hsl(var(--muted-foreground))]">
+                  Action
+                </th>
               </tr>
             </thead>
             <tbody>
-              {sorted.map((r, i) => (
+              {sorted.map((r, i) => {
+                const key = rowKey(r);
+                const rowCurrency = currencyForExchange(r.exchange);
+                const saved = watchlisted.has(key);
+                return (
                 <motion.tr
-                  key={`${r.exchange}-${r.symbol}`}
+                  key={key}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   transition={{ delay: Math.min(i * 0.02, 0.4) }}
                   className="border-b border-[hsl(var(--border))] bg-[hsl(var(--card))] hover:bg-[hsl(var(--accent))]/50 transition-colors"
                 >
                   <td className="px-4 py-3">
-                    <div className="font-medium">{r.symbol}</div>
-                    <div className="text-xs text-[hsl(var(--muted-foreground))] truncate max-w-[16rem]">
-                      {r.name}
-                    </div>
+                    <StockHoverCard
+                      symbol={r.symbol}
+                      name={r.name}
+                      currentPrice={r.price}
+                      rsi={r.rsi}
+                      currency={rowCurrency}
+                    >
+                      <span className="block font-medium">{r.symbol}</span>
+                      <span className="block max-w-[16rem] truncate text-xs text-[hsl(var(--muted-foreground))]">
+                        {r.name}
+                      </span>
+                    </StockHoverCard>
                   </td>
                   <td className="px-4 py-3 text-[hsl(var(--muted-foreground))]">
                     {r.sector || "—"}
                   </td>
                   <td className="px-4 py-3 text-right font-mono">
-                    {formatCurrency(r.price, currency)}
+                    {formatCurrency(r.price, rowCurrency)}
                   </td>
                   <td className="px-4 py-3 text-right font-mono">
                     {r.market_cap != null ? formatCompact(r.market_cap) : "—"}
@@ -539,8 +592,35 @@ export default function ScreenerPage() {
                       "—"
                     )}
                   </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => addToWatchlist(r)}
+                      disabled={saved || savingSymbol === key}
+                      aria-label={
+                        saved
+                          ? `${r.symbol} is on your watchlist`
+                          : `Add ${r.symbol} to watchlist`
+                      }
+                      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                        saved
+                          ? "border-transparent bg-[hsl(var(--profit))]/10 text-[hsl(var(--profit))]"
+                          : "border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))]"
+                      } disabled:opacity-70`}
+                    >
+                      {savingSymbol === key ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : saved ? (
+                        <Check className="h-3 w-3" />
+                      ) : (
+                        <Star className="h-3 w-3" />
+                      )}
+                      {saved ? "Watchlisted" : "Watchlist"}
+                    </button>
+                  </td>
                 </motion.tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

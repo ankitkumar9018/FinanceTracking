@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useId } from "react";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { api, ApiError } from "@/lib/api-client";
 import { Plus, Loader2, Calculator } from "lucide-react";
@@ -57,6 +57,8 @@ interface AddHoldingModalProps {
 }
 
 export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps) {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   const { activePortfolioId, fetchPortfolios } = usePortfolioStore();
   const [addingStock, setAddingStock] = useState(false);
   const [addForm, setAddForm] = useState<AddStockForm>(EMPTY_FORM);
@@ -68,27 +70,43 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const symbolInputRef = useRef<HTMLInputElement>(null);
 
+  // Monotonic sequence: only the newest search may paint suggestions, so a slow
+  // earlier /market/search response can never overwrite a newer one.
+  const searchSeqRef = useRef(0);
+  // Latest exchange, read at debounce-fire time — the 300 ms timeout must not
+  // search the exchange as it was at keystroke time.
+  const exchangeRef = useRef(addForm.exchange);
+  useEffect(() => {
+    exchangeRef.current = addForm.exchange;
+  }, [addForm.exchange]);
+
   // Debounced stock search
   const searchStocks = useCallback(async (query: string, exchange: string) => {
+    // Bumping first invalidates any in-flight request, so its response can
+    // never repaint the dropdown after this one.
+    const seq = ++searchSeqRef.current;
     if (query.length < 2) {
       setSuggestions([]);
+      setSearchingStock(false);
       return;
     }
 
     setSearchingStock(true);
     try {
       const response = await api.get<{ results: StockSuggestion[]; query: string; exchange: string }>(`/market/search?q=${encodeURIComponent(query)}&exchange=${exchange}`);
+      if (seq !== searchSeqRef.current) return;
       setSuggestions(response.results || []);
       setShowSuggestions(true);
     } catch {
+      if (seq !== searchSeqRef.current) return;
       setSuggestions([]);
     } finally {
-      setSearchingStock(false);
+      if (seq === searchSeqRef.current) setSearchingStock(false);
     }
   }, []);
 
   const handleSymbolChange = (value: string) => {
-    setAddForm({ ...addForm, stock_symbol: value, stock_name: "" });
+    setAddForm((f) => ({ ...f, stock_symbol: value, stock_name: "" }));
 
     // Clear previous timeout
     if (searchTimeoutRef.current) {
@@ -97,17 +115,22 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
 
     // Debounce search - wait 300ms after user stops typing
     searchTimeoutRef.current = setTimeout(() => {
-      searchStocks(value, addForm.exchange);
+      searchStocks(value, exchangeRef.current);
     }, 300);
   };
 
   const handleSelectSuggestion = (suggestion: StockSuggestion) => {
-    setAddForm({
-      ...addForm,
+    setAddForm((f) => ({
+      ...f,
       stock_symbol: suggestion.symbol,
       stock_name: suggestion.name,
       exchange: suggestion.exchange,
-    });
+    }));
+    // Bump the sequence so an in-flight search can't reopen the dropdown over
+    // the selection the user just made (and clear its spinner, since that
+    // request will now bail before its own cleanup).
+    searchSeqRef.current += 1;
+    setSearchingStock(false);
     setSuggestions([]);
     setShowSuggestions(false);
   };
@@ -166,9 +189,10 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
       <form onSubmit={handleAddStock} className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div className="relative">
-            <label className="block text-sm font-medium mb-1">Symbol *</label>
+            <label htmlFor={`${uid}-symbol`} className="block text-sm font-medium mb-1">Symbol *</label>
             <div className="relative">
               <input
+                id={`${uid}-symbol`}
                 ref={symbolInputRef}
                 type="text"
                 required
@@ -201,14 +225,19 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
             )}
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Exchange *</label>
+            <label htmlFor={`${uid}-exchange`} className="block text-sm font-medium mb-1">Exchange *</label>
             <select
+              id={`${uid}-exchange`}
               value={addForm.exchange}
               onChange={(e) => {
-                setAddForm({ ...addForm, exchange: e.target.value });
-                // Re-search if symbol has content
+                const exchange = e.target.value;
+                exchangeRef.current = exchange;
+                setAddForm((f) => ({ ...f, exchange }));
+                // Re-search if symbol has content. Drop any pending debounce so
+                // the older query can't land after this one.
+                if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
                 if (addForm.stock_symbol.length >= 2) {
-                  searchStocks(addForm.stock_symbol, e.target.value);
+                  searchStocks(addForm.stock_symbol, exchange);
                 }
               }}
               className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
@@ -221,8 +250,9 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">Stock Name (optional — defaults to symbol)</label>
+          <label htmlFor={`${uid}-name`} className="block text-sm font-medium mb-1">Stock Name (optional — defaults to symbol)</label>
           <input
+            id={`${uid}-name`}
             type="text"
             placeholder="Auto-filled from search"
             value={addForm.stock_name}
@@ -233,8 +263,9 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Quantity *</label>
+            <label htmlFor={`${uid}-qty`} className="block text-sm font-medium mb-1">Quantity *</label>
             <input
+              id={`${uid}-qty`}
               type="number"
               required
               min="0.000001"
@@ -246,8 +277,9 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Buy Price *</label>
+            <label htmlFor={`${uid}-price`} className="block text-sm font-medium mb-1">Buy Price *</label>
             <input
+              id={`${uid}-price`}
               type="number"
               required
               min="0.01"
@@ -261,8 +293,9 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">Sector</label>
+          <label htmlFor={`${uid}-sector`} className="block text-sm font-medium mb-1">Sector</label>
           <input
+            id={`${uid}-sector`}
             type="text"
             placeholder="e.g., IT, Banking, Energy"
             value={addForm.sector || ""}
@@ -287,8 +320,9 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
           </div>
           <div className="mt-3 grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Base Level (−10%)</label>
+              <label htmlFor={`${uid}-base`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Base Level (−10%)</label>
               <input
+                id={`${uid}-base`}
                 type="number"
                 step="0.01"
                 placeholder="2000"
@@ -298,8 +332,9 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
               />
             </div>
             <div>
-              <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Lower Mid 2</label>
+              <label htmlFor={`${uid}-lm2`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Lower Mid 2</label>
               <input
+                id={`${uid}-lm2`}
                 type="number"
                 step="0.01"
                 value={addForm.lower_mid_range_2 || ""}
@@ -308,8 +343,9 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
               />
             </div>
             <div>
-              <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Lower Mid 1</label>
+              <label htmlFor={`${uid}-lm1`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Lower Mid 1</label>
               <input
+                id={`${uid}-lm1`}
                 type="number"
                 step="0.01"
                 value={addForm.lower_mid_range_1 || ""}
@@ -318,8 +354,9 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
               />
             </div>
             <div>
-              <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Upper Mid 1</label>
+              <label htmlFor={`${uid}-um1`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Upper Mid 1</label>
               <input
+                id={`${uid}-um1`}
                 type="number"
                 step="0.01"
                 value={addForm.upper_mid_range_1 || ""}
@@ -328,8 +365,9 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
               />
             </div>
             <div>
-              <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Upper Mid 2</label>
+              <label htmlFor={`${uid}-um2`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Upper Mid 2</label>
               <input
+                id={`${uid}-um2`}
                 type="number"
                 step="0.01"
                 value={addForm.upper_mid_range_2 || ""}
@@ -338,8 +376,9 @@ export function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps
               />
             </div>
             <div>
-              <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Top Level</label>
+              <label htmlFor={`${uid}-top`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Top Level</label>
               <input
+                id={`${uid}-top`}
                 type="number"
                 step="0.01"
                 value={addForm.top_level || ""}

@@ -24,22 +24,23 @@ Partially. The desktop app caches your last known portfolio state, so you can vi
 
 ### 4. Which brokers are supported?
 
-**Indian brokers**: Zerodha (Kite Connect), ICICI Direct (Breeze API), Angel One (SmartAPI), Upstox, 5Paisa.
-**German brokers**: Deutsche Bank and comdirect via PSD2/Open Banking.
-**Groww**: Does not offer a public API; you can export your Groww data as CSV and import it.
+**Connectable today**: Zerodha (Kite Connect) and ICICI Direct (Breeze API) — these two adapters are fully implemented.
 
-Broker connections are optional. The app works fully without any broker by using manual entry and yfinance for price data.
+**Registered but not yet built** (the adapter returns HTTP 501 and the Brokers page shows a "coming soon" badge): Angel One (SmartAPI), Upstox, 5Paisa, Groww, Deutsche Bank, comdirect. Do not sign up for an API key for these expecting them to work.
+
+**Groww** does not offer a public API at all; export your Groww data as CSV and import it instead.
+
+Broker connections are optional, and they are used for **holdings/transaction sync only** — prices always come from yfinance either way. See [broker-integration.md](broker-integration.md) for the authoritative status table.
 
 ---
 
 ### 5. How does the app get real-time stock prices?
 
-There are two methods, used in priority order:
+There is exactly one source: **yfinance** (free, no API key). A background job polls it every `PRICE_REFRESH_INTERVAL` minutes (default 5) and also once at startup, then pushes the new prices to open browsers over the `/ws/prices` WebSocket.
 
-1. **Broker WebSocket** (if connected): Real-time streaming with less than 1 second latency. Available with Zerodha, ICICI Direct, Angel One, and Upstox.
-2. **yfinance** (free, no API key): Polls prices every 5 minutes. NSE prices may have a 15-minute delay. XETRA prices are typically delayed as well.
+The prices are **not** real-time: NSE quotes via Yahoo are typically ~15 minutes delayed, and XETRA quotes are delayed as well. There is no broker price stream — connecting a broker syncs holdings and transactions, it does not change where prices come from.
 
-If both fail, the app shows the last cached price with a "stale" indicator and the timestamp of the last update.
+If the fetch fails, the app shows the last cached price with a "stale" indicator and the timestamp of the last successful update.
 
 ---
 
@@ -88,7 +89,7 @@ The app also suggests tax harvesting opportunities and warns you when a stock is
 
 ### 10. Do I need Redis installed?
 
-No. Redis is optional. It is used for the background task queue (Celery) which handles periodic price fetching and alert checking. If Redis is not installed, the app falls back to running these tasks inside the main process using asyncio. This works perfectly for personal use. Redis is recommended if you want reliable background processing or if you plan to run the app on a server.
+No. Background jobs (price refresh, alert checks, the daily AI digest) run **in-process on APScheduler by default**, whether or not Redis is installed. Redis is used only for alert de-duplication/caching, and as the Celery broker if you deliberately opt into Celery with `USE_CELERY=true` — which also means running `celery worker --beat` yourself. Installing Redis on its own changes nothing about scheduling. For personal and desktop use, leave it alone.
 
 ---
 
@@ -110,15 +111,16 @@ No. Ollama is optional. Without it, the AI chat assistant and AI-powered insight
 
 ### 13. How often are prices updated?
 
-| Source | Update Frequency |
+| Data | Update Frequency |
 |---|---|
-| Broker WebSocket (connected) | Real-time (< 1 second) |
-| yfinance (no broker) | Every 5 minutes during market hours |
-| RSI calculation | After every price update |
-| Mutual fund NAV | Daily after 11 PM IST |
-| Forex rates | Daily from ECB |
+| Stock prices (yfinance) | Every `PRICE_REFRESH_INTERVAL` minutes (default 5), plus once at app startup |
+| RSI calculation | Recomputed with every price refresh |
+| Alert evaluation | Every `ALERT_CHECK_INTERVAL` seconds (default 60) |
+| AI portfolio digest | Daily (per-user frequency: daily / weekly / off) |
+| Mutual fund NAV | **On demand only** — press **Refresh** on the Mutual Funds page. There is no scheduled NAV job. |
+| Forex rates | On demand, cached; a same-day rate is refetched after 1 hour |
 
-You can configure the price refresh interval in Settings under Market Data.
+The refresh interval is **not** editable in the app — the Settings page only displays it. Change it with `PRICE_REFRESH_INTERVAL` in `backend/.env` and restart the backend.
 
 ---
 
@@ -132,20 +134,22 @@ FinanceTracker is a Progressive Web App (PWA). When you access it from a mobile 
 
 Deleting a holding removes it and all its transactions from the database. This action cannot be undone from the UI. To protect against accidental data loss:
 
-1. **Regular backups**: Use Settings -> Advanced -> Export to create a full backup
+1. **Regular backups**: Use the **Export** tab of the **Import & Export** page (or the **Reports** page) and download the **JSON backup** — the only full-fidelity export
 2. **Confirmation dialog**: The app asks you to confirm before any deletion
 3. **Audit log**: All deletions are logged internally
 
-If you have a recent backup, you can restore it from Settings -> Advanced -> Import.
+If you have a recent JSON backup, restore it from the **Import** tab of the **Import & Export** page. (There is no Settings → Advanced panel; import and export live on their own page.)
 
 ---
 
 ### 16. Can I add custom columns to the holdings table?
 
-Yes. Go to Settings -> Display -> Customize Columns. You can:
-- Toggle built-in optional columns on/off (Sector, P&L Amount, 52-Week High/Low, Market Cap, Volume, Dividend Yield, Notes)
-- Add your own custom columns with a name and type (text, number, or date)
-- Drag and drop columns to reorder them
+Yes. Open the **Holdings** page and click the **Columns** button above the table (it opens a slide-over panel). You can:
+- Hide or show the optional built-in columns: **P&L Amount, P&L %, Sector, Exchange, Day Change, Notes**. The other seven (Symbol, Name, Quantity, Avg Price, Current Price, Action, RSI) are fixed and cannot be hidden.
+- Add your own custom columns with the **Add Column** form (a name, a display label, and a type: text, number, or date)
+- Reorder columns with the up/down arrows next to each one
+
+There is no Settings → Display → Customize Columns panel — column management lives on the Holdings page.
 
 Custom column values are stored per holding in a JSON field and are preserved across imports.
 
@@ -153,11 +157,28 @@ Custom column values are stored per holding in a JSON field and are preserved ac
 
 ### 17. How do I set up WhatsApp or Telegram notifications?
 
-**WhatsApp**: Requires a Twilio account (they offer a free trial with WhatsApp). Enter your Twilio Account SID, Auth Token, and WhatsApp-enabled phone number in Settings -> Notifications -> WhatsApp.
+Credentials are **server-side settings**, not app settings. There is no screen in the app for pasting an API key or bot token — they go in `backend/.env` (or real environment variables) and take effect on the next backend restart.
 
-**Telegram**: Create a bot using @BotFather on Telegram (free). Enter the bot token in Settings -> Notifications -> Telegram. Message your bot once, and the app will auto-detect your Chat ID.
+**WhatsApp / SMS** — requires a Twilio account (free trial available). In `backend/.env`:
 
-Both channels offer a "Test" button to verify the setup before enabling alerts.
+```bash
+TWILIO_ACCOUNT_SID=ACxxxxxxxx
+TWILIO_AUTH_TOKEN=xxxxxxxx
+TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+TWILIO_SMS_FROM=+14155238886
+```
+
+Then in the app: **Settings → Notifications**, toggle *WhatsApp* and/or *SMS* on, enter your own phone number in E.164 form (`+9198XXXXXXXX`) in the field that appears, and **Save Changes**.
+
+**Telegram** — create a bot with [@BotFather](https://t.me/BotFather) (free), then in `backend/.env`:
+
+```bash
+TELEGRAM_BOT_TOKEN=123456789:ABCdefGhIJklMNopQRSTuvWXYz
+```
+
+Then in the app: **Settings → Notifications**, toggle *Telegram* on and **type your Chat ID** into the field that appears. The app does **not** auto-detect it — get it by messaging your bot and opening `https://api.telegram.org/bot<TOKEN>/getUpdates`, or by messaging `@userinfobot`.
+
+A **Test Email** / **Test Telegram** button appears in Settings once the corresponding server-side key is present. There is no Test button for WhatsApp or SMS.
 
 ---
 
@@ -169,20 +190,22 @@ There is no hard limit. The app is designed to handle hundreds of holdings per p
 
 ### 19. Can I use the app for mutual funds?
 
-Yes. You can add mutual fund holdings manually (with scheme code, units, and invested amount) or import your Consolidated Account Statement (CAS) from CAMS or KFintech. NAV data is fetched daily from AMFI. The app calculates XIRR returns and tracks SIP investments.
+Yes. You can add mutual fund holdings manually (with scheme code, units, and invested amount) or import your Consolidated Account Statement (CAS) from CAMS or KFintech. NAV comes from mfapi.in (AMFI data) and is fetched **when you press Refresh on the Mutual Funds page** — there is no nightly NAV job, so a fund you have not refreshed shows the NAV from the last time you did. The app calculates XIRR returns and tracks SIP investments.
 
 ---
 
 ### 20. What data sources are used for stock prices?
 
-| Data | Primary Source | Fallback |
+| Data | Source | Fallback |
 |---|---|---|
-| Current prices | Broker API (if connected) | yfinance (free) |
-| Historical OHLCV | yfinance (20+ years) | Broker API |
-| RSI and indicators | Calculated locally with pandas_ta | - |
-| Mutual fund NAV | MFapi.in (AMFI data) | - |
-| Forex rates | ECB (free) | yfinance (EURINR=X) |
+| Current prices | yfinance (free) — the only source | Last cached price, flagged stale |
+| Historical OHLCV | yfinance (20+ years) | Last cached history |
+| RSI and indicators | Calculated locally with pandas_ta | Manual Wilder-smoothed implementation |
+| Mutual fund NAV | mfapi.in (AMFI data), on demand | Last stored NAV |
+| Forex rates | yfinance `{FROM}{TO}=X` tickers (e.g. `EURINR=X`) | Cached rate from the `forex_rates` table |
 | News/sentiment | RSS feeds (free) | - |
+
+There is no ECB integration and no broker price feed; every quote and every FX rate comes from yfinance.
 
 All price data is cached locally, so the app continues to work even if an external source is temporarily unavailable.
 

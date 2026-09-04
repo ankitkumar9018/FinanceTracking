@@ -17,6 +17,7 @@ import { api } from "@/lib/api-client";
 import { useApiData } from "@/hooks/use-api-data";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { EmptyState } from "@/components/shared/empty-state";
+import { ErrorState } from "@/components/shared/error-state";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
@@ -174,6 +175,17 @@ export default function TaxPage() {
   useEffect(() => {
     if (coreError) toast.error("Failed to load tax data");
   }, [coreError]);
+  /* useApiData deliberately keeps the last good payload on a failed reload, so
+   * a failed FY / jurisdiction switch would leave the PREVIOUS year's gains and
+   * tax payable rendered under the new selector values. On the one page where a
+   * wrong number has filing consequences, show the error instead of the stale
+   * figures. The two fetches are gated separately so a harvesting hiccup can't
+   * blank the records the user came for. */
+  const gainsError = recordsApi.error || summaryApi.error;
+  const reloadGains = () => {
+    recordsApi.reload();
+    summaryApi.reload();
+  };
   const advError = allowanceApi.error || vorabApi.error;
   useEffect(() => {
     if (advError) toast.error("Failed to load German tax details");
@@ -320,7 +332,9 @@ export default function TaxPage() {
       </div>
 
       {/* ---- Summary cards ---- */}
-      {loading ? (
+      {gainsError ? (
+        <ErrorState message={gainsError} onRetry={reloadGains} />
+      ) : loading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <div
@@ -406,7 +420,20 @@ export default function TaxPage() {
                 </div>
               </div>
 
-              {advLoading && !allowance ? (
+              {allowanceApi.error ? (
+                /* Same stale-data trap as the gains cards: the allowance is
+                 * FY-scoped, so a failed year switch would report last year's
+                 * headroom as this year's. */
+                <p className="mt-4 text-sm text-[hsl(var(--destructive))]">
+                  Could not load the allowance for {financialYear}.{" "}
+                  <button
+                    onClick={() => allowanceApi.reload()}
+                    className="font-medium underline underline-offset-2"
+                  >
+                    Retry
+                  </button>
+                </p>
+              ) : advLoading && !allowance ? (
                 <div className="mt-4 h-16 animate-pulse rounded bg-[hsl(var(--muted))]" />
               ) : allowance ? (
                 <>
@@ -461,7 +488,17 @@ export default function TaxPage() {
                 </span>
               </div>
 
-              {advLoading && !vorab ? (
+              {vorabApi.error ? (
+                <p className="mt-4 text-sm text-[hsl(var(--destructive))]">
+                  Could not load the {financialYear} estimate.{" "}
+                  <button
+                    onClick={() => vorabApi.reload()}
+                    className="font-medium underline underline-offset-2"
+                  >
+                    Retry
+                  </button>
+                </p>
+              ) : advLoading && !vorab ? (
                 <div className="mt-4 h-16 animate-pulse rounded bg-[hsl(var(--muted))]" />
               ) : !activePortfolioId ? (
                 <p className="mt-4 text-sm text-[hsl(var(--muted-foreground))]">
@@ -666,11 +703,23 @@ export default function TaxPage() {
         <div className="border-b border-[hsl(var(--border))] px-5 py-4">
           <h2 className="font-semibold">Tax Records</h2>
           <p className="text-xs text-[hsl(var(--muted-foreground))]">
-            {summary?.records_count ?? 0} records for FY {financialYear}
+            {gainsError
+              ? `Could not load FY ${financialYear}`
+              : `${summary?.records_count ?? 0} records for FY ${financialYear}`}
           </p>
         </div>
 
-        {loading ? (
+        {gainsError ? (
+          /* The summary cards above already carry the full ErrorState; here a
+           * compact line is enough — what matters is that the PREVIOUS year's
+           * rows are gone. */
+          <p className="px-5 py-8 text-center text-sm text-[hsl(var(--destructive))]">
+            Records for FY {financialYear} could not be loaded.{" "}
+            <button onClick={reloadGains} className="font-medium underline underline-offset-2">
+              Retry
+            </button>
+          </p>
+        ) : loading ? (
           <div className="space-y-2 p-5">
             {Array.from({ length: 4 }).map((_, i) => (
               <div
@@ -776,7 +825,14 @@ export default function TaxPage() {
           </p>
         </div>
 
-        {loading ? (
+        {harvestingApi.error ? (
+          <div className="p-5">
+            <ErrorState
+              message={harvestingApi.error}
+              onRetry={() => harvestingApi.reload()}
+            />
+          </div>
+        ) : loading ? (
           <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 3 }).map((_, i) => (
               <div

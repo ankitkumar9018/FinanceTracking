@@ -42,6 +42,45 @@ import toast from "react-hot-toast";
 // VirtualTable is available at @/components/shared/virtual-table for large portfolio rendering
 // DensityToggle persists user preference in localStorage
 
+type SortDir = "asc" | "desc";
+
+/** Sortable column header.
+ *
+ *  Module scope on purpose: declared inside the render body it got a new
+ *  function identity every render, so React saw a different component *type*
+ *  each time and destroyed + recreated every header button (and any focus on
+ *  it) on every price tick.
+ */
+function SortHeader({
+  label,
+  sortKeyName,
+  sortKey,
+  sortDir,
+  onSort,
+}: {
+  label: string;
+  sortKeyName: SortKey;
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onSort: (key: SortKey) => void;
+}) {
+  const isActive = sortKey === sortKeyName;
+  return (
+    <button
+      onClick={() => onSort(sortKeyName)}
+      aria-label={`Sort by ${label}`}
+      className="flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
+    >
+      {label}
+      {isActive ? (
+        sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+      ) : (
+        <ArrowUpDown className="h-3 w-3 opacity-40" />
+      )}
+    </button>
+  );
+}
+
 export default function HoldingsPage() {
   const { holdings, isLoading, error, fetchPortfolios, activePortfolioId, fetchHoldings } = usePortfolioStore();
   const { density, setDensity: setTableDensity } = useDensity();
@@ -60,9 +99,17 @@ export default function HoldingsPage() {
 
   // View mode toggle
   const [viewMode, setViewMode] = useState<"cards" | "table">("table");
-  type SortDir = "asc" | "desc";
   const [sortKey, setSortKey] = useState<SortKey>("stock_symbol");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+
+  function handleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  }
 
   // Dynamic columns (custom-columns UI)
   const [columns, setColumns] = useState<ColumnMeta[]>(DEFAULT_COLUMNS);
@@ -499,15 +546,6 @@ export default function HoldingsPage() {
           // Density padding applied to every body cell so the toggle affects the whole row
           const cellClass = DENSITY_CLASSES[density];
 
-          function handleSort(key: SortKey) {
-            if (sortKey === key) {
-              setSortDir(sortDir === "asc" ? "desc" : "asc");
-            } else {
-              setSortKey(key);
-              setSortDir("asc");
-            }
-          }
-
           const sorted = [...filtered].sort((a, b) => {
             const dir = sortDir === "asc" ? 1 : -1;
             switch (sortKey) {
@@ -540,23 +578,6 @@ export default function HoldingsPage() {
             }
           });
 
-          function SortHeader({ label, sortKeyName }: { label: string; sortKeyName: SortKey }) {
-            const isActive = sortKey === sortKeyName;
-            return (
-              <button
-                onClick={() => handleSort(sortKeyName)}
-                className="flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
-              >
-                {label}
-                {isActive ? (
-                  sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
-                ) : (
-                  <ArrowUpDown className="h-3 w-3 opacity-40" />
-                )}
-              </button>
-            );
-          }
-
           // Columns to render: keep non-removable ones always, drop hidden removable/custom ones
           const visibleColumns = columns.filter((c) => !c.removable || !hiddenCols.has(c.name));
 
@@ -566,13 +587,36 @@ export default function HoldingsPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
+                      {bulkEditMode && (
+                        <th className="w-10 px-4 py-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.length > 0 && selectedIds.length === filtered.length}
+                            ref={(el) => {
+                              if (el) {
+                                el.indeterminate =
+                                  selectedIds.length > 0 && selectedIds.length < filtered.length;
+                              }
+                            }}
+                            onChange={toggleSelectAll}
+                            aria-label="Select all holdings"
+                            className="h-4 w-4 cursor-pointer accent-[hsl(var(--primary))]"
+                          />
+                        </th>
+                      )}
                       {visibleColumns.map((col) => {
                         const sk = sortKeyFor(col.name);
                         const alignCls = ALIGN_CLASS[alignFor(col)];
                         return (
                           <th key={col.name} className={`px-4 py-3 ${alignCls}`}>
                             {sk ? (
-                              <SortHeader label={col.label} sortKeyName={sk} />
+                              <SortHeader
+                                label={col.label}
+                                sortKeyName={sk}
+                                sortKey={sortKey}
+                                sortDir={sortDir}
+                                onSort={handleSort}
+                              />
                             ) : (
                               <span className="text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
                                 {col.label}
@@ -581,19 +625,46 @@ export default function HoldingsPage() {
                           </th>
                         );
                       })}
-                      <th className="px-4 py-3 text-center text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Actions</th>
+                      {!bulkEditMode && (
+                        <th className="px-4 py-3 text-center text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Actions</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
                     {sorted.map((holding) => {
                       const ccy = holding.currency ?? currencyForExchange(holding.exchange);
                       const slStatus = stopLossMap.get(holding.holding_id);
+                      const isSelected = selectedIds.includes(holding.holding_id);
 
                       return (
                         <tr
                           key={holding.holding_id}
-                          className="border-b border-[hsl(var(--border))] last:border-0 hover:bg-[hsl(var(--muted))]/30 transition-colors"
+                          // Bulk edit is reachable from the DEFAULT (table) view:
+                          // selection used to exist only in the cards branch, so
+                          // "Bulk Edit" here revealed no way to pick a row.
+                          onClick={
+                            bulkEditMode ? () => toggleSelection(holding.holding_id) : undefined
+                          }
+                          className={`border-b border-[hsl(var(--border))] last:border-0 transition-colors ${
+                            bulkEditMode ? "cursor-pointer" : ""
+                          } ${
+                            isSelected
+                              ? "bg-[hsl(var(--primary))]/10 hover:bg-[hsl(var(--primary))]/15"
+                              : "hover:bg-[hsl(var(--muted))]/30"
+                          }`}
                         >
+                          {bulkEditMode && (
+                            <td className={`${cellClass} w-10`}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleSelection(holding.holding_id)}
+                                onClick={(e) => e.stopPropagation()}
+                                aria-label={`Select ${holding.stock_symbol}`}
+                                className="h-4 w-4 cursor-pointer accent-[hsl(var(--primary))]"
+                              />
+                            </td>
+                          )}
                           {visibleColumns.map((col) => {
                             const alignCls = ALIGN_CLASS[alignFor(col)];
                             const bg = cellBg(col.name, holding);
@@ -607,6 +678,7 @@ export default function HoldingsPage() {
                               </td>
                             );
                           })}
+                          {!bulkEditMode && (
                           <td className={`${cellClass} text-center`}>
                             <div className="flex items-center justify-center gap-1">
                               <button
@@ -635,6 +707,7 @@ export default function HoldingsPage() {
                               </button>
                             </div>
                           </td>
+                          )}
                         </tr>
                       );
                     })}

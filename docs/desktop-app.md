@@ -13,11 +13,12 @@ FinanceTracker ships as a native desktop app built with **Tauri v2**. It bundles
 5. [Step-by-Step Manual Build](#step-by-step-manual-build)
 6. [Development Mode](#development-mode)
 7. [How the Desktop App Works](#how-the-desktop-app-works)
-8. [Upgrading an Existing Installation (Your Data Is Kept)](#upgrading-an-existing-installation-your-data-is-kept)
-9. [Platform-Specific Details](#platform-specific-details)
-10. [CI/CD Automated Builds](#cicd-automated-builds)
-11. [Troubleshooting](#troubleshooting)
-12. [File Structure Reference](#file-structure-reference)
+8. [External Services: Notifications and AI](#external-services-notifications-and-ai)
+9. [Upgrading an Existing Installation (Your Data Is Kept)](#upgrading-an-existing-installation-your-data-is-kept)
+10. [Platform-Specific Details](#platform-specific-details)
+11. [CI/CD Automated Builds](#cicd-automated-builds)
+12. [Troubleshooting](#troubleshooting)
+13. [File Structure Reference](#file-structure-reference)
 
 ---
 
@@ -354,6 +355,86 @@ The sidecar sets `CORS_ORIGINS=*` because:
   - Windows (WebView2): `https://tauri.localhost`
   - Linux (WebKitGTK): varies
 - Wildcard CORS with `allow_credentials=False` works safely for local-only backends
+
+---
+
+## External Services: Notifications and AI
+
+Email/Telegram/WhatsApp/SMS alerts and the cloud LLM providers all need
+credentials, and **the app has no screen for entering them**. In the web/dev
+setup they go in `backend/.env`. In the packaged desktop app they cannot: the
+sidecar is a **one-file PyInstaller binary**, so the `.env` path
+`config.py` looks at (`BASE_DIR / ".env"`, where `BASE_DIR` is the module's
+parent) resolves inside PyInstaller's `_MEIPASS` extraction directory — a fresh
+temp folder on every launch. There is nothing there you can edit.
+
+**The desktop app therefore configures these purely through OS environment
+variables**, which the Tauri shell passes down to the sidecar it spawns. (This
+is the same mechanism the app already relies on for `SECRET_KEY`, which
+`app/__main__.py` reads from the environment before falling back to the
+per-install `secret.key` file.)
+
+### The variables
+
+| Purpose | Variables |
+|---|---|
+| Email alerts | `SENDGRID_API_KEY`, `EMAIL_FROM` |
+| WhatsApp / SMS alerts | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`, `TWILIO_SMS_FROM` |
+| Telegram alerts | `TELEGRAM_BOT_TOKEN` (your chat ID is typed into Settings → Notifications) |
+| Cloud AI provider | `LLM_PROVIDER` (`ollama` \| `openai` \| `anthropic` \| `google` \| `none`) plus `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` or `GOOGLE_API_KEY` |
+| Local AI (default) | `OLLAMA_URL`, `OLLAMA_MODEL` — nothing to set if Ollama runs on `localhost:11434` |
+| Price refresh cadence | `PRICE_REFRESH_INTERVAL` (minutes), `ALERT_CHECK_INTERVAL` (seconds) |
+
+The full list is in [deployment.md](deployment.md#environment-variable-reference).
+
+### Setting them per platform
+
+**macOS.** An app launched from Finder does **not** inherit your shell's
+environment, so exporting a variable in `~/.zshrc` has no effect. Either
+
+```bash
+# Persists for GUI apps launched afterwards (repeat after each reboot,
+# or wrap it in a LaunchAgent to make it permanent)
+launchctl setenv SENDGRID_API_KEY "SG.xxxx"
+launchctl setenv EMAIL_FROM "alerts@example.com"
+```
+
+or launch the bundle from a terminal that already has them exported:
+
+```bash
+SENDGRID_API_KEY=SG.xxxx EMAIL_FROM=alerts@example.com \
+  open -a FinanceTracker
+```
+
+**Windows.** Add them as user environment variables — *Settings → System →
+About → Advanced system settings → Environment Variables → User variables →
+New* — then **sign out and back in** (or at minimum restart the app) so the
+new environment is picked up. From PowerShell:
+
+```powershell
+[Environment]::SetEnvironmentVariable("SENDGRID_API_KEY", "SG.xxxx", "User")
+```
+
+**Linux.** Put them in `~/.profile` (read at session login, so desktop-launched
+apps see them) and log out and back in, or add an `Environment=` line to a
+user-level systemd unit / a custom `.desktop` launcher:
+
+```ini
+# ~/.local/share/applications/financetracker.desktop
+Exec=env SENDGRID_API_KEY=SG.xxxx EMAIL_FROM=alerts@example.com /usr/bin/finance-tracker
+```
+
+### Verifying it worked
+
+Open **Settings → Notifications**. A **Test Email** or **Test Telegram** button
+appears only when the backend actually has the corresponding key — if no button
+shows up, the variable did not reach the sidecar. For AI, the **AI &
+Integrations** block on the same page reports the provider the backend resolved.
+Both blocks are **read-only** views of server configuration; there is nothing to
+type there.
+
+Everything else works with no configuration at all: prices, RSI, charts, tax,
+import/export, and in-app alerts need no keys.
 
 ---
 

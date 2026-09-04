@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { api } from "@/lib/api-client";
-import { formatCurrency, currencyForExchange } from "@/lib/utils";
+import { formatCurrency } from "@/lib/utils";
 import toast from "react-hot-toast";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -62,10 +62,6 @@ interface DividendSummary {
   total_reinvested: number;
   count: number;
   calendar: Array<Record<string, unknown>>;
-}
-
-interface DividendForecastMeta {
-  currency?: string;
 }
 
 interface ForecastMonth {
@@ -370,7 +366,12 @@ export default function DividendsPage() {
               role="img"
               aria-label="Bar chart of projected dividend income for each of the next 12 months"
             >
-              <DividendForecastChart data={forecast.monthly} />
+              {/* The chart's own default is INR — the forecast is already
+                  converted into `forecast.currency`, so it must be told. */}
+              <DividendForecastChart
+                data={forecast.monthly}
+                currency={forecast.currency}
+              />
             </div>
 
             {/* Per-holding breakdown */}
@@ -500,6 +501,11 @@ export default function DividendsPage() {
                       ? new Date(div.payment_date).toLocaleDateString()
                       : "—"}
                   </td>
+                  {/* Per-row amounts are stored in the HOLDING's own currency
+                      and `DividendResponse` carries no currency/exchange field,
+                      so there is nothing to label these with yet — see the
+                      handoff note. The cards above are converted totals and do
+                      carry one. */}
                   <td className="px-5 py-3 text-right font-mono">
                     {formatCurrency(div.amount_per_share)}
                   </td>

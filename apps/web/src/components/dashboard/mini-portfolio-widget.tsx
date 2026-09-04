@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { formatCurrency, currencyForExchange } from "@/lib/utils";
-import { TrendingUp, TrendingDown, ChevronDown, ChevronUp } from "lucide-react";
+import { TrendingUp, TrendingDown, ChevronDown, ChevronUp, X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 export function MiniPortfolioWidget() {
+  const panelId = useId();
   const { holdings } = usePortfolioStore();
   const [expanded, setExpanded] = useState(false);
   const [visible, setVisible] = useState(true);
@@ -53,45 +54,66 @@ export function MiniPortfolioWidget() {
       animate={{ y: 0, opacity: 1 }}
       className="fixed bottom-4 right-4 z-40 w-64 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]/95 backdrop-blur-lg shadow-2xl"
     >
-      {/* Header — always visible */}
-      <div
-        className="flex cursor-pointer items-center justify-between p-3"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div>
-          <p className="text-[10px] font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
-            Portfolio
-          </p>
-          <p className="font-mono text-lg font-bold">{formatCurrency(totalValue, primaryCurrency)}</p>
-          {otherCount > 0 && (
-            <p className="text-[9px] text-[hsl(var(--muted-foreground))]">
-              +{otherCount} holding{otherCount > 1 ? "s" : ""} in other currencies
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          <div
-            className={`flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-medium ${
-              isUp
-                ? "bg-[hsl(var(--profit))]/10 text-[hsl(var(--profit))]"
-                : "bg-[hsl(var(--loss))]/10 text-[hsl(var(--loss))]"
-            }`}
-          >
-            {isUp ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-            {totalPnlPct >= 0 ? "+" : ""}{totalPnlPct.toFixed(2)}%
-          </div>
-          {expanded ? (
-            <ChevronDown className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
-          ) : (
-            <ChevronUp className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
-          )}
-        </div>
+      {/* Header — always visible. The disclosure is a real button (keyboard
+        * operable, announces its state) and dismissal never hides behind it. */}
+      <div className="flex items-start gap-1 p-3">
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          aria-expanded={expanded}
+          aria-controls={panelId}
+          className="flex flex-1 items-center justify-between gap-2 rounded-md text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+        >
+          <span className="block">
+            <span className="block text-[10px] font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
+              Portfolio
+            </span>
+            <span className="block font-mono text-lg font-bold">
+              {formatCurrency(totalValue, primaryCurrency)}
+            </span>
+            {otherCount > 0 && (
+              <span className="block text-[9px] text-[hsl(var(--muted-foreground))]">
+                +{otherCount} holding{otherCount > 1 ? "s" : ""} in other currencies
+              </span>
+            )}
+          </span>
+          <span className="flex items-center gap-1">
+            <span
+              className={`flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-medium ${
+                isUp
+                  ? "bg-[hsl(var(--profit))]/10 text-[hsl(var(--profit))]"
+                  : "bg-[hsl(var(--loss))]/10 text-[hsl(var(--loss))]"
+              }`}
+            >
+              {isUp ? (
+                <TrendingUp className="h-3 w-3" aria-hidden="true" />
+              ) : (
+                <TrendingDown className="h-3 w-3" aria-hidden="true" />
+              )}
+              {totalPnlPct >= 0 ? "+" : ""}{totalPnlPct.toFixed(2)}%
+            </span>
+            {expanded ? (
+              <ChevronUp className="h-4 w-4 text-[hsl(var(--muted-foreground))]" aria-hidden="true" />
+            ) : (
+              <ChevronDown className="h-4 w-4 text-[hsl(var(--muted-foreground))]" aria-hidden="true" />
+            )}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setVisible(false)}
+          aria-label="Hide portfolio widget"
+          className="rounded-md p-1 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       {/* Expanded section */}
       <AnimatePresence>
         {expanded && (
           <motion.div
+            id={panelId}
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
@@ -115,17 +137,6 @@ export function MiniPortfolioWidget() {
                   </span>
                 </div>
               ))}
-            </div>
-            <div className="border-t border-[hsl(var(--border))] p-2 text-center">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setVisible(false);
-                }}
-                className="text-[10px] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
-              >
-                Hide widget
-              </button>
             </div>
           </motion.div>
         )}

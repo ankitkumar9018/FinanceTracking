@@ -5,7 +5,9 @@ import { Bell, BellOff, Plus, Trash2, AlertTriangle, X, Loader2 } from "lucide-r
 import { api } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import toast from "react-hot-toast";
-import { formatPercent } from "@/lib/utils";
+import { formatCurrency, formatPercent } from "@/lib/utils";
+import { currencyForExchange } from "@/lib/exchanges";
+import { ZONE_LABELS } from "@/components/holdings/holdings-columns";
 import { motion, AnimatePresence } from "framer-motion";
 import { ContextualHelp } from "@/components/shared/contextual-help";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -14,12 +16,21 @@ import { ErrorState } from "@/components/shared/error-state";
 interface Alert {
   id: number;
   holding_id: number | null;
+  watchlist_item_id: number | null;
   alert_type: string;
   condition: Record<string, unknown>;
   is_active: boolean;
   last_triggered: string | null;
   channels: string[];
-  holding_symbol?: string;
+}
+
+/** Which stock an alert watches. The API returns only the foreign key, so the
+ *  symbol is resolved client-side from the holdings and watchlist lists. */
+interface AlertSubject {
+  symbol: string;
+  name: string | null;
+  exchange: string;
+  source: "holding" | "watchlist";
 }
 
 interface DriftAlert {
@@ -30,6 +41,51 @@ interface DriftAlert {
   drift: number;
 }
 
+/** Turn a raw condition dict into the sentence a human would say.
+ *  Falls back to listing the keys so an unrecognised condition is still
+ *  readable — never a JSON blob. */
+function describeCondition(
+  alertType: string,
+  condition: Record<string, unknown>,
+  currency: string
+): string {
+  const num = (v: unknown): number | null => {
+    const n = typeof v === "number" ? v : parseFloat(String(v));
+    return Number.isFinite(n) ? n : null;
+  };
+  const parts: string[] = [];
+
+  if (alertType === "RSI") {
+    const above = num(condition.rsi_above);
+    const below = num(condition.rsi_below);
+    if (above !== null) parts.push(`RSI rises above ${above}`);
+    if (below !== null) parts.push(`RSI falls below ${below}`);
+  } else if (alertType === "CUSTOM") {
+    const zone = condition.action_needed;
+    if (typeof zone === "string" && zone) {
+      parts.push(`enters the ${ZONE_LABELS[zone]?.label ?? zone.replace(/^Y_/, "").replace(/_/g, " ")} zone`);
+    }
+  } else {
+    const above = num(condition.above);
+    const below = num(condition.below);
+    if (above !== null) parts.push(`price rises above ${formatCurrency(above, currency)}`);
+    if (below !== null) parts.push(`price falls below ${formatCurrency(below, currency)}`);
+  }
+
+  if (parts.length === 0) {
+    // Unknown shape — render the keys legibly rather than JSON.stringify.
+    const pairs = Object.entries(condition)
+      .filter(([key]) => key !== "one_shot" && key !== "once")
+      .map(([key, value]) => `${key.replace(/_/g, " ")} ${String(value)}`);
+    if (pairs.length === 0) return "No condition set";
+    parts.push(pairs.join(", "));
+  }
+
+  const sentence = parts.join(" or ");
+  const oneShot = Boolean(condition.one_shot ?? condition.once);
+  return oneShot ? `${sentence} (notifies once)` : sentence;
+}
+
 const NOTIFICATION_CHANNELS = [
   { value: "in_app", label: "In-App" },
   { value: "email", label: "Email" },
@@ -37,6 +93,10 @@ const NOTIFICATION_CHANNELS = [
   { value: "whatsapp", label: "WhatsApp" },
   { value: "sms", label: "SMS" },
 ];
+
+const CHANNEL_LABELS: Record<string, string> = Object.fromEntries(
+  NOTIFICATION_CHANNELS.map((c) => [c.value, c.label])
+);
 
 export default function AlertsPage() {
   const { activePortfolioId, hasLoadedPortfolios, holdings } = usePortfolioStore();
@@ -46,6 +106,9 @@ export default function AlertsPage() {
   const [driftAlerts, setDriftAlerts] = useState<DriftAlert[]>([]);
   const [driftLoading, setDriftLoading] = useState(true);
   const [driftError, setDriftError] = useState<string | null>(null);
+  // holding_id / watchlist_item_id -> stock, so a card can name its stock.
+  const [holdingSubjects, setHoldingSubjects] = useState<Map<number, AlertSubject>>(new Map());
+  const [watchlistSubjects, setWatchlistSubjects] = useState<Map<number, AlertSubject>>(new Map());
 
   // Create alert modal state
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -60,6 +123,7 @@ export default function AlertsPage() {
 
   useEffect(() => {
     loadAlerts();
+    loadSubjects();
   }, []);
 
   useEffect(() => {
@@ -84,6 +148,46 @@ export default function AlertsPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  /** Alerts are user-wide, so resolve their symbols from ALL holdings (the
+   *  store only carries the active portfolio) plus the watchlist. A failure
+   *  here degrades to "Holding #12" — it must never blank the alert list. */
+  async function loadSubjects() {
+    const [holdingRes, watchlistRes] = await Promise.allSettled([
+      api.get<Array<{ id: number; stock_symbol: string; stock_name: string; exchange: string }>>(
+        "/holdings"
+      ),
+      api.get<Array<{ id: number; stock_symbol: string; stock_name: string; exchange: string }>>(
+        "/watchlist"
+      ),
+    ]);
+    if (holdingRes.status === "fulfilled") {
+      setHoldingSubjects(
+        new Map(
+          holdingRes.value.map((h) => [
+            h.id,
+            { symbol: h.stock_symbol, name: h.stock_name, exchange: h.exchange, source: "holding" as const },
+          ])
+        )
+      );
+    }
+    if (watchlistRes.status === "fulfilled") {
+      setWatchlistSubjects(
+        new Map(
+          watchlistRes.value.map((w) => [
+            w.id,
+            { symbol: w.stock_symbol, name: w.stock_name, exchange: w.exchange, source: "watchlist" as const },
+          ])
+        )
+      );
+    }
+  }
+
+  function subjectFor(alert: Alert): AlertSubject | null {
+    if (alert.holding_id != null) return holdingSubjects.get(alert.holding_id) ?? null;
+    if (alert.watchlist_item_id != null) return watchlistSubjects.get(alert.watchlist_item_id) ?? null;
+    return null;
   }
 
   async function loadDriftAlerts(isActive: () => boolean = () => true) {
@@ -128,7 +232,11 @@ export default function AlertsPage() {
     }
   }
 
-  async function deleteAlert(id: number) {
+  async function deleteAlert(alert: Alert) {
+    const subject = subjectFor(alert);
+    const what = subject ? `the ${subject.symbol} alert` : "this alert";
+    if (!confirm(`Delete ${what}? This cannot be undone.`)) return;
+    const id = alert.id;
     try {
       await api.delete(`/alerts/${id}`);
       setAlerts((prev) => prev.filter((a) => a.id !== id));
@@ -158,7 +266,7 @@ export default function AlertsPage() {
       toast.success("Alert created");
       setShowCreateModal(false);
       setCreateForm({ holding_id: "", alert_type: "PRICE_RANGE", direction: "above", threshold: 0, channel: "in_app" });
-      await loadAlerts();
+      await Promise.all([loadAlerts(), loadSubjects()]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create alert");
     } finally {
@@ -321,60 +429,82 @@ export default function AlertsPage() {
           />
         ) : (
           <div className="space-y-2">
-            {alerts.map((alert, i) => (
-              <motion.div
-                key={alert.id}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: Math.min(i, 10) * 0.03 }}
-                className={`flex items-center justify-between rounded-lg border p-4 transition-colors ${
-                  alert.is_active
-                    ? "border-[hsl(var(--border))] bg-[hsl(var(--card))]"
-                    : "border-[hsl(var(--border))]/50 bg-[hsl(var(--muted))]/30 opacity-60"
-                }`}
-              >
-                <div className="flex items-center gap-4">
-                  <div
-                    className={`flex h-10 w-10 items-center justify-center rounded-full ${
-                      alert.is_active ? "bg-[hsl(var(--primary))]/10" : "bg-[hsl(var(--muted))]"
-                    }`}
-                  >
-                    {alert.is_active ? (
-                      <Bell className="h-5 w-5 text-[hsl(var(--primary))]" />
-                    ) : (
-                      <BellOff className="h-5 w-5 text-[hsl(var(--muted-foreground))]" />
-                    )}
-                  </div>
-                  <div>
-                    <p className="font-medium">{alert.alert_type.replace("_", " ")}</p>
-                    <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                      {JSON.stringify(alert.condition)}
-                    </p>
-                    {alert.last_triggered && (
-                      <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                        Last triggered: {new Date(alert.last_triggered).toLocaleDateString()}
+            {alerts.map((alert, i) => {
+              const subject = subjectFor(alert);
+              const fallbackId = alert.holding_id ?? alert.watchlist_item_id;
+              const title =
+                subject?.symbol ?? (fallbackId != null ? `Stock #${fallbackId}` : "Portfolio alert");
+              const currency = currencyForExchange(subject?.exchange);
+              return (
+                <motion.div
+                  key={alert.id}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: Math.min(i, 10) * 0.03 }}
+                  className={`flex items-center justify-between gap-4 rounded-lg border p-4 transition-colors ${
+                    alert.is_active
+                      ? "border-[hsl(var(--border))] bg-[hsl(var(--card))]"
+                      : "border-[hsl(var(--border))]/50 bg-[hsl(var(--muted))]/30 opacity-60"
+                  }`}
+                >
+                  <div className="flex min-w-0 items-center gap-4">
+                    <div
+                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
+                        alert.is_active ? "bg-[hsl(var(--primary))]/10" : "bg-[hsl(var(--muted))]"
+                      }`}
+                    >
+                      {alert.is_active ? (
+                        <Bell className="h-5 w-5 text-[hsl(var(--primary))]" />
+                      ) : (
+                        <BellOff className="h-5 w-5 text-[hsl(var(--muted-foreground))]" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-bold">{title}</p>
+                        {subject?.name && subject.name !== subject.symbol && (
+                          <span className="truncate text-xs text-[hsl(var(--muted-foreground))]">
+                            {subject.name}
+                          </span>
+                        )}
+                        <span className="rounded-full bg-[hsl(var(--muted))] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                          {alert.alert_type.replace(/_/g, " ")}
+                        </span>
+                        {subject?.source === "watchlist" && (
+                          <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600">
+                            Watchlist
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 text-sm text-[hsl(var(--muted-foreground))]">
+                        Notify me when {describeCondition(alert.alert_type, alert.condition, currency)}
                       </p>
-                    )}
+                      <p className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]">
+                        via {alert.channels.map((c) => CHANNEL_LABELS[c] ?? c).join(", ") || "in-app"}
+                        {alert.last_triggered &&
+                          ` · last triggered ${new Date(alert.last_triggered).toLocaleDateString()}`}
+                      </p>
+                    </div>
                   </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => toggleAlert(alert.id, alert.is_active)}
-                    className="rounded-md px-3 py-1 text-xs font-medium transition-colors bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))]"
-                  >
-                    {alert.is_active ? "Disable" : "Enable"}
-                  </button>
-                  <button
-                    onClick={() => deleteAlert(alert.id)}
-                    aria-label="Delete alert"
-                    title="Delete alert"
-                    className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--destructive))]/10 hover:text-[hsl(var(--destructive))] transition-colors"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              </motion.div>
-            ))}
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      onClick={() => toggleAlert(alert.id, alert.is_active)}
+                      className="rounded-md px-3 py-1 text-xs font-medium transition-colors bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))]"
+                    >
+                      {alert.is_active ? "Disable" : "Enable"}
+                    </button>
+                    <button
+                      onClick={() => deleteAlert(alert)}
+                      aria-label={`Delete ${title} alert`}
+                      title="Delete alert"
+                      className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--destructive))]/10 hover:text-[hsl(var(--destructive))] transition-colors"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </motion.div>
+              );
+            })}
           </div>
         )}
       </div>

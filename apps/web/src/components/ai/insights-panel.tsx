@@ -47,7 +47,12 @@ interface PredictionResult {
 
 interface Anomaly {
   anomaly_type: string;
-  severity: string;
+  /** `/ai/anomalies` returns this as a FLOAT in 0-1 (`anomaly_detector.py`
+   *  emits `round(min(1, max(0, (-score - 0.5) * 2)), 2)` and the endpoint
+   *  serialises the dataclass verbatim). Older/other producers send a label
+   *  like "high", so accept both and normalise before rendering — calling
+   *  .toLowerCase() on the number threw and blanked the whole tab. */
+  severity: number | string | null;
   description: string;
   price: number;
   volume: number;
@@ -117,8 +122,20 @@ function directionStyles(direction: string) {
   }
 }
 
-function severityCls(severity: string) {
-  switch ((severity || "").toLowerCase()) {
+/** Normalise either contract to one of "high" | "medium" | "low". The numeric
+ *  thresholds mirror the pill's three colours over the detector's 0-1 range. */
+function severityLabel(severity: number | string | null | undefined): string {
+  if (typeof severity === "number" && Number.isFinite(severity)) {
+    if (severity >= 0.66) return "high";
+    if (severity >= 0.33) return "medium";
+    return "low";
+  }
+  const text = String(severity ?? "").trim().toLowerCase();
+  return text || "low";
+}
+
+function severityCls(severity: number | string | null | undefined) {
+  switch (severityLabel(severity)) {
     case "high":
     case "critical":
       return "bg-red-500/10 text-red-500 border-red-500/20";
@@ -464,7 +481,7 @@ function AnomaliesPanel({
               <span
                 className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${severityCls(an.severity)}`}
               >
-                {an.severity}
+                {severityLabel(an.severity)}
               </span>
             </div>
             <p className="text-xs text-[hsl(var(--muted-foreground))]">{an.description}</p>

@@ -113,15 +113,28 @@ India's financial year runs from **1 April to 31 March**. Tax calculations in Fi
 | Kapitalertragsteuer (Capital gains tax) | 25.00% |
 | Solidaritatszuschlag (Solidarity surcharge) | 5.5% of the above = 1.375% |
 | **Total without church tax** | **26.375%** |
-| Kirchensteuer (Church tax, if applicable) | 8% of capital gains tax = 2.00% |
-| **Total with church tax** | **28.375%** |
+| Kirchensteuer (Church tax, if applicable) | 8% of the *reduced* capital gains tax = 1.961% |
+| **Total with 8% church tax** | **27.819%** |
+| **Total with 9% church tax** (Bavaria / Baden-Wurttemberg) | **27.995%** |
 
-FinanceTracker supports a single 8% church-tax rate, applied additively on the base tax: `0.25 * (1 + 0.055 + 0.08) = 28.375%`. (The 9% rate used in Bavaria/Baden-Wurttemberg, and the real-world rule where church tax slightly reduces the Kapitalertragsteuer base, are not modeled.)
+Church tax is a Sonderausgabe, so it **reduces the Kapitalertragsteuer base itself** (§ 32d Abs. 1 EStG), and FinanceTracker models that reduction rather than charging church tax additively:
+
+```
+KapESt  = taxable_gain * 0.25 / (1 + 0.25 * KiSt_rate)      # 24.510% at KiSt 8%
+Soli    = KapESt * 0.055
+KiSt    = KapESt * KiSt_rate
+
+effective_rate = 0.25 / (1 + 0.25 * KiSt_rate) * (1 + 0.055 + KiSt_rate)
+               = 27.819%  at KiSt 8%
+               = 27.995%  at KiSt 9%
+```
+
+`calculate_german_tax(..., church_tax=True, church_tax_rate=...)` accepts **either** rate — the default is `GERMANY_CHURCH_RATE = 0.08`; pass `0.09` for Bavaria and Baden-Wurttemberg. With `church_tax=False` the denominator is 1, so the default path is the plain 26.375%.
 
 **Calculation**:
 ```
 Gain = Sale Price - Purchase Price - Fees
-Tax = Gain * 26.375%  (or 28.375% with church tax)
+Tax = Gain * 26.375%  (or ~27.819% with 8% church tax, ~27.995% with 9%)
 ```
 
 **Note**: church tax is configurable in the calculation helper (`calculate_german_tax(..., church_tax=True)`) but is **not currently wired into the automatic transaction tax computation** — tax records for German sales are always computed at 26.375%.
@@ -326,7 +339,7 @@ The consolidated capital-gains report is served by `GET /tax/report/{financial_y
 - **Primary jurisdiction**: India (IN) or Germany (DE) — inferred from each holding's exchange (NSE/BSE => IN, XETRA => DE)
 - **Filing status** (Germany): Single or Joint — set with `PUT /tax/settings` (`filing`); selects the EUR 1000 / EUR 2000 Sparer-Pauschbetrag
 - **Fund class** (Germany): set per holding with `PUT /tax/fund-type/{holding_id}` to drive Teilfreistellung (equity ETF 30% / mixed 15% / real-estate 60%)
-- **Church tax** (Germany): flag stored via `PUT /tax/settings` (`church_tax`); fixed 8% rate; still not applied to automatic transaction tax computation
+- **Church tax** (Germany): flag stored via `PUT /tax/settings` (`church_tax`). The calculation helper models the § 32d reduced KapESt base at either 8% or 9%, but the stored flag is **not read** by automatic transaction tax computation — German sale records are always written at 26.375%.
 - **Allowance usage** (Germany): computed automatically from realized gains + dividends — no manual "remaining" entry needed (see `GET /tax/allowance`)
 
 The app can track both jurisdictions simultaneously for users investing in both markets.

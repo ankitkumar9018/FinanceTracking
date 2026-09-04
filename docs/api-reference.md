@@ -537,29 +537,36 @@ Recalculates holding's cumulative quantity and average price.
 GET /market/quote/{symbol}
 ```
 
-**Example**: `GET /market/quote/RELIANCE.NS`
+**Example**: `GET /market/quote/RELIANCE?exchange=NSE`
 
-**Response** `200 OK`:
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `exchange` | string | `NSE` | Exchange: NSE, BSE, XETRA, etc. |
+
+**Response** `200 OK` — the response is serialised through `QuoteResponse`, so
+these ten fields are **all** you get. Any extra key the fetcher produces is
+dropped by FastAPI before the response is sent.
+
 ```json
 {
-  "symbol": "RELIANCE.NS",
-  "name": "Reliance Industries Ltd",
+  "symbol": "RELIANCE",
   "exchange": "NSE",
   "current_price": 2680.50,
-  "previous_close": 2665.00,
   "open": 2670.00,
-  "day_high": 2695.00,
-  "day_low": 2660.00,
+  "high": 2695.00,
+  "low": 2660.00,
   "volume": 8542300,
-  "market_cap": 18150000000000,
-  "pe_ratio": 28.5,
-  "fifty_two_week_high": 3024.90,
-  "fifty_two_week_low": 2220.30,
-  "last_updated": "2025-01-20T14:30:00Z",
-  "data_source": "yfinance",
-  "is_stale": false
+  "previous_close": 2665.00,
+  "change": 15.50,
+  "change_percent": 0.58
 }
 ```
+
+Every field except `symbol`, `exchange` and `current_price` is nullable.
+
+**Errors:** `404` when no price data is found for the symbol/exchange pair;
+`502` when the upstream fetch fails.
 
 ### Get Historical OHLCV
 
@@ -852,6 +859,33 @@ POST /watchlist
   "notes": "Waiting for dip below 7000"
 }
 ```
+
+### Update Watchlist Item
+
+```
+PATCH /watchlist/{item_id}
+```
+
+Partial update — target price, range levels, display name or notes. Send only
+the fields you want to change; `action_needed` is recomputed from the new range
+levels against the item's last known price.
+
+**Request Body:**
+```json
+{
+  "target_buy_price": 6600.00,
+  "lower_mid_range_1": 6900.00,
+  "notes": "Moved the entry down after the results miss"
+}
+```
+
+Editable fields: `stock_name`, `target_buy_price` (`>= 0`),
+`lower_mid_range_1`, `lower_mid_range_2`, `upper_mid_range_1`,
+`upper_mid_range_2`, `base_level`, `top_level`, `notes`. `stock_symbol` and
+`exchange` are **not** editable — remove the item and re-add it instead.
+
+**Response** `200 OK`: the full updated watchlist item.
+**Errors:** `404` if the item does not exist or belongs to another user.
 
 ### Remove from Watchlist
 
@@ -1625,28 +1659,39 @@ Returns a single `.zip` containing `holdings.csv`, `transactions.csv`, `portfoli
 GET /columns
 ```
 
+Returns the fixed built-in column catalogue, this user's custom column
+definitions, and the saved display order. Visibility is **not** stored
+server-side — hiding a column is a client-side concern; the API only persists
+the order and the custom definitions.
+
 **Response** `200 OK`:
 ```json
 {
-  "builtin_columns": [
-    {"name": "stock_name", "label": "Stock", "visible": true, "order": 0},
-    {"name": "cumulative_quantity", "label": "Quantity", "visible": true, "order": 1},
-    {"name": "average_price", "label": "Avg Price", "visible": true, "order": 2},
-    {"name": "current_price", "label": "Current Price", "visible": true, "order": 3},
-    {"name": "action_needed", "label": "Action Needed", "visible": true, "order": 4},
-    {"name": "current_rsi", "label": "RSI", "visible": true, "order": 5},
-    {"name": "pnl_percent", "label": "P&L %", "visible": false, "order": 6},
-    {"name": "sector", "label": "Sector", "visible": false, "order": 7},
-    {"name": "day_change", "label": "Day Change", "visible": false, "order": 8},
-    {"name": "volume", "label": "Volume", "visible": false, "order": 9},
-    {"name": "dividend_yield", "label": "Div Yield", "visible": false, "order": 10},
-    {"name": "notes", "label": "Notes", "visible": false, "order": 11}
+  "built_in": [
+    {"name": "stock_symbol",        "label": "Symbol",        "type": "text",   "removable": false},
+    {"name": "stock_name",          "label": "Name",          "type": "text",   "removable": false},
+    {"name": "cumulative_quantity", "label": "Quantity",      "type": "number", "removable": false},
+    {"name": "average_price",       "label": "Avg Price",     "type": "number", "removable": false},
+    {"name": "current_price",       "label": "Current Price", "type": "number", "removable": false},
+    {"name": "action_needed",       "label": "Action",        "type": "text",   "removable": false},
+    {"name": "current_rsi",         "label": "RSI",           "type": "number", "removable": false},
+    {"name": "pnl_amount",          "label": "P&L Amount",    "type": "number", "removable": true},
+    {"name": "pnl_percent",         "label": "P&L %",         "type": "number", "removable": true},
+    {"name": "sector",              "label": "Sector",        "type": "text",   "removable": true},
+    {"name": "exchange",            "label": "Exchange",      "type": "text",   "removable": true},
+    {"name": "day_change",          "label": "Day Change",    "type": "number", "removable": true},
+    {"name": "notes",               "label": "Notes",         "type": "text",   "removable": true}
   ],
-  "custom_columns": [
-    {"name": "target_pe", "label": "Target PE", "type": "number", "visible": true, "order": 12}
-  ]
+  "custom": [
+    {"name": "target_pe", "label": "Target PE", "type": "number"}
+  ],
+  "column_order": ["stock_symbol", "stock_name", "cumulative_quantity", "average_price", "current_price", "action_needed", "current_rsi", "pnl_amount", "pnl_percent", "sector", "exchange", "day_change", "notes", "target_pe"]
 }
 ```
+
+There are exactly 13 built-in columns and the list is a server-side constant
+(`BUILT_IN_COLUMNS`) — it is the same for every user. `removable: false` marks
+the seven columns the UI will not let you hide.
 
 ### Create Custom Column
 
@@ -1654,15 +1699,31 @@ GET /columns
 POST /columns
 ```
 
-**Request Body:**
+**Request Body** (`CustomColumnCreate` — these three fields only; anything else
+is dropped):
 ```json
 {
   "name": "target_pe",
   "label": "Target PE",
-  "type": "number",
-  "default_value": null
+  "type": "number"
 }
 ```
+
+| Field | Rules |
+|---|---|
+| `name` | 1–50 chars, must match `^[a-z_][a-z0-9_]*$`. Must not collide with a built-in name or an existing custom name. |
+| `label` | 1–50 chars. |
+| `type` | One of `text`, `number`, `date`. Defaults to `text`. |
+
+**Response** `201 Created`: the new column object, e.g.
+`{"name": "target_pe", "label": "Target PE", "type": "number"}`. The name is
+also appended to `column_order`.
+
+**Errors:** `400` on a built-in name collision or a duplicate custom name;
+`422` if `name`/`label`/`type` fail validation.
+
+Values for custom columns are stored per holding in `holdings.custom_fields`
+(a JSON object), not by this endpoint.
 
 ### Reorder Columns
 
@@ -1670,18 +1731,24 @@ POST /columns
 PUT /columns/order
 ```
 
-**Request Body:**
+**Request Body** — the key is `column_order`, **not** `order`:
 ```json
 {
-  "order": ["stock_name", "current_price", "action_needed", "current_rsi", "pnl_percent", "target_pe"]
+  "column_order": ["stock_symbol", "current_price", "action_needed", "current_rsi", "pnl_percent", "target_pe"]
 }
 ```
+
+**Response** `200 OK`: `{"column_order": [...]}` echoing what was saved.
 
 ### Delete Custom Column
 
 ```
-DELETE /columns/{name}
+DELETE /columns/{column_name}
 ```
+
+Removes the definition and drops the name from `column_order`.
+**Response** `200 OK`: `{"deleted": "target_pe"}`. Returns `404` if no custom
+column has that name (built-in columns cannot be deleted).
 
 ---
 
@@ -1694,6 +1761,13 @@ GET /settings
 ```
 
 Returns all settings for the current user grouped into four categories: `display`, `notifications`, `market`, and `integrations`.
+
+> **`market` and `integrations` are read-only server configuration**, not user
+> settings. They mirror `config.py` (i.e. `backend/.env`) and cannot be changed
+> through `PUT /settings` — only through the environment plus a backend
+> restart. Credentials are never returned: `has_sendgrid_key` and
+> `has_telegram_bot` are booleans telling the UI whether the corresponding
+> Test button can be shown.
 
 **Response** `200 OK`:
 ```json
@@ -1986,13 +2060,48 @@ POST /net-worth/assets
 }
 ```
 
+### Update Asset
+
+```
+PATCH /net-worth/assets/{asset_id}
+```
+
+Partial update of a non-stock asset — chiefly its `current_value`. Fixed
+deposits, bonds and property are **not** revalued automatically (no interest
+accrual; `interest_rate` and `maturity_date` are stored for reference only), so
+this is how their stored value is kept honest. Crypto and gold that carry a
+ticker `symbol` are re-priced live and rarely need it.
+
+**Request Body** — send only the fields you want to change:
+```json
+{
+  "current_value": 41500.00,
+  "notes": "Repriced after Q1"
+}
+```
+
+| Field | Rules |
+|---|---|
+| `name` | 1–255 chars |
+| `symbol` | uppercased and trimmed; `null` clears it |
+| `quantity`, `purchase_price`, `current_value` | `>= 0` |
+| `currency` | max 10 chars |
+| `interest_rate`, `maturity_date`, `notes` | nullable — `null` clears them |
+
+`asset_type` is **immutable** — it drives the net-worth grouping and the
+emergency-fund liquidity classification, so changing it would silently
+reclassify history. Delete and re-add to reclassify. An explicit `null` for a
+non-nullable column (`name`, `quantity`, `purchase_price`, `current_value`,
+`currency`) is ignored rather than rejected.
+
+**Response** `200 OK`: the full updated asset (same shape as `POST`).
+**Errors:** `404` if the asset does not exist or belongs to another user.
+
 ### Delete Asset
 
 ```
 DELETE /net-worth/assets/{asset_id}
 ```
-
-(There is no update endpoint — delete and re-add an asset to change it.)
 
 ---
 
@@ -2024,17 +2133,37 @@ Returns individual stock ESG scores.
 POST /whatif/simulate
 ```
 
-**Request Body:**
+**Request Body** (`WhatIfRequest`) — the amount field is `invest_amount`, **not**
+`investment_amount`:
 ```json
 {
-  "symbol": "RELIANCE.NS",
-  "investment_amount": 100000,
+  "symbol": "RELIANCE",
+  "exchange": "NSE",
+  "invest_amount": 100000,
   "start_date": "2024-01-01",
-  "end_date": "2025-01-01"
+  "end_date": "2025-01-01",
+  "benchmark": "NIFTY50"
 }
 ```
 
-Returns simulated returns with benchmark comparison.
+| Field | Required | Default | Notes |
+|---|---|---|---|
+| `symbol` | yes | — | 1–50 chars |
+| `invest_amount` | yes | — | must be > 0 |
+| `start_date` | yes | — | ISO date |
+| `exchange` | no | `NSE` | max 20 chars |
+| `end_date` | no | today | ISO date |
+| `benchmark` | no | `null` | `NIFTY50`, `SENSEX`, `DAX`, `S&P500`, `NASDAQ` — omit to skip the comparison |
+
+**Response** `200 OK` (`WhatIfResponse`): `symbol`, `exchange`,
+`invest_amount`, `start_date`, `end_date`, `buy_price`, `end_price`,
+`shares_bought`, `current_value`, `absolute_return`, `percentage_return`,
+`annualized_return`, `holding_period_days`, and `benchmark`
+(`{benchmark_name, benchmark_start_price, benchmark_end_price, benchmark_return_pct}`
+or `null`).
+
+**Errors:** `400` when the simulation inputs are unusable (e.g. no price data
+on the start date); `422` on a schema violation; `500` on an unexpected failure.
 
 ---
 

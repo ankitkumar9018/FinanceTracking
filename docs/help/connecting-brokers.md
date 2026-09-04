@@ -1,27 +1,45 @@
 # Connecting Your Broker
 
-This guide walks you through connecting your stock broker to FinanceTracker for automatic portfolio syncing and real-time prices.
+This guide walks you through connecting your stock broker to FinanceTracker for automatic portfolio syncing.
+
+---
+
+## Which brokers actually work today
+
+Only **two** adapters are implemented. The rest are registered so they appear in the list, but every operation returns HTTP 501 and the app shows a **coming soon** badge — clicking Connect just tells you the integration is not available yet.
+
+| Broker | Country | Status |
+|---|---|---|
+| **Zerodha** (Kite Connect) | India | **Connectable** |
+| **ICICI Direct** (Breeze) | India | **Connectable** |
+| Angel One (SmartAPI) | India | Coming soon — not implemented |
+| Upstox | India | Coming soon — not implemented |
+| 5Paisa | India | Coming soon — not implemented |
+| Groww | India | Coming soon (no public API exists) |
+| Deutsche Bank | Germany | Coming soon — not implemented |
+| comdirect | Germany | Coming soon — not implemented |
+
+Do not register for an API key with a "coming soon" broker expecting it to work here.
 
 ---
 
 ## Why Connect a Broker?
 
-Connecting a broker provides several benefits:
-- **Automatic portfolio sync**: Your holdings and transactions are imported automatically
-- **Real-time prices**: Get live price updates with less than 1 second delay (instead of 15-minute delayed data from yfinance)
-- **Transaction history**: New buys and sells appear automatically
-- **No manual entry**: Save time on data entry
+- **Automatic portfolio sync**: your holdings are imported instead of typed in
+- **No manual entry**: saves time on data entry
 
-**Important**: Connecting a broker is completely optional. The app works perfectly with manual entry and Excel import.
+**Prices are not part of the deal.** Every price in FinanceTracker comes from yfinance polling, whether or not a broker is connected. There is no broker price stream and no sub-second data — NSE quotes via Yahoo are typically ~15 minutes delayed.
+
+**Important**: connecting a broker is completely optional. The app works fully with manual entry and Excel import.
 
 ---
 
 ## Before You Start
 
 You will need:
-1. An active trading account with a supported broker
-2. API credentials from your broker (API key and secret)
-3. Most brokers require you to register for API access separately (usually free or included with your trading plan)
+1. An active trading account with **Zerodha** or **ICICI Direct**
+2. API credentials from that broker (API key and secret)
+3. Both brokers require you to register for API access separately (usually free or included with your trading plan)
 
 ---
 
@@ -40,7 +58,7 @@ You will need:
 
 ### Step 2: Connect in FinanceTracker
 
-1. Go to **Settings** then **Brokers** then **Zerodha**
+1. Open **Brokers** in the sidebar and click **Connect** on the Zerodha card
 2. Enter your API Key and API Secret and click **Connect**
 3. The app opens the Zerodha login page (via the `login_url` it returns)
 4. Log in with your Zerodha credentials and authorize the app
@@ -52,14 +70,14 @@ You will need:
 
 ### Step 3: Sync Your Data
 
-After connecting, click **Sync Now** to fetch your holdings. The app will:
-- Import all your demat holdings
-- Fetch current prices via live streaming
-- You can then set range levels for each imported stock
+After connecting, click **Sync** to fetch your holdings. The app will:
+- Import all your demat holdings into the selected portfolio
+- Price them from yfinance like every other holding
+- You then set range levels for each imported stock yourself
 
 ### Daily Re-authentication
 
-Zerodha access tokens expire every day at 6 AM IST. You will need to click **Reconnect** each day if you want real-time streaming. Your holdings data is cached, so the app still shows your portfolio even when the token expires.
+Zerodha access tokens expire every day at 6 AM IST, so a **Sync** the next day fails until you click **Reconnect** and repeat the login. Nothing else breaks: your holdings and prices are unaffected, because prices never came from the broker.
 
 ---
 
@@ -75,99 +93,30 @@ Zerodha access tokens expire every day at 6 AM IST. You will need to click **Rec
 
 ### Step 2: Connect in FinanceTracker
 
-1. Go to **Settings** then **Brokers** then **ICICI Direct**
+1. Open **Brokers** in the sidebar and click **Connect** on the ICICI Direct card
 2. Enter your App Key and Secret Key
 3. Click **Connect**
 4. Log in on the ICICI Direct page
 5. Authorize and return to FinanceTracker
 
-### Highlights
+### Notes
 
-- ICICI Direct provides up to 10 years of historical data
-- 1-second OHLCV resolution for very detailed charts
-- Holdings sync includes demat holdings and mutual funds
-
----
-
-## Angel One (SmartAPI)
-
-### Step 1: Get API Credentials
-
-1. Go to https://smartapi.angelbroking.com/
-2. Register with your Angel One account
-3. Create an app and get your **API Key**
-4. You will also need your **Client ID** and **TOTP secret** (from your Angel One app)
-
-### Step 2: Connect in FinanceTracker
-
-1. Go to **Settings** then **Brokers** then **Angel One**
-2. Enter your API Key, Client ID, and TOTP secret
-3. Click **Connect**
-4. The app will authenticate using your credentials
-
-### Note
-
-Angel One uses TOTP (time-based one-time password) for authentication, which the app handles automatically using your TOTP secret.
+- Holdings sync covers your demat holdings
+- Charts and prices in the app still come from yfinance, not from Breeze
 
 ---
 
-## Upstox
+## Brokers that are not implemented yet
 
-### Step 1: Get API Credentials
+**Angel One, Upstox, 5Paisa, Groww, Deutsche Bank and comdirect** appear on the Brokers page with a **coming soon** badge. Their adapters are registered placeholders: every call — connect, sync, holdings, positions, orders, history — raises `NotImplementedError`, which the API returns as **HTTP 501**. Clicking Connect on one of them shows "…integration is not available yet" and nothing happens.
 
-1. Go to https://upstox.com/developer/api-documentation/
-2. Create a developer account
-3. Create an app to get your **API Key** and **API Secret**
-4. Set the redirect URL
+There is nothing to configure, no credentials to obtain, and no partial support. Until an adapter is actually written:
 
-### Step 2: Connect in FinanceTracker
+- Use **Excel/CSV import** or manual entry for these brokers
+- Groww in particular has **no public API at all** — export your Groww data as CSV and import it
+- For German brokers, a PSD2/Open-Banking flow is a design intention, not shipped code
 
-1. Go to **Settings** then **Brokers** then **Upstox**
-2. Enter your credentials
-3. Complete the OAuth flow (similar to Zerodha)
-
----
-
-## 5Paisa
-
-### Step 1: Get API Credentials
-
-1. Go to https://www.5paisa.com/developerapi
-2. Register for developer access
-3. Create an app and get your credentials
-
-### Step 2: Connect in FinanceTracker
-
-Same pattern as above: enter credentials in Settings, complete the login flow.
-
----
-
-## German Brokers
-
-### Deutsche Bank
-
-Deutsche Bank uses PSD2 Open Banking, which is a European regulation that allows third-party apps to access your bank data with your permission.
-
-1. Go to **Settings** then **Brokers** then **Deutsche Bank**
-2. Click **Connect**
-3. You will be redirected to the Deutsche Bank login page
-4. Log in with your online banking credentials
-5. Grant consent for account access (valid for 90 days)
-6. Return to FinanceTracker
-
-**Note**: PSD2 consent must be renewed every 90 days. The app will remind you when renewal is needed.
-
-### comdirect
-
-Similar PSD2 flow as Deutsche Bank:
-
-1. Go to **Settings** then **Brokers** then **comdirect**
-2. Click **Connect**
-3. Log in on the comdirect page
-4. Complete the TAN challenge (photoTAN or pushTAN)
-5. Grant consent and return
-
-comdirect also provides access to your securities depot (portfolio of stocks and funds).
+Progress is tracked in [broker-integration.md](../broker-integration.md), which is the authoritative status table.
 
 ---
 
@@ -179,7 +128,7 @@ comdirect also provides access to your securities depot (portfolio of stocks and
 |---|---|---|
 | Holdings (stocks you own) | Yes | Quantity, average price, current price |
 | Recent transactions | Yes | Buys and sells from the last 30 days |
-| Current prices | Yes | Real-time or near-real-time |
+| Current prices | No | Prices always come from yfinance polling, connected or not |
 | Price range levels | No | These are your personal settings -- never overwritten |
 | Custom fields | No | Your custom data is preserved |
 | Notes | No | Your notes on each stock are preserved |
@@ -194,10 +143,10 @@ If you already have a stock in your portfolio (from manual entry or Excel import
 ### Disconnecting
 
 To disconnect a broker:
-1. Go to **Settings** then **Brokers**
+1. Open **Brokers** in the sidebar
 2. Click **Disconnect** next to the broker
-3. Your portfolio data is preserved (only the live connection is removed)
-4. Prices will fall back to yfinance updates
+3. Your portfolio data is preserved (only the connection is removed)
+4. Prices are unaffected — they were coming from yfinance all along
 
 All encrypted API credentials are permanently deleted from the database when you disconnect.
 
@@ -209,7 +158,7 @@ All encrypted API credentials are permanently deleted from the database when you
 
 **"No holdings found"**: Make sure you have delivery holdings (not just intraday positions) in your broker account
 
-**"OAuth redirect error"**: Verify that the redirect URL in your broker's developer settings exactly matches the one shown in FinanceTracker's Settings
+**"OAuth redirect error"**: Verify that the redirect URL in your broker's developer settings exactly matches the address you actually return to (e.g. `http://localhost:3000`)
 
 ---
 

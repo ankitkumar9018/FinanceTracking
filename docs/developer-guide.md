@@ -30,7 +30,7 @@ and German (XETRA) markets:
 | **Node.js** | 20+ | Frontend build tooling | [nodejs.org](https://nodejs.org) or `nvm install 20` |
 | **pnpm** | 9+ | JS package manager (workspace-native) | `npm install -g pnpm` |
 | **Git** | 2.30+ | Version control | [git-scm.com](https://git-scm.com) |
-| **Redis** | 7+ | *Optional* — Celery broker for background tasks | `brew install redis` / `apt install redis-server` |
+| **Redis** | 7+ | *Optional* — alert-dedup/cache store, and the Celery broker if you set `USE_CELERY=true` | `brew install redis` / `apt install redis-server` |
 | **Ollama** | latest | *Optional* — local LLM for AI features | [ollama.ai](https://ollama.ai) |
 | **Rust** | stable | *Only for the desktop app* | [rustup.rs](https://rustup.rs) |
 
@@ -140,11 +140,13 @@ Windows table in [contributing.md](contributing.md#windows-development).
 ### Optional services
 
 ```bash
-# Redis (enables the Celery task queue instead of the in-process fallback)
+# Redis (alert-dedup/cache, and the Celery broker if you opt into Celery).
+# Running Redis does NOT switch the scheduler — see USE_CELERY below.
 redis-server
 
-# Celery worker + beat (requires the `queue` extra and Redis)
-cd backend && uv run celery -A app.tasks.celery_app worker --beat -l info
+# Celery worker + beat — opt-in only. Requires the `queue` extra, Redis, AND
+# USE_CELERY=true on the API process too, or every job will run twice.
+cd backend && USE_CELERY=true uv run celery -A app.tasks.celery_app worker --beat -l info
 
 # Ollama (enables local AI/LLM features)
 ollama serve && ollama pull llama3.2
@@ -181,7 +183,7 @@ flowchart TD
     b_app --> b_services["services/  (business logic, ~39 modules)"]
     b_app --> b_ml["ml/  (indicators, LSTM, risk, sentiment, LLM)"]
     b_app --> b_brokers["brokers/  (Zerodha, ICICI, German, stubs)"]
-    b_app --> b_tasks["tasks/  (Celery + APScheduler fallback)"]
+    b_app --> b_tasks["tasks/  (APScheduler default, Celery opt-in)"]
     b_app --> b_utils["utils/  (security, rate_limiter, audit)"]
     backend --> b_alembic["alembic/versions/  (6 migrations)"]
 
@@ -212,7 +214,7 @@ flowchart TD
 | `services/` | Business logic. Endpoints stay thin; services own the real work. |
 | `ml/` | Optional ML/AI modules (each guarded by `try/except ImportError`). |
 | `brokers/` | Broker adapters behind an abstract base class. |
-| `tasks/` | `celery_app.py`, `scheduler.py` (APScheduler fallback), `fetch_prices.py`, `check_alerts.py`. |
+| `tasks/` | `celery_app.py` (shared `JOBS` spec + opt-in Celery app), `scheduler.py` (APScheduler — the default mode), `fetch_prices.py`, `check_alerts.py`, `ai_digest_task.py`. |
 | `utils/` | `security.py` (JWT, hashing, Fernet), `rate_limiter.py`, `audit.py`. |
 
 ### Web (`apps/web/src/`)
@@ -743,7 +745,7 @@ installed:
 
 | Dependency | If missing/unavailable | Fallback |
 |---|---|---|
-| Redis / Celery | not installed | APScheduler `AsyncIOScheduler` runs the same jobs in-process |
+| Redis / Celery | not installed | APScheduler `AsyncIOScheduler` runs the jobs in-process — which is also what happens when they *are* installed, unless `USE_CELERY=true` |
 | Ollama / LLM | not installed | AI pages show an "AI offline" state; everything else works |
 | yfinance | rate-limited / timeout | last cached price with a stale timestamp |
 | Broker API | connection fails | manual entry; "broker disconnected" badge |
@@ -759,13 +761,35 @@ page or crash startup.
 
 ### Background tasks
 
-Two periodic jobs drive the live data: `fetch_prices` (every ~5 min) and
-`check_alerts` (every ~1 min). When Redis + Celery are available they run under
-Celery beat (`tasks/celery_app.py`); otherwise `tasks/scheduler.py` starts an
-APScheduler `AsyncIOScheduler` inside the FastAPI process running the same logic.
+Three periodic jobs are defined once, in the shared `JOBS: tuple[JobSpec, ...]`
+in `tasks/celery_app.py`, and consumed by both execution modes so they cannot
+drift:
+
+| Job id | Cadence | Runs at startup? |
+|---|---|---|
+| `fetch_prices_job` | every `PRICE_REFRESH_INTERVAL` min (~5) | yes |
+| `check_alerts_job` | every `ALERT_CHECK_INTERVAL` s (~60) | yes |
+| `ai_digest_job` | daily | **no** — it would re-send on every restart |
+
+`tasks/scheduler.py` picks the mode from `settings.use_celery` (env
+`USE_CELERY`) **and nothing else**. Default `False` → an APScheduler
+`AsyncIOScheduler` runs everything inside the FastAPI process. `True` **and**
+`celery` importable → `start_scheduler()` returns early and you are expected to
+run `celery -A app.tasks.celery_app worker --beat` yourself; `True` with celery
+missing logs a warning and starts APScheduler anyway.
+
+A reachable Redis does **not** select Celery. The old `is_celery_available()`
+Redis-ping heuristic was removed — an unrelated local Redis satisfied it and
+silently disabled APScheduler while nothing consumed the queue, so prices and
+alerts stopped refreshing. The function still exists in `celery_app.py` but is
+diagnostic only.
+
 Price and alert updates are pushed to clients over the WebSocket channels
 `/ws/prices` and `/ws/alerts`; the web client subscribes via the `use-price-stream`
-hook (auto-reconnect with backoff).
+hook (auto-reconnect with backoff). **In Celery mode those broadcasts run in the
+worker process, whose `ConnectionManager` holds no sockets, so WS pushes are not
+delivered** — another reason the in-process default is the right one for
+single-node and desktop installs.
 
 ---
 
@@ -786,7 +810,7 @@ flowchart LR
       SV["services/*  (~39)"]
       ML["ml/*  (indicators, LSTM, risk, sentiment, LLM)"]
       BR["brokers/*  (Zerodha, ICICI, German, stubs)"]
-      TK["tasks/*  (Celery / APScheduler)"]
+      TK["tasks/*  (APScheduler / opt-in Celery)"]
     end
     subgraph Data
       MD["models/*  (SQLAlchemy, 21 tables)"]

@@ -75,16 +75,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex h-screen overflow-hidden bg-[hsl(var(--background))]">
+      {/* WCAG 2.4.1 — bypass the 33 sidebar links + top bar on every route. */}
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:rounded-md focus:bg-[hsl(var(--primary))] focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-[hsl(var(--primary-foreground))] focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
+      >
+        Skip to content
+      </a>
       <Sidebar />
       <MobileSidebar open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
       <div className="flex flex-1 flex-col overflow-hidden">
         <TopBar onMenuClick={() => setMobileNavOpen(true)} />
         <LiveTicker />
-        <main className="flex-1 overflow-y-auto p-4 md:p-6">{children}</main>
+        <main id="main" tabIndex={-1} className="flex-1 overflow-y-auto p-4 md:p-6 outline-none">
+          {children}
+        </main>
       </div>
-      {showOnboarding && (
-        <OnboardingWizard onComplete={handleOnboardingComplete} />
-      )}
+      <OnboardingWizard open={showOnboarding} onComplete={handleOnboardingComplete} />
       <KeyboardShortcutsDialog shortcuts={shortcuts} />
       <CommandPalette />
       <MiniPortfolioWidget />

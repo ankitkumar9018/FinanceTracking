@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { X, ChevronUp, ChevronDown, Eye, EyeOff, Trash2, Plus, Lock, Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
+import { useDialogA11y } from "@/components/shared/modal";
 
 /** A single column definition shown in the table + chooser. `removable` mirrors
  * the backend built-in flag (custom columns are always removable). `custom` is
@@ -37,6 +38,14 @@ export function ColumnChooser({
   onDeleteCustom,
   onClose,
 }: ColumnChooserProps) {
+  // A full-height slide-over can't use the centered shared <Modal> card, so it
+  // borrows the same dialog behavior: Escape, scroll lock, focus in/restore
+  // and a Tab trap.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const uid = useId();
+  useDialogA11y(panelRef, { open: true, onClose });
+
   const [newName, setNewName] = useState("");
   const [newLabel, setNewLabel] = useState("");
   const [newType, setNewType] = useState("text");
@@ -79,11 +88,18 @@ export function ColumnChooser({
         animate={{ x: 0 }}
         exit={{ x: "100%" }}
         transition={{ type: "spring", damping: 30, stiffness: 300 }}
-        className="flex h-full w-full max-w-sm flex-col overflow-y-auto border-l border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-xl"
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="flex h-full w-full max-w-sm flex-col overflow-y-auto border-l border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-xl outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-1 flex items-center justify-between">
-          <h2 className="text-lg font-bold">Columns</h2>
+          <h2 id={titleId} className="text-lg font-bold">
+            Columns
+          </h2>
           <button
             onClick={onClose}
             aria-label="Close column chooser"
@@ -173,8 +189,9 @@ export function ColumnChooser({
         <form onSubmit={handleAdd} className="mt-6 space-y-3 border-t border-[hsl(var(--border))] pt-4">
           <h3 className="text-sm font-semibold">Add custom column</h3>
           <div>
-            <label className="mb-1 block text-xs text-[hsl(var(--muted-foreground))]">Key (a-z, 0-9, _)</label>
+            <label htmlFor={`${uid}-key`} className="mb-1 block text-xs text-[hsl(var(--muted-foreground))]">Key (a-z, 0-9, _)</label>
             <input
+              id={`${uid}-key`}
               type="text"
               placeholder="e.g. target_price"
               value={newName}
@@ -183,8 +200,9 @@ export function ColumnChooser({
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs text-[hsl(var(--muted-foreground))]">Display label</label>
+            <label htmlFor={`${uid}-label`} className="mb-1 block text-xs text-[hsl(var(--muted-foreground))]">Display label</label>
             <input
+              id={`${uid}-label`}
               type="text"
               placeholder="e.g. Target Price"
               value={newLabel}
@@ -193,8 +211,9 @@ export function ColumnChooser({
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs text-[hsl(var(--muted-foreground))]">Type</label>
+            <label htmlFor={`${uid}-type`} className="mb-1 block text-xs text-[hsl(var(--muted-foreground))]">Type</label>
             <select
+              id={`${uid}-type`}
               value={newType}
               onChange={(e) => setNewType(e.target.value)}
               className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"

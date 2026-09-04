@@ -261,22 +261,41 @@ result = await db.execute(
 
 ### Data Retention
 
-- **Chat sessions**: Kept for 90 days, then auto-deleted
-- **Notification logs**: Kept for 30 days
-- **Price history**: Kept indefinitely (public market data)
-- **User data**: Kept until account deletion
+**Nothing is deleted automatically.** There is no retention or pruning job
+anywhere in the backend — the scheduler registers exactly three jobs (price
+refresh, alert evaluation, AI digest) and none of them prunes data.
+
+| Data | Retention |
+|---|---|
+| **Chat sessions** (AI transcripts, which can quote portfolio detail) | Indefinite. `DELETE /api/v1/ai/sessions/{session_id}` removes one, but there is no delete control in the AI Assistant UI — it must be called against the API |
+| **Notification logs** | Indefinite; there is no delete endpoint. Prune them directly if you need to (see below) |
+| **Price history** | Indefinite (public market data) |
+| **User data** | Indefinite |
+
+Operators who want a retention policy have to enforce it themselves — for
+example, a periodic job against the database:
+
+```sql
+DELETE FROM chat_sessions    WHERE created_at < datetime('now', '-90 days');
+DELETE FROM notification_logs WHERE created_at < datetime('now', '-30 days');
+```
+
+If you implement one properly, add it as a `JobSpec` in
+`backend/app/tasks/celery_app.py` so it runs in both scheduling modes.
 
 ### Account Deletion
 
-Users can request full account deletion from Settings -> Advanced. This:
-1. Deletes all portfolios, holdings, transactions
-2. Deletes all alerts and notification history
-3. Deletes all broker connections (credentials are destroyed)
-4. Deletes all chat sessions
-5. Deletes all settings and preferences
-6. Removes the user record
+**Not implemented.** There is no self-service account deletion — no
+Settings → Advanced panel, and no delete-account endpoint (the `/auth` routes
+are register, login, refresh, forgot-password, reset-password, me,
+change-password, and the 2FA routes).
 
-This is a hard delete with no recovery possible.
+Deleting an account today means deleting the user row directly in the database.
+Because the app is self-hosted and single-tenant in practice, the practical
+equivalent is removing the SQLite file (or the user's rows in PostgreSQL). If
+you do delete a user row, check the dependent tables — portfolios, holdings,
+transactions, alerts, notification logs, chat sessions, broker connections and
+preferences — so nothing is orphaned.
 
 ---
 
@@ -356,9 +375,9 @@ For German users, the app follows GDPR principles:
 | **Lawful basis** | Consent-based (user explicitly creates account) |
 | **Data minimization** | Only essential data collected (email, portfolio data) |
 | **Purpose limitation** | Data used only for portfolio tracking |
-| **Storage limitation** | Auto-deletion of old notification logs and chat sessions |
-| **Right to access** | Users can export all their data (Settings -> Export) |
-| **Right to erasure** | Full account deletion available (Settings -> Delete Account) |
+| **Storage limitation** | ⚠️ **Not implemented.** No automatic deletion of notification logs, chat sessions or any other data — retention must be enforced by the operator (see [Data Retention](#data-retention)) |
+| **Right to access** | Users can export all their data from the **Import & Export** page or the **Reports** page (JSON is the full-fidelity export) |
+| **Right to erasure** | ⚠️ **Not implemented in the app.** No delete-account UI or endpoint — the operator must remove the user's rows directly (see [Account Deletion](#account-deletion)) |
 | **Right to portability** | Data export in standard formats (Excel, JSON) |
 | **Data protection** | Encryption at rest and in transit |
 | **Breach notification** | Logging infrastructure to detect and report breaches |

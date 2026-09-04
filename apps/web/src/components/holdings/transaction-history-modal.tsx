@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { api } from "@/lib/api-client";
 import { formatCurrency } from "@/lib/utils";
 import { Plus, Loader2, Pencil, Trash2, Check, X } from "lucide-react";
@@ -36,6 +36,8 @@ interface TransactionHistoryModalProps {
 }
 
 export function TransactionHistoryModal({ target, onClose, onChanged }: TransactionHistoryModalProps) {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [transLoading, setTransLoading] = useState(false);
   const [addingTrans, setAddingTrans] = useState(false);
@@ -150,8 +152,9 @@ export function TransactionHistoryModal({ target, onClose, onChanged }: Transact
         <h3 className="text-sm font-medium mb-3">Add Transaction</h3>
         <div className="grid grid-cols-4 gap-3">
           <div>
-            <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Type</label>
+            <label htmlFor={`${uid}-type`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Type</label>
             <select
+              id={`${uid}-type`}
               value={transForm.type}
               onChange={(e) => setTransForm({ ...transForm, type: e.target.value })}
               className="h-8 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
@@ -161,8 +164,9 @@ export function TransactionHistoryModal({ target, onClose, onChanged }: Transact
             </select>
           </div>
           <div>
-            <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Date *</label>
+            <label htmlFor={`${uid}-date`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Date *</label>
             <input
+              id={`${uid}-date`}
               type="date"
               required
               value={transForm.date}
@@ -171,8 +175,9 @@ export function TransactionHistoryModal({ target, onClose, onChanged }: Transact
             />
           </div>
           <div>
-            <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Qty *</label>
+            <label htmlFor={`${uid}-qty`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Qty *</label>
             <input
+              id={`${uid}-qty`}
               type="number"
               required
               min="0.000001"
@@ -183,8 +188,9 @@ export function TransactionHistoryModal({ target, onClose, onChanged }: Transact
             />
           </div>
           <div>
-            <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Price *</label>
+            <label htmlFor={`${uid}-price`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Price *</label>
             <input
+              id={`${uid}-price`}
               type="number"
               required
               min="0.01"
@@ -223,12 +229,12 @@ export function TransactionHistoryModal({ target, onClose, onChanged }: Transact
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[hsl(var(--border))] text-left text-xs text-[hsl(var(--muted-foreground))]">
-                <th className="px-4 py-2.5 font-medium">Type</th>
-                <th className="px-4 py-2.5 font-medium">Date</th>
-                <th className="px-4 py-2.5 font-medium text-right">Qty</th>
-                <th className="px-4 py-2.5 font-medium text-right">Price</th>
-                <th className="px-4 py-2.5 font-medium text-right">Total</th>
-                <th className="px-4 py-2.5 font-medium text-right">Actions</th>
+                <th scope="col" className="px-4 py-2.5 font-medium">Type</th>
+                <th scope="col" className="px-4 py-2.5 font-medium">Date</th>
+                <th scope="col" className="px-4 py-2.5 font-medium text-right">Qty</th>
+                <th scope="col" className="px-4 py-2.5 font-medium text-right">Price</th>
+                <th scope="col" className="px-4 py-2.5 font-medium text-right">Total</th>
+                <th scope="col" className="px-4 py-2.5 font-medium text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -247,12 +253,12 @@ export function TransactionHistoryModal({ target, onClose, onChanged }: Transact
                   {editingTransId === t.id ? (
                     <>
                       <td className="px-4 py-2.5 text-right">
-                        <input type="number" min="0.01" step="any" value={editTransForm.quantity || ""}
+                        <input type="number" min="0.01" step="any" aria-label="Quantity" value={editTransForm.quantity || ""}
                           onChange={(e) => setEditTransForm({ ...editTransForm, quantity: parseFloat(e.target.value) || 0 })}
                           className="h-7 w-20 rounded border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-2 text-right text-xs font-mono" />
                       </td>
                       <td className="px-4 py-2.5 text-right">
-                        <input type="number" min="0.01" step="any" value={editTransForm.price || ""}
+                        <input type="number" min="0.01" step="any" aria-label="Price" value={editTransForm.price || ""}
                           onChange={(e) => setEditTransForm({ ...editTransForm, price: parseFloat(e.target.value) || 0 })}
                           className="h-7 w-24 rounded border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-2 text-right text-xs font-mono" />
                       </td>

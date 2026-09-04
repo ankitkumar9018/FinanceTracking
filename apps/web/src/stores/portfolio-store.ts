@@ -4,8 +4,12 @@ import { useAuthStore } from "@/stores/auth-store";
 
 /** Currency to convert summary figures into: the user's explicit display
  *  override if set, otherwise their account preference. Returns null only when
- *  neither is known (then the API returns native values, as before). */
-function displayCurrency(): string | null {
+ *  neither is known (then the API returns native values, as before).
+ *
+ *  Exported so pages that fetch `/portfolios/{id}/summary` directly (the
+ *  analytics page, for one) request the SAME converted figures the store does
+ *  — otherwise their cross-holding aggregates silently add INR to EUR. */
+export function displayCurrency(): string | null {
   try {
     const stored =
       typeof window !== "undefined"
@@ -71,27 +75,91 @@ export interface RefreshSummary {
   failed: number;
 }
 
+/** One entry of a coalesced live update. */
+export interface HoldingPatchEntry {
+  symbol: string;
+  patch: HoldingPatch;
+}
+
+/** Options for {@link PortfolioState.fetchHoldings}. */
+export interface FetchHoldingsOptions {
+  /** Refresh the data WITHOUT flipping `isLoading`, so screens that already
+   *  show holdings keep showing them instead of collapsing into skeletons.
+   *  Use for anything the user did not personally ask for right now: the
+   *  `prices_refreshed` push, a post-import re-read, a price refresh whose
+   *  button has its own spinner. */
+  silent?: boolean;
+}
+
 interface PortfolioState {
   portfolios: Portfolio[];
   activePortfolioId: number | null;
   holdings: Holding[];
+  /** A load the user is WAITING on — the only flag skeletons may key off. */
   isLoading: boolean;
+  /** A background re-read is in flight while real data is already on screen.
+   *  Render this as a subtle indicator; never as a skeleton. */
+  isRefreshing: boolean;
   /** True once the initial portfolio list fetch has completed (success or failure). */
   hasLoadedPortfolios: boolean;
   error: string | null;
   fetchPortfolios: () => Promise<void>;
   setActivePortfolio: (id: number) => void;
-  fetchHoldings: (portfolioId: number) => Promise<void>;
+  fetchHoldings: (portfolioId: number, options?: FetchHoldingsOptions) => Promise<void>;
   refreshPrices: () => Promise<RefreshSummary>;
   /** Re-fetch the active portfolio's holdings unconditionally (no-op when no
    *  portfolio is active). Use after a mutation the store can't observe, e.g.
-   *  an import or a `prices_refreshed` push. */
-  refreshActive: () => Promise<void>;
+   *  an import or a `prices_refreshed` push. Silent by default — the caller
+   *  already has data on screen. */
+  refreshActive: (options?: FetchHoldingsOptions) => Promise<void>;
   /** Apply a partial live update to one holding, matched case-insensitively
    *  on `stock_symbol`. */
   updateHolding: (symbol: string, patch: HoldingPatch) => void;
+  /** Apply a whole burst of live updates in ONE state commit. A refresh cycle
+   *  pushes one WebSocket frame per holding, each in its own macrotask, so
+   *  React cannot batch them: applying them one at a time re-renders every
+   *  store consumer once per holding. Callers should buffer and flush here. */
+  updateHoldings: (entries: HoldingPatchEntry[]) => void;
   /** @deprecated Use {@link updateHolding} — kept for callers that only have a price. */
   updateHoldingPrice: (symbol: string, price: number) => void;
+}
+
+/** Apply a patch to one holding, returning the SAME object when nothing
+ *  actually changed so an unchanged price can't churn the array identity. */
+function applyPatch(h: Holding, patch: HoldingPatch): Holding {
+  const next: Holding = { ...h };
+  let touched = false;
+  // Only fields actually present in the payload are applied, so a
+  // partial/altered server envelope degrades to "leave it alone".
+  if (patch.current_price !== undefined && patch.current_price !== h.current_price) {
+    next.current_price = patch.current_price;
+    touched = true;
+  }
+  if (patch.rsi !== undefined && patch.rsi !== h.rsi) {
+    next.rsi = patch.rsi;
+    touched = true;
+  }
+  if (patch.action_needed !== undefined && patch.action_needed !== h.action_needed) {
+    next.action_needed = patch.action_needed;
+    touched = true;
+  }
+  if (
+    patch.last_price_update !== undefined &&
+    patch.last_price_update !== h.last_price_update
+  ) {
+    next.last_price_update = patch.last_price_update;
+    touched = true;
+  }
+  // pnl_percent is client-derived from price vs avg — recompute it so the
+  // P&L column can't disagree with the price next to it.
+  if (patch.current_price != null && next.avg_price > 0) {
+    const pnl = ((patch.current_price - next.avg_price) / next.avg_price) * 100;
+    if (pnl !== h.pnl_percent) {
+      next.pnl_percent = pnl;
+      touched = true;
+    }
+  }
+  return touched ? next : h;
 }
 
 // In-flight promise cache so concurrent callers (layout + pages) don't
@@ -109,6 +177,7 @@ export const usePortfolioStore = create<PortfolioState>((set, get) => ({
   activePortfolioId: null,
   holdings: [],
   isLoading: false,
+  isRefreshing: false,
   hasLoadedPortfolios: false,
   error: null,
 
@@ -149,9 +218,13 @@ export const usePortfolioStore = create<PortfolioState>((set, get) => ({
     get().fetchHoldings(id);
   },
 
-  fetchHoldings: async (portfolioId) => {
+  fetchHoldings: async (portfolioId, options) => {
+    const silent = options?.silent === true;
     const seq = ++holdingsFetchSeq;
-    set({ isLoading: true, error: null });
+    // A silent refresh must not touch `isLoading`/`error`: those drive the
+    // skeletons and the error state, and blanking a table the user is reading
+    // every refresh cycle is worse than showing prices a second out of date.
+    set(silent ? { isRefreshing: true } : { isLoading: true, error: null });
     try {
       // Request converted values so cross-holding aggregates (heatmap tiles,
       // allocation weights) can add like with like. The backend only ADDS
@@ -164,10 +237,23 @@ export const usePortfolioStore = create<PortfolioState>((set, get) => ({
       // Bail if a newer fetch started or the user switched portfolios while
       // this response was in flight — last-started wins, not last-landed.
       if (seq !== holdingsFetchSeq || portfolioId !== get().activePortfolioId) return;
-      set({ holdings: data.holdings || [], isLoading: false });
+      // Whichever fetch commits ends the wait, silent or not: this response
+      // supersedes any load it overtook, so leaving `isLoading` on would
+      // strand a skeleton forever.
+      set({ holdings: data.holdings || [], isLoading: false, isRefreshing: false });
     } catch (err: unknown) {
       if (seq !== holdingsFetchSeq || portfolioId !== get().activePortfolioId) return;
-      set({ error: err instanceof Error ? err.message : "Failed to fetch holdings", isLoading: false });
+      if (silent) {
+        // Keep the holdings and the screen the user is looking at; a failed
+        // background re-read is not worth replacing good data with an error.
+        set({ isRefreshing: false, isLoading: false });
+        return;
+      }
+      set({
+        error: err instanceof Error ? err.message : "Failed to fetch holdings",
+        isLoading: false,
+        isRefreshing: false,
+      });
     }
   },
 
@@ -175,40 +261,45 @@ export const usePortfolioStore = create<PortfolioState>((set, get) => ({
     // Let failures propagate so callers can surface them to the user
     const summary = await api.post<RefreshSummary>("/market/refresh");
     const portfolioId = get().activePortfolioId;
-    if (portfolioId) await get().fetchHoldings(portfolioId);
+    // Silent: every caller of this drives its own button spinner, and the
+    // table is already on screen.
+    if (portfolioId) await get().fetchHoldings(portfolioId, { silent: true });
     return summary;
   },
 
-  refreshActive: async () => {
+  refreshActive: async (options) => {
     const portfolioId = get().activePortfolioId;
     if (portfolioId == null) return;
-    await get().fetchHoldings(portfolioId);
+    await get().fetchHoldings(portfolioId, { silent: options?.silent ?? true });
   },
 
   updateHolding: (symbol, patch) => {
-    const target = symbol.trim().toUpperCase();
+    get().updateHoldings([{ symbol, patch }]);
+  },
+
+  updateHoldings: (entries) => {
+    if (entries.length === 0) return;
+    // Collapse repeats for the same symbol — the last frame of a burst wins,
+    // field by field.
+    const bySymbol = new Map<string, HoldingPatch>();
+    for (const { symbol, patch } of entries) {
+      const key = (symbol ?? "").trim().toUpperCase();
+      if (!key) continue;
+      bySymbol.set(key, { ...(bySymbol.get(key) ?? {}), ...patch });
+    }
+    if (bySymbol.size === 0) return;
+
     set((state): Partial<PortfolioState> => {
       let changed = false;
       const holdings = state.holdings.map((h) => {
-        if ((h.stock_symbol ?? "").trim().toUpperCase() !== target) return h;
-        changed = true;
-        const next: Holding = { ...h };
-        // Only fields actually present in the payload are applied, so a
-        // partial/altered server envelope degrades to "leave it alone".
-        if (patch.current_price !== undefined) next.current_price = patch.current_price;
-        if (patch.rsi !== undefined) next.rsi = patch.rsi;
-        if (patch.action_needed !== undefined) next.action_needed = patch.action_needed;
-        if (patch.last_price_update !== undefined) {
-          next.last_price_update = patch.last_price_update;
-        }
-        // pnl_percent is client-derived from price vs avg — recompute it so the
-        // P&L column can't disagree with the price next to it.
-        if (patch.current_price != null && next.avg_price > 0) {
-          next.pnl_percent = ((patch.current_price - next.avg_price) / next.avg_price) * 100;
-        }
+        const patch = bySymbol.get((h.stock_symbol ?? "").trim().toUpperCase());
+        if (!patch) return h;
+        const next = applyPatch(h, patch);
+        if (next !== h) changed = true;
         return next;
       });
-      // Unknown symbol (e.g. a stale subscription): don't churn the array identity.
+      // Unknown symbol (e.g. a stale subscription) or a re-send of identical
+      // values: don't churn the array identity, which re-renders every consumer.
       return changed ? { holdings } : {};
     });
   },

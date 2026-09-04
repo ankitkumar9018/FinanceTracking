@@ -143,16 +143,16 @@ FinanceTracker is a full-stack, cross-platform investment tracking application b
   +----------------------------------------------------------------------+
   |                                                                      |
   |  +------------------------+     +----------------------------------+ |
-  |  |  SQLAlchemy 2.0 Async  |     |  Celery + Redis                  | |
-  |  |  ORM + Alembic         |     |  (Background Tasks)              | |
+  |  |  SQLAlchemy 2.0 Async  |     |  APScheduler (default)           | |
+  |  |  ORM + Alembic         |     |  (Background Tasks, in-process)  | |
   |  |                        |     |                                  | |
-  |  |  DEV:  SQLite +        |     |  Beat schedule:                  | |
-  |  |        aiosqlite       |     |  - fetch_prices (5 min)          | |
-  |  |                        |     |  - check_alerts (1 min)          | |
-  |  |  PROD: PostgreSQL +    |     |                                  | |
-  |  |        asyncpg         |     |  Fallback: APScheduler           | |
-  |  |                        |     |  AsyncIOScheduler if Redis /     | |
-  |  |  Zero code changes     |     |  Celery is unavailable           | |
+  |  |  DEV:  SQLite +        |     |  Shared JOBS spec:               | |
+  |  |        aiosqlite       |     |  - fetch_prices  (5 min)         | |
+  |  |                        |     |  - check_alerts  (1 min)         | |
+  |  |  PROD: PostgreSQL +    |     |  - ai_digest     (daily)         | |
+  |  |        asyncpg         |     |                                  | |
+  |  |                        |     |  Opt-in: Celery + Redis, ONLY    | |
+  |  |  Zero code changes     |     |  when USE_CELERY=true            | |
   |  |  between dev and prod  |     |                                  | |
   |  +------------------------+     +----------------------------------+ |
   |                                                                      |
@@ -197,7 +197,7 @@ flowchart TB
     subgraph Data["Data Layer"]
         ORM["SQLAlchemy 2.0 Async ORM<br/>+ Alembic migrations"]
         DB[("SQLite (dev)<br/>PostgreSQL (prod)")]
-        SCHED["Celery + Redis beat<br/>-> APScheduler fallback"]
+        SCHED["APScheduler (default)<br/>-> Celery + Redis when USE_CELERY=true"]
     end
 
     subgraph External["External Services (all optional / degrade gracefully)"]
@@ -385,29 +385,50 @@ DATABASE_URL = "postgresql+asyncpg://user:pass@host/db" # Prod
 ### Background Task Architecture
 
 ```
-  +-- Celery + Redis (Primary) --+
+  +-- APScheduler (DEFAULT) ------+
   |                               |
-  |  Beat Schedule:               |
-  |  - fetch_prices:   every 5m   |
-  |  - check_alerts:   every 1m   |
+  |  AsyncIOScheduler, in the     |
+  |  FastAPI event loop:          |
+  |  - fetch_prices_job  (5m)     |
+  |  - check_alerts_job  (1m)     |
+  |  - ai_digest_job     (daily)  |
   |                               |
+  |  No Redis, no extra process.  |
+  |  WebSocket pushes work.       |
   +-------------------------------+
               |
-              | If Redis/Celery unavailable
+              | ONLY if USE_CELERY=true
+              | (and celery importable)
               v
-  +-- APScheduler Fallback --+
-  |                           |
-  |  AsyncIOScheduler with    |
-  |  interval jobs:           |
-  |  - fetch_prices_job       |
-  |  - check_alerts_job       |
-  |                           |
-  |  Same logic, single       |
-  |  process, no Redis        |
-  +------+--------------------+
+  +-- Celery + Redis (opt-in) ----+
+  |                               |
+  |  APScheduler is skipped; you  |
+  |  run `celery worker --beat`.  |
+  |  Beat schedule is generated   |
+  |  from the SAME JobSpec tuple. |
+  +-------------------------------+
 ```
 
-When Redis is available, Celery provides distributed task execution with a beat scheduler running two periodic tasks (`fetch-prices`, `check-alerts`). When Redis or Celery is not installed (common for local development), the system falls back to APScheduler's `AsyncIOScheduler` running the same two interval jobs inside the FastAPI process.
+Both modes are driven by one shared `JOBS: tuple[JobSpec, ...]` in
+`app/tasks/celery_app.py`, so the APScheduler registrar and the Celery beat
+schedule can never drift apart. There are **three** jobs: `fetch_prices_job`,
+`check_alerts_job`, and `ai_digest_job` (daily; deliberately *not* run at
+startup, or a desktop user's restarts would re-send the digest).
+
+`start_scheduler()` (`app/tasks/scheduler.py`) consults **only**
+`settings.use_celery` (env `USE_CELERY`, default `False`). A reachable Redis
+does not change the mode: an earlier build decided by pinging Redis, and any
+unrelated local Redis then silently disabled APScheduler while no worker
+consumed the queue, so prices and alerts never refreshed. `is_celery_available()`
+survives in `celery_app.py` as a **diagnostic helper only** and is not called by
+`start_scheduler()`. With `USE_CELERY=true` but no worker running, no job runs
+at all; with a worker running but `USE_CELERY` unset, every job runs twice.
+
+**Known limitation of Celery mode:** the WebSocket broadcasts in the price and
+alert tasks execute in the *worker* process, whose `ConnectionManager` holds no
+browser sockets — live WS pushes are not delivered. Because `use_celery`
+defaults to `False`, every standard deployment gets the in-process path where
+broadcasts work.
 
 ### Service Layer Additions & Extensions
 
@@ -525,7 +546,7 @@ The desktop WebView navigates to the backend on the dynamically-chosen port (def
 
 ```
 1. Market opens (09:15 IST / 09:00 CET)
-2. Scheduler (Celery beat or APScheduler) triggers fetch_prices every 5 minutes
+2. Scheduler (APScheduler in-process by default; Celery beat when USE_CELERY=true) triggers fetch_prices every 5 minutes
 3. For each holding:
    a. Poll yfinance (15-min delayed for NSE)
    b. If yfinance fails -> serve cached price with "stale" flag
@@ -544,7 +565,7 @@ The push side of that loop — from the scheduler tick to the browser — as a s
 
 ```mermaid
 sequenceDiagram
-    participant SCHED as Scheduler<br/>(Celery beat / APScheduler)
+    participant SCHED as Scheduler<br/>(APScheduler by default)
     participant FETCH as fetch_prices task
     participant YF as yfinance
     participant DB as price_history / holdings
@@ -589,8 +610,8 @@ Every external dependency has a fallback. The core application (portfolio tracki
 
 | Service | If Missing | Fallback |
 |---|---|---|
-| Redis | Not installed | APScheduler in-process scheduler |
-| Celery | Not installed | APScheduler scheduled jobs within FastAPI |
+| Redis | Not installed | In-memory alert-dedup/cache. Does **not** affect scheduling — APScheduler is the default either way. |
+| Celery | Not installed | APScheduler runs the jobs in-process. If `USE_CELERY=true` was set anyway, a warning is logged and APScheduler starts regardless. |
 | Ollama / LLM | Not installed | AI features show "AI offline" banner; all other features work |
 | yfinance | Rate limited | Show last cached price with "stale" timestamp |
 | Broker API | Connection fails | Manual data entry; show "Broker disconnected" badge |

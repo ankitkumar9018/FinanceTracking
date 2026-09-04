@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { api } from "@/lib/api-client";
 import { Loader2, Calculator, Trash2 } from "lucide-react";
 import { Modal } from "@/components/shared/modal";
@@ -48,6 +48,8 @@ interface EditHoldingModalProps {
 }
 
 export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: EditHoldingModalProps) {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   const [loaded, setLoaded] = useState(false);
   const [editingStock, setEditingStock] = useState(false);
   const [editForm, setEditForm] = useState<AddStockForm>(EMPTY_FORM);
@@ -191,8 +193,9 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
       <form onSubmit={handleEditStock} className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Symbol</label>
+            <label htmlFor={`${uid}-symbol`} className="block text-sm font-medium mb-1">Symbol</label>
             <input
+              id={`${uid}-symbol`}
               type="text"
               disabled
               value={editForm.stock_symbol}
@@ -200,8 +203,9 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Exchange</label>
+            <label htmlFor={`${uid}-exchange`} className="block text-sm font-medium mb-1">Exchange</label>
             <select
+              id={`${uid}-exchange`}
               value={editForm.exchange}
               onChange={(e) => setEditForm({ ...editForm, exchange: e.target.value })}
               className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
@@ -214,8 +218,9 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">Stock Name</label>
+          <label htmlFor={`${uid}-name`} className="block text-sm font-medium mb-1">Stock Name</label>
           <input
+            id={`${uid}-name`}
             type="text"
             placeholder="e.g., Reliance Industries Ltd"
             value={editForm.stock_name}
@@ -226,8 +231,9 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Quantity *</label>
+            <label htmlFor={`${uid}-qty`} className="block text-sm font-medium mb-1">Quantity *</label>
             <input
+              id={`${uid}-qty`}
               type="number"
               required
               min="0.000001"
@@ -238,8 +244,9 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Avg Price *</label>
+            <label htmlFor={`${uid}-avg`} className="block text-sm font-medium mb-1">Avg Price *</label>
             <input
+              id={`${uid}-avg`}
               type="number"
               required
               min="0.01"
@@ -252,8 +259,9 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">Sector</label>
+          <label htmlFor={`${uid}-sector`} className="block text-sm font-medium mb-1">Sector</label>
           <input
+            id={`${uid}-sector`}
             type="text"
             placeholder="e.g., IT, Banking, Energy"
             value={editForm.sector || ""}
@@ -263,13 +271,14 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">
+          <label htmlFor={`${uid}-target`} className="block text-sm font-medium mb-1">
             Target Allocation %{" "}
             <span className="text-xs font-normal text-[hsl(var(--muted-foreground))]">
               (used for drift alerts)
             </span>
           </label>
           <input
+            id={`${uid}-target`}
             type="number"
             min="0"
             max="100"
@@ -282,13 +291,14 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">
+          <label htmlFor={`${uid}-stoploss`} className="block text-sm font-medium mb-1">
             Stop-loss price{" "}
             <span className="text-xs font-normal text-[hsl(var(--muted-foreground))]">
               (alerts when price falls to this level — clear to remove)
             </span>
           </label>
           <input
+            id={`${uid}-stoploss`}
             type="number"
             min="0"
             step="0.01"
@@ -315,8 +325,9 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
           </div>
           <div className="mt-3 grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Base Level (−10%)</label>
+              <label htmlFor={`${uid}-base`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Base Level (−10%)</label>
               <input
+                id={`${uid}-base`}
                 type="number"
                 step="0.01"
                 placeholder="2000"
@@ -326,8 +337,9 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
               />
             </div>
             <div>
-              <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Lower Mid 2</label>
+              <label htmlFor={`${uid}-lm2`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Lower Mid 2</label>
               <input
+                id={`${uid}-lm2`}
                 type="number"
                 step="0.01"
                 value={editForm.lower_mid_range_2 || ""}
@@ -336,8 +348,9 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
               />
             </div>
             <div>
-              <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Lower Mid 1</label>
+              <label htmlFor={`${uid}-lm1`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Lower Mid 1</label>
               <input
+                id={`${uid}-lm1`}
                 type="number"
                 step="0.01"
                 value={editForm.lower_mid_range_1 || ""}
@@ -346,8 +359,9 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
               />
             </div>
             <div>
-              <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Upper Mid 1</label>
+              <label htmlFor={`${uid}-um1`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Upper Mid 1</label>
               <input
+                id={`${uid}-um1`}
                 type="number"
                 step="0.01"
                 value={editForm.upper_mid_range_1 || ""}
@@ -356,8 +370,9 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
               />
             </div>
             <div>
-              <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Upper Mid 2</label>
+              <label htmlFor={`${uid}-um2`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Upper Mid 2</label>
               <input
+                id={`${uid}-um2`}
                 type="number"
                 step="0.01"
                 value={editForm.upper_mid_range_2 || ""}
@@ -366,8 +381,9 @@ export function EditHoldingModal({ holdingId, onClose, onSaved, onDelete }: Edit
               />
             </div>
             <div>
-              <label className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Top Level</label>
+              <label htmlFor={`${uid}-top`} className="block text-xs text-[hsl(var(--muted-foreground))] mb-1">Top Level</label>
               <input
+                id={`${uid}-top`}
                 type="number"
                 step="0.01"
                 value={editForm.top_level || ""}

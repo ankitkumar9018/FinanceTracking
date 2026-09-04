@@ -33,25 +33,38 @@ function firstFinite(...values: (number | null | undefined)[]): number | undefin
   return undefined;
 }
 
+/** How long incoming per-symbol patches are pooled before one store commit.
+ *  A refresh cycle pushes one frame per holding, each arriving in its own
+ *  macrotask — React cannot batch across them, so applying them as they land
+ *  costs one full re-render of every store consumer PER HOLDING. Pooling caps
+ *  that at one commit per window (~17 commits/sec worst case) while staying
+ *  far below the eye's threshold for "live". */
+const FLUSH_INTERVAL_MS = 60;
+
 /**
  * Joins the shared `/ws/prices` stream, subscribes to the active portfolio's
  * holding symbols, and pushes live data into the portfolio store.
  *
  * Two server paths are handled:
- *   - `price_update`     — per-symbol patch (price, RSI, action, timestamp)
+ *   - `price_update`     — per-symbol patch (price, RSI, action, timestamp),
+ *     pooled and flushed as one batched store commit
  *   - `prices_refreshed` — end of a refresh cycle; re-fetches the active
- *     portfolio's holdings. Coarse, but it keeps the screen honest even if the
- *     per-symbol payload changes shape or a symbol push is missed.
+ *     portfolio's holdings in the background (no skeletons). Coarse, but it
+ *     keeps the screen honest even if the per-symbol payload changes shape or
+ *     a symbol push is missed.
  *
  * Mount this a single time (in the dashboard layout). Degrades silently when
  * there is no auth token or the connection fails.
  */
 export function usePriceStream(): void {
   const holdings = usePortfolioStore((s) => s.holdings);
-  const updateHolding = usePortfolioStore((s) => s.updateHolding);
+  const updateHoldings = usePortfolioStore((s) => s.updateHoldings);
 
   const wsRef = useRef<WSConnection | null>(null);
   const symbolsRef = useRef<string[]>([]);
+  // Patches waiting for the next flush, latest-wins per symbol.
+  const pendingRef = useRef<Map<string, HoldingPatch>>(new Map());
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Distinct, non-empty symbols of the active portfolio's holdings.
   const symbols = useMemo(
@@ -62,6 +75,27 @@ export function usePriceStream(): void {
 
   // Join the shared socket once.
   useEffect(() => {
+    // The pool's identity never changes (a useRef initial value), so capture
+    // it once — the cleanup below must clear the very same map.
+    const pending = pendingRef.current;
+
+    // Drain the pool into ONE store commit. Declared inside the effect so the
+    // cleanup below owns the timer.
+    const flush = () => {
+      flushTimerRef.current = null;
+      if (pending.size === 0) return;
+      const batch = Array.from(pending, ([symbol, patch]) => ({ symbol, patch }));
+      pending.clear();
+      updateHoldings(batch);
+    };
+    // Fixed-delay, NOT debounced: a debounce would starve the UI for as long
+    // as frames keep arriving, which during a 200-holding burst is the whole
+    // refresh.
+    const scheduleFlush = () => {
+      if (flushTimerRef.current !== null) return;
+      flushTimerRef.current = setTimeout(flush, FLUSH_INTERVAL_MS);
+    };
+
     const ws = acquireLiveSocket();
     if (!ws) return;
     wsRef.current = ws;
@@ -100,25 +134,37 @@ export function usePriceStream(): void {
         patch.last_price_update = data.last_price_update;
       }
 
-      if (Object.keys(patch).length > 0) updateHolding(symbol, patch);
+      if (Object.keys(patch).length === 0) return;
+
+      const key = symbol.trim().toUpperCase();
+      pending.set(key, { ...(pending.get(key) ?? {}), ...patch });
+      scheduleFlush();
     });
 
     // Coarse fallback: the refresh cycle finished, so re-read the summary.
+    // Silent, so the tables the user is reading do not blank into skeletons
+    // every cycle; the per-symbol patches above have already landed anyway.
     const offRefreshed = ws.on("prices_refreshed", () => {
-      void usePortfolioStore.getState().refreshActive();
+      flush();
+      void usePortfolioStore.getState().refreshActive({ silent: true });
     });
 
     return () => {
       offConnected();
       offPrice();
       offRefreshed();
+      if (flushTimerRef.current !== null) {
+        clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+      pending.clear();
       wsRef.current = null;
       releaseLiveSocket();
     };
     // Intentionally run once: the socket must persist across holding changes.
-    // updateHolding is a stable zustand action; symbols are handled below.
+    // updateHoldings is a stable zustand action; symbols are handled below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [updateHolding]);
+  }, [updateHoldings]);
 
   // Keep the subscription in sync as holdings load / change. send() is a no-op
   // until the socket is OPEN; the "connected" handler covers the initial send.

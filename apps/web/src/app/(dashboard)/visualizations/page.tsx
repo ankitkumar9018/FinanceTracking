@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState, memo } from "react";
 import dynamic from "next/dynamic";
 import {
   BarChart2,
@@ -10,7 +10,7 @@ import {
   TrendingDown,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
-import { usePortfolioStore } from "@/stores/portfolio-store";
+import { displayCurrency, usePortfolioStore } from "@/stores/portfolio-store";
 import { motion } from "framer-motion";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
@@ -33,15 +33,21 @@ const DrawdownChart = dynamic(() => import("@/components/charts/drawdown-chart")
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
+interface SummaryHolding {
+  stock_symbol: string;
+  stock_name: string;
+  sector: string | null;
+  current_price: number | null;
+  avg_price: number;
+  quantity: number;
+  /** Market value converted into the requested display currency. Present only
+   *  when the summary was fetched with ?display_currency= and every FX rate
+   *  resolved. Anything that adds holdings together must prefer it. */
+  current_value_display?: number | null;
+}
+
 interface PortfolioSummary {
-  holdings: {
-    stock_symbol: string;
-    stock_name: string;
-    sector: string | null;
-    current_price: number | null;
-    avg_price: number;
-    quantity: number;
-  }[];
+  holdings: SummaryHolding[];
   total_value?: number;
 }
 
@@ -85,6 +91,20 @@ function returnCellStyle(value: number): React.CSSProperties {
   };
 }
 
+/** Hard cap on the correlation matrix. It is an N x N grid of DOM nodes, so
+ *  the node count grows quadratically: 30 symbols is 900 cells, 200 would be
+ *  40,000 — enough to freeze the tab on hover. The largest holdings are the
+ *  ones whose co-movement actually matters, so we keep those. */
+const MAX_CORRELATION_SYMBOLS = 30;
+
+/** Market value in ONE currency, for ranking holdings against each other. */
+function comparableValue(h: SummaryHolding): number {
+  if (typeof h.current_value_display === "number" && Number.isFinite(h.current_value_display)) {
+    return h.current_value_display;
+  }
+  return (h.current_price ?? h.avg_price) * h.quantity;
+}
+
 const CORRELATION_LEGEND_STOPS = [-1, -0.66, -0.33, 0, 0.33, 0.66, 1];
 const RETURN_LEGEND_STOPS = [-10, -6, -2, 2, 6, 10];
 
@@ -102,15 +122,161 @@ const TREEMAP_COLORS = [
 ];
 
 /* ------------------------------------------------------------------ */
-/*  (Correlation, monthly returns, drawdown fetched from API)          */
+/*  Correlation heatmap (matrix, monthly returns and drawdown all come  */
+/*  from the API)                                                       */
 /* ------------------------------------------------------------------ */
+
+interface HoveredCell {
+  row: number;
+  col: number;
+  value: number;
+}
+
+/** The N x N cell grid. Memoised and split out from the page on purpose: the
+ *  hover readout lives one component up, so pointing at a cell used to
+ *  re-render every cell in the matrix — twice per cell crossed. With the grid
+ *  memoised, hovering re-renders only the one-line readout. */
+const CorrelationGrid = memo(function CorrelationGrid({
+  symbols,
+  matrix,
+  onHoverCell,
+  onLeave,
+}: {
+  symbols: string[];
+  matrix: number[][];
+  onHoverCell: (cell: HoveredCell) => void;
+  onLeave: () => void;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <div className="inline-block">
+        {/* Column headers */}
+        <div className="flex">
+          <div className="w-20 shrink-0" />
+          {symbols.map((sym) => (
+            <div
+              key={`col-${sym}`}
+              className="w-14 shrink-0 text-center text-[10px] font-medium text-[hsl(var(--muted-foreground))] truncate px-0.5"
+              title={sym}
+            >
+              {sym.length > 5 ? sym.slice(0, 5) + ".." : sym}
+            </div>
+          ))}
+        </div>
+
+        {/* Rows */}
+        {symbols.map((rowSym, ri) => (
+          <div key={`row-${rowSym}`} className="flex">
+            <div
+              className="w-20 shrink-0 flex items-center text-[10px] font-medium text-[hsl(var(--muted-foreground))] truncate pr-1"
+              title={rowSym}
+            >
+              {rowSym.length > 8 ? rowSym.slice(0, 8) + ".." : rowSym}
+            </div>
+            {symbols.map((colSym, ci) => {
+              // A ragged/short matrix row would throw on [ri][ci] — default missing cells to 0.
+              const value = matrix[ri]?.[ci] ?? 0;
+              return (
+                <div
+                  key={`cell-${ri}-${ci}`}
+                  className="w-14 h-10 shrink-0 flex items-center justify-center text-[9px] font-mono text-[hsl(var(--foreground))] border border-[hsl(var(--background))] cursor-pointer transition-transform hover:scale-105"
+                  style={correlationCellStyle(value)}
+                  title={`${rowSym} vs ${colSym}: ${value.toFixed(3)}`}
+                  onMouseEnter={() => onHoverCell({ row: ri, col: ci, value })}
+                  onMouseLeave={onLeave}
+                >
+                  {value.toFixed(2)}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
+
+function CorrelationHeatmap({
+  symbols,
+  matrix,
+  hiddenCount,
+}: {
+  symbols: string[];
+  matrix: number[][];
+  hiddenCount: number;
+}) {
+  const [hoveredCell, setHoveredCell] = useState<HoveredCell | null>(null);
+  // Stable identities, so the memoised grid actually bails out.
+  const handleHoverCell = useCallback((cell: HoveredCell) => setHoveredCell(cell), []);
+  const handleLeave = useCallback(() => setHoveredCell(null), []);
+
+  return (
+    <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5">
+      <h3 className="text-sm font-semibold mb-4">
+        Correlation Heatmap
+        <span className="ml-2 font-normal text-xs text-[hsl(var(--muted-foreground))]">
+          (computed from holdings)
+        </span>
+      </h3>
+
+      {symbols.length < 2 ? (
+        <div className="rounded-md border border-dashed border-[hsl(var(--border))] py-10 text-center text-sm text-[hsl(var(--muted-foreground))]">
+          Correlation needs at least two holdings with enough price history.
+        </div>
+      ) : (
+        <>
+          {hiddenCount > 0 && (
+            <p className="mb-3 text-xs text-[hsl(var(--muted-foreground))]">
+              Showing your {symbols.length} largest holdings by value —{" "}
+              {hiddenCount} smaller {hiddenCount === 1 ? "one is" : "ones are"} omitted to
+              keep the matrix readable.
+            </p>
+          )}
+
+          {/* Readout for the hovered cell. Only this line re-renders on hover. */}
+          <div className="mb-3 h-4 text-xs text-[hsl(var(--muted-foreground))]">
+            {hoveredCell && (
+              <>
+                {symbols[hoveredCell.row]} vs {symbols[hoveredCell.col]}:{" "}
+                <span className="font-mono font-medium text-[hsl(var(--foreground))]">
+                  {hoveredCell.value.toFixed(3)}
+                </span>
+              </>
+            )}
+          </div>
+
+          <CorrelationGrid
+            symbols={symbols}
+            matrix={matrix}
+            onHoverCell={handleHoverCell}
+            onLeave={handleLeave}
+          />
+
+          {/* Legend */}
+          <div className="flex items-center gap-2 mt-4 text-xs text-[hsl(var(--muted-foreground))]">
+            <span>-1.0</span>
+            <div className="flex h-3 flex-1 rounded overflow-hidden">
+              {CORRELATION_LEGEND_STOPS.map((stop) => (
+                <div key={stop} className="flex-1" style={correlationCellStyle(stop)} />
+              ))}
+            </div>
+            <span>+1.0</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
 export default function VisualizationsPage() {
-  const { activePortfolioId, hasLoadedPortfolios } = usePortfolioStore();
+  // Field selectors, not a bare `usePortfolioStore()`: the live price stream
+  // replaces `holdings` constantly and this page never reads it.
+  const activePortfolioId = usePortfolioStore((s) => s.activePortfolioId);
+  const hasLoadedPortfolios = usePortfolioStore((s) => s.hasLoadedPortfolios);
   const [activeTab, setActiveTab] = useState<TabKey>("correlation");
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [riskData, setRiskData] = useState<RiskData | null>(null);
@@ -126,8 +292,12 @@ export default function VisualizationsPage() {
       setLoading(true);
       setError(null);
       try {
+        const display = displayCurrency();
+        const summaryPath = display
+          ? `/portfolios/${portfolioId}/summary?display_currency=${encodeURIComponent(display)}`
+          : `/portfolios/${portfolioId}/summary`;
         const [summaryData, risk, corrData, returnsData, ddData] = await Promise.all([
-          api.get<PortfolioSummary>(`/portfolios/${portfolioId}/summary`),
+          api.get<PortfolioSummary>(summaryPath),
           api.get<RiskData>(`/indicators/risk/${portfolioId}`).catch(() => null),
           api.get<{ symbols: string[]; matrix: number[][] }>(`/analytics/correlation/${portfolioId}`).catch(() => ({ symbols: [], matrix: [] })),
           api.get<{ returns: { month: string; return_pct: number }[] }>(`/analytics/monthly-returns/${portfolioId}`).catch(() => ({ returns: [] })),
@@ -164,14 +334,35 @@ export default function VisualizationsPage() {
 
   /* ---- Computed Data ---- */
 
-  const symbols = correlationSymbols;
+  /** The matrix actually rendered: the largest holdings first, capped, with
+   *  the matrix re-indexed to match. Ranking by value keeps the pairs worth
+   *  looking at instead of whichever rows the API happened to return first. */
+  const { symbols, matrix: cappedMatrix, hiddenCount } = useMemo(() => {
+    const valueBySymbol = new Map<string, number>();
+    summary?.holdings.forEach((h) => {
+      valueBySymbol.set(h.stock_symbol, comparableValue(h));
+    });
+    const ranked = correlationSymbols
+      .map((sym, index) => ({ sym, index, value: valueBySymbol.get(sym) ?? 0 }))
+      // Value desc, then the API's own order as a stable tiebreak.
+      .sort((a, b) => b.value - a.value || a.index - b.index)
+      .slice(0, MAX_CORRELATION_SYMBOLS);
+    const rows = ranked.map((r) => r.index);
+    return {
+      symbols: ranked.map((r) => r.sym),
+      matrix: rows.map((ri) => rows.map((ci) => correlationMatrix[ri]?.[ci] ?? 0)),
+      hiddenCount: Math.max(0, correlationSymbols.length - ranked.length),
+    };
+  }, [correlationSymbols, correlationMatrix, summary]);
 
   const sectorData = useMemo(() => {
     if (!summary?.holdings.length) return [];
     const sectorMap: Record<string, number> = {};
     let totalValue = 0;
     summary.holdings.forEach((h) => {
-      const val = (h.current_price || h.avg_price) * h.quantity;
+      // Converted value when available — adding a EUR position to an INR one
+      // at face value makes both sector weights wrong.
+      const val = comparableValue(h);
       const sector = h.sector || "Unknown";
       sectorMap[sector] = (sectorMap[sector] || 0) + val;
       totalValue += val;
@@ -191,12 +382,6 @@ export default function VisualizationsPage() {
     () => (drawdownData.length ? Math.min(...drawdownData.map((d) => d.drawdown)) : 0),
     [drawdownData]
   );
-
-  const [hoveredCell, setHoveredCell] = useState<{
-    row: number;
-    col: number;
-    value: number;
-  } | null>(null);
 
   return (
     <div className="space-y-6">
@@ -248,7 +433,7 @@ export default function VisualizationsPage() {
         </div>
       ) : error ? (
         <ErrorState message={error} onRetry={() => loadData(activePortfolioId)} />
-      ) : !summary || symbols.length === 0 ? (
+      ) : !summary || summary.holdings.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-[hsl(var(--border))] py-16">
           <BarChart2 className="h-12 w-12 text-[hsl(var(--muted-foreground))]/30" />
           <p className="mt-4 text-lg font-medium text-[hsl(var(--muted-foreground))]">
@@ -267,82 +452,11 @@ export default function VisualizationsPage() {
         >
           {/* ==== Tab 1: Correlation Heatmap ==== */}
           {activeTab === "correlation" && (
-            <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5">
-              <h3 className="text-sm font-semibold mb-4">
-                Correlation Heatmap
-                <span className="ml-2 font-normal text-xs text-[hsl(var(--muted-foreground))]">
-                  (computed from holdings)
-                </span>
-              </h3>
-
-              {/* Tooltip for hovered cell */}
-              {hoveredCell && (
-                <div className="mb-3 text-xs text-[hsl(var(--muted-foreground))]">
-                  {symbols[hoveredCell.row]} vs {symbols[hoveredCell.col]}:{" "}
-                  <span className="font-mono font-medium text-[hsl(var(--foreground))]">
-                    {hoveredCell.value.toFixed(3)}
-                  </span>
-                </div>
-              )}
-
-              <div className="overflow-x-auto">
-                <div className="inline-block">
-                  {/* Column headers */}
-                  <div className="flex">
-                    <div className="w-20 shrink-0" />
-                    {symbols.map((sym) => (
-                      <div
-                        key={`col-${sym}`}
-                        className="w-14 shrink-0 text-center text-[10px] font-medium text-[hsl(var(--muted-foreground))] truncate px-0.5"
-                        title={sym}
-                      >
-                        {sym.length > 5 ? sym.slice(0, 5) + ".." : sym}
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Rows */}
-                  {symbols.map((rowSym, ri) => (
-                    <div key={`row-${rowSym}`} className="flex">
-                      <div
-                        className="w-20 shrink-0 flex items-center text-[10px] font-medium text-[hsl(var(--muted-foreground))] truncate pr-1"
-                        title={rowSym}
-                      >
-                        {rowSym.length > 8 ? rowSym.slice(0, 8) + ".." : rowSym}
-                      </div>
-                      {symbols.map((_, ci) => {
-                        // A ragged/short matrix row would throw on [ri][ci] — default missing cells to 0.
-                        const value = correlationMatrix[ri]?.[ci] ?? 0;
-                        return (
-                          <div
-                            key={`cell-${ri}-${ci}`}
-                            className="w-14 h-10 shrink-0 flex items-center justify-center text-[9px] font-mono text-[hsl(var(--foreground))] border border-[hsl(var(--background))] cursor-pointer transition-transform hover:scale-105"
-                            style={correlationCellStyle(value)}
-                            onMouseEnter={() =>
-                              setHoveredCell({ row: ri, col: ci, value })
-                            }
-                            onMouseLeave={() => setHoveredCell(null)}
-                          >
-                            {value.toFixed(2)}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Legend */}
-              <div className="flex items-center gap-2 mt-4 text-xs text-[hsl(var(--muted-foreground))]">
-                <span>-1.0</span>
-                <div className="flex h-3 flex-1 rounded overflow-hidden">
-                  {CORRELATION_LEGEND_STOPS.map((stop) => (
-                    <div key={stop} className="flex-1" style={correlationCellStyle(stop)} />
-                  ))}
-                </div>
-                <span>+1.0</span>
-              </div>
-            </div>
+            <CorrelationHeatmap
+              symbols={symbols}
+              matrix={cappedMatrix}
+              hiddenCount={hiddenCount}
+            />
           )}
 
           {/* ==== Tab 2: Sector Allocation Treemap ==== */}

@@ -4,7 +4,9 @@
 
 ## Overview
 
-FinanceTracker connects to stock brokers to automatically sync your holdings, transactions, and real-time prices. All broker integrations follow an abstract adapter pattern, making it straightforward to add new brokers.
+FinanceTracker connects to stock brokers to automatically sync your **holdings and transactions**. All broker integrations follow an abstract adapter pattern, making it straightforward to add new brokers.
+
+> **Prices are not synced from brokers.** Every quote in the app comes from the polled yfinance job, connected broker or not. `BrokerAdapter.get_live_price()` exists on the interface (and is implemented for Zerodha and ICICI Direct), but nothing in the price pipeline calls it, and no adapter opens a ticker stream.
 
 Broker connections are **optional**. The app works fully without any broker by using manual entry and yfinance for price data.
 
@@ -166,9 +168,9 @@ There is no dedicated callback route — the whole round-trip goes through `POST
 | Positions | `kite.positions()` | Supported |
 | Order history | `kite.orders()` | Supported |
 | Historical data | `kite.historical_data(instrument, from, to, interval)` | Supported |
-| Live quotes | `kite.quote(instruments)` | Supported |
-| WebSocket streaming | `KiteTicker` | Supported |
-| Margins/Funds | `kite.margins()` | Supported |
+| Live quotes | `kite.quote(instruments)` | Implemented as `get_live_price()`, but **nothing calls it** — the price pipeline is yfinance-only |
+| WebSocket streaming | `KiteTicker` | **Not implemented** — no ticker is ever opened |
+| Margins/Funds | `kite.margins()` | **Not implemented** |
 | Place order | `kite.place_order()` | Not implemented (read-only app) |
 
 #### Token Management
@@ -247,9 +249,9 @@ class ZerodhaBroker(BrokerAdapter):
 | Positions | `breeze.get_portfolio_positions()` | Supported |
 | Trade history | `breeze.get_trade_list()` | Supported |
 | Historical data | `breeze.get_historical_data_v2()` | Supported (10yr, 1-sec OHLCV) |
-| Live quotes | `breeze.get_quotes()` | Supported |
-| WebSocket streaming | `breeze.on_ticks` | Supported |
-| Margins | `breeze.get_margin()` | Supported |
+| Live quotes | `breeze.get_quotes()` | Implemented as `get_live_price()`, but **nothing calls it** — the price pipeline is yfinance-only |
+| WebSocket streaming | `breeze.on_ticks` | **Not implemented** — no tick subscription is ever opened |
+| Margins | `breeze.get_margin()` | **Not implemented** |
 
 #### Implementation Notes
 

@@ -40,16 +40,20 @@ export function StockDetailPanel({ holding, type, onClose }: Props) {
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
 
-      {/* Panel */}
+      {/* Panel — a flex column whose body scrolls. The content (400px chart +
+          52W bar + 10 detail tiles) is taller than the panel at any realistic
+          window height, and because the panel lives inside a `fixed inset-0`
+          layer its overflow adds nothing to the document: without an internal
+          scroller the zone levels are simply unreachable. */}
       <motion.div
         initial={{ x: "100%" }}
         animate={{ x: 0 }}
         exit={{ x: "100%" }}
         transition={{ type: "spring", damping: 25, stiffness: 200 }}
-        className="absolute right-0 top-0 h-full w-full max-w-xl border-l border-[hsl(var(--border))] bg-[hsl(var(--background))] shadow-2xl"
+        className="absolute right-0 top-0 flex h-full w-full max-w-xl flex-col border-l border-[hsl(var(--border))] bg-[hsl(var(--background))] shadow-2xl"
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-[hsl(var(--border))] p-4">
+        <div className="flex shrink-0 items-center justify-between border-b border-[hsl(var(--border))] p-4">
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-bold">{holding.stock_symbol}</h2>
@@ -85,8 +89,10 @@ export function StockDetailPanel({ holding, type, onClose }: Props) {
           </button>
         </div>
 
-        {/* Chart */}
-        <div className="p-4">
+        {/* Chart + details — the scrolling region. min-h-0 is required: a flex
+            child's default min-height:auto would let it grow past the panel
+            instead of scrolling inside it. */}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
           <PriceChart symbol={holding.stock_symbol} exchange={holding.exchange} days={30} />
 
           {/* 52-Week Range */}

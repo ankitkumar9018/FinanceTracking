@@ -25,10 +25,10 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ### "Database is locked" error (SQLite)
 
-**Cause**: Multiple processes are trying to write to SQLite simultaneously. This typically happens when both the API server and a Celery worker access the same SQLite file.
+**Cause**: Multiple processes are trying to write to SQLite simultaneously. This typically happens when both the API server and a Celery worker access the same SQLite file — which is exactly what you get if you start a Celery worker without setting `USE_CELERY=true` on the API process, since the API then keeps running its own in-process APScheduler as well.
 
 **Solution**:
-1. For development, stop the Celery worker and rely on the APScheduler fallback
+1. For development, stop the Celery worker and let the default in-process APScheduler own the schedule (`USE_CELERY` unset)
 2. For production, switch to PostgreSQL:
    ```
    DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/financetracker
@@ -162,7 +162,7 @@ pnpm install
 **Cause**: Zerodha access tokens expire daily at 6 AM IST.
 
 **Solution**:
-1. Go to Settings -> Brokers -> Zerodha
+1. Go to the **Brokers** page in the sidebar and find Zerodha
 2. Click **Reconnect**
 3. Log in again on the Zerodha page
 4. The app will get a fresh access token
@@ -252,7 +252,8 @@ The app should handle this automatically, but if you entered a stock manually, m
    ollama pull llama3.2   # Download the model (~4GB)
    ```
 2. Verify Ollama is running: `curl http://localhost:11434`
-3. Or configure an API key for OpenAI/Claude/Gemini in Settings -> AI Assistant
+3. Or switch to a cloud provider by setting `LLM_PROVIDER` and its key in `backend/.env` (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GOOGLE_API_KEY`) and restarting the backend. There is no provider or API-key field in the app — **Settings → AI & Integrations** only *displays* what the backend resolved.
+4. `POST /settings/test/llm` (API only; no UI button) pings the configured provider and reports whether it answers.
 
 ---
 
@@ -264,7 +265,7 @@ The app should handle this automatically, but if you entered a stock manually, m
 1. Llama 3.2 needs about 4-8GB of RAM. Close other memory-intensive applications.
 2. Use a smaller model: `ollama pull llama3.2:1b` (1B parameter version, faster but less capable)
 3. Use a cloud API (OpenAI/Claude/Gemini) instead of local Ollama for faster responses
-4. Check Settings -> AI to see which provider is active
+4. Check **Settings → AI & Integrations** to see which provider the backend resolved (read-only), and raise `OLLAMA_TIMEOUT` in `backend/.env` if generations are being cut short
 
 ---
 
@@ -284,26 +285,35 @@ The app should handle this automatically, but if you entered a stock manually, m
 
 ### Email notifications not being sent
 
-**Cause**: SendGrid API key is missing or invalid.
+**Cause**: The SendGrid API key is missing or invalid, or the alert was created on a different channel.
 
 **Solution**:
-1. Go to Settings -> Notifications -> Email
-2. Enter a valid SendGrid API key
-3. Set the "From" email address (must be verified in SendGrid)
-4. Click **Test** to send a test email
-5. Check your spam folder
+1. Check the alert itself first — on the **Alerts** page each alert lists the single channel it notifies on ("via …"). An alert created as *In-App* will never email you; delete and recreate it with **Notify Via → Email**.
+2. Put a valid key in `backend/.env` and restart the backend — **there is no field for it in the app**:
+   ```bash
+   SENDGRID_API_KEY=SG.xxxxxxxx
+   EMAIL_FROM=alerts@yourdomain.com   # must be verified in SendGrid
+   ```
+3. Open **Settings → Notifications**. If no **Test Email** button appears, the backend still has no key (`GET /settings` reports `integrations.has_sendgrid_key: false`).
+4. Tick **Email Notifications** and press **Save Changes**, then click **Test Email**.
+5. Check your spam folder. Alerts go to your account's login email — there is no separate recipient field.
 
 ---
 
 ### Telegram bot not responding
 
-**Cause**: The bot token is wrong or you have not messaged the bot yet.
+**Cause**: The bot token is missing server-side, or the chat ID is wrong. The app does **not** discover your chat ID.
 
 **Solution**:
 1. Create a bot via @BotFather on Telegram and copy the token
-2. Message your bot (send `/start`) -- this is required for the app to detect your Chat ID
-3. Enter the bot token in Settings -> Notifications -> Telegram
-4. Click **Test**
+2. Put it in `backend/.env` and restart the backend — **there is no field for it in the app**:
+   ```bash
+   TELEGRAM_BOT_TOKEN=123456789:ABCdefGhIJklMNopQRSTuvWXYz
+   ```
+3. Message your bot (`/start`), then find your numeric chat ID at
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` (or message `@userinfobot`)
+4. Open **Settings → Notifications**, tick **Telegram Notifications**, **type the chat ID** into the field that appears, and press **Save Changes**
+5. Click **Test Telegram**. If that button is absent, the backend has no bot token (`GET /settings` reports `integrations.has_telegram_bot: false`).
 
 ---
 
@@ -465,8 +475,8 @@ sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev 
 
 **Solution**:
 1. Enable virtual scrolling (enabled by default for 50+ rows)
-2. Switch to "Compact" table density in Settings -> Display
-3. Reduce the number of visible columns
+2. Switch to "Compact" table density with the toggle above the **Holdings** table (it is not in Settings)
+3. Reduce the number of visible columns with the **Columns** button on the same page
 4. Use Chrome or Edge (they have better performance than Firefox for large tables)
 
 ---
@@ -477,7 +487,7 @@ sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev 
 1. Check if the database has proper indexes (run `uv run alembic upgrade head` to ensure all indexes are created)
 2. For PostgreSQL, run `ANALYZE` to update query planner statistics
 3. Check if yfinance requests are timing out (visible in backend logs)
-4. Consider enabling Redis for background tasks so price fetching does not block API requests
+4. Consider moving background jobs off the API process: set `USE_CELERY=true` on every API process and run one `celery -A app.tasks.celery_app worker --beat`, so price fetching does not compete with request handling. (Note that WebSocket price pushes stop working in Celery mode — see [deployment.md](deployment.md#background-tasks-apscheduler-default-vs-celery).)
 
 ---
 

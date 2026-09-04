@@ -68,8 +68,14 @@ Create an Excel file (.xlsx) with these columns:
 ### Step 2: Upload
 Go to the **Import** page and drag-and-drop your file, or click to browse.
 
-### Step 3: Review
-The system will validate your data and show a preview. Fix any errors and confirm.
+### Step 3: It Applies Immediately
+There is no preview or confirmation step: the file is parsed and written to your
+portfolio as soon as it uploads, and there is no undo. Check the file before you
+drop it, and open **Holdings** afterwards to verify what landed.
+
+Rows that cannot be read (missing fields, an unrecognised date) are skipped
+rather than failing the import, and the result panel reports how many. If
+**rows skipped** is not zero, fix those rows in your file and import again.
 
 ### Re-Importing
 If you import again with the same stocks, existing holdings will be updated (not duplicated).

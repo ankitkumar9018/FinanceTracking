@@ -116,7 +116,7 @@ You can change the time period displayed on any chart:
 | **1Y** | Last 1 year -- shows the bigger picture |
 | **All** | All available history -- shows long-term trends |
 
-The default is **30 days**, which you can change in Settings.
+The default is **30 days**. It is a server setting (`DEFAULT_CHART_DAYS` in `backend/.env`), not something you can change in the app — **Settings → AI & Integrations** only displays the current value.
 
 ## Technical Indicator Overlays
 

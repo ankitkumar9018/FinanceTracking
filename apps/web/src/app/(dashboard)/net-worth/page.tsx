@@ -14,6 +14,7 @@ import {
   CircleDollarSign,
   Gem,
   Trash2,
+  Pencil,
   Loader2,
   LifeBuoy,
 } from "lucide-react";
@@ -47,6 +48,10 @@ interface NetWorthAsset {
   currency: string;
   quantity: number;
   purchase_price: number;
+  symbol?: string | null;
+  /* Only present when set — the net-worth payload omits null extras. */
+  interest_rate?: number;
+  maturity_date?: string;
 }
 
 interface AssetTypeBreakdown {
@@ -347,6 +352,259 @@ function AddAssetModal({
 }
 
 /* ------------------------------------------------------------------ */
+/*  Edit Asset Modal                                                   */
+/* ------------------------------------------------------------------ */
+
+/** Fields a PATCH may carry. Only what the user actually changed is sent, so
+ *  a live-priced crypto/gold row keeps its stored fallback untouched unless
+ *  the value field itself was edited. */
+interface AssetPatch {
+  name?: string;
+  current_value?: number;
+  currency?: string;
+  interest_rate?: number | null;
+  maturity_date?: string | null;
+}
+
+const EDITABLE_CURRENCIES = ["INR", "EUR", "USD", "GBP", "CHF"];
+
+function EditAssetModal({
+  asset,
+  onClose,
+  onSubmit,
+  saving,
+}: {
+  asset: NetWorthAsset | null;
+  onClose: () => void;
+  onSubmit: (id: number, patch: AssetPatch) => void;
+  saving: boolean;
+}) {
+  const [name, setName] = useState("");
+  const [value, setValue] = useState("");
+  const [currency, setCurrency] = useState("INR");
+  const [interestRate, setInterestRate] = useState("");
+  const [maturityDate, setMaturityDate] = useState("");
+
+  useEffect(() => {
+    if (!asset) return;
+    setName(asset.name);
+    setValue(String(asset.current_value));
+    setCurrency(asset.currency);
+    setInterestRate(asset.interest_rate != null ? String(asset.interest_rate) : "");
+    setMaturityDate(asset.maturity_date ?? "");
+  }, [asset]);
+
+  if (!asset) return null;
+  // Narrowed const so the submit closure sees a non-null asset.
+  const current = asset;
+
+  const type = asset.asset_type as AssetType;
+  const showRate = type === "FIXED_DEPOSIT" || type === "BOND";
+  const showMaturity = type === "FIXED_DEPOSIT";
+  // Crypto/gold with a ticker are marked to market on every read, so the number
+  // on screen is the LIVE one — say so rather than let the user "correct" it.
+  const livePriced = (type === "CRYPTO" || type === "GOLD") && !!asset.symbol;
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const patch: AssetPatch = {};
+    const trimmed = name.trim();
+    if (trimmed && trimmed !== current.name) patch.name = trimmed;
+    if (currency !== current.currency) patch.currency = currency;
+
+    const parsedValue = parseFloat(value);
+    if (Number.isFinite(parsedValue) && parsedValue !== current.current_value) {
+      patch.current_value = parsedValue;
+    }
+    if (showRate) {
+      const parsedRate = interestRate.trim() === "" ? null : parseFloat(interestRate);
+      const currentRate = current.interest_rate ?? null;
+      if (parsedRate !== currentRate && (parsedRate === null || Number.isFinite(parsedRate))) {
+        patch.interest_rate = parsedRate;
+      }
+    }
+    if (showMaturity) {
+      const parsedDate = maturityDate.trim() === "" ? null : maturityDate;
+      if (parsedDate !== (current.maturity_date ?? null)) patch.maturity_date = parsedDate;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      onClose();
+      return;
+    }
+    onSubmit(current.id, patch);
+  }
+
+  const inputClass =
+    "w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50";
+
+  return (
+    <AnimatePresence>
+      <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="absolute inset-0 bg-black/50"
+          onClick={onClose}
+        />
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.95 }}
+          transition={{ duration: 0.2 }}
+          className="relative z-10 w-full max-w-md rounded-lg border border-[hsl(var(--border))]/50 bg-[hsl(var(--card))]/60 backdrop-blur-xl p-6 shadow-xl"
+        >
+          <div className="mb-1 flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Edit Asset</h2>
+            <button
+              onClick={onClose}
+              aria-label="Close dialog"
+              className="rounded-md p-1 hover:bg-[hsl(var(--accent))] transition-colors"
+            >
+              <X className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
+            </button>
+          </div>
+          <p className="mb-4 text-xs text-[hsl(var(--muted-foreground))]">
+            {ASSET_TYPE_CONFIG[type]?.label ?? asset.asset_type} — the type cannot be
+            changed; delete and re-add to reclassify.
+          </p>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label
+                htmlFor="asset-name"
+                className="mb-1 block text-sm font-medium text-[hsl(var(--muted-foreground))]"
+              >
+                Name
+              </label>
+              <input
+                id="asset-name"
+                type="text"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-2">
+                <label
+                  htmlFor="asset-value"
+                  className="mb-1 block text-sm font-medium text-[hsl(var(--muted-foreground))]"
+                >
+                  Current Value
+                </label>
+                <input
+                  id="asset-value"
+                  type="number"
+                  required
+                  min="0"
+                  step="0.01"
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="asset-currency"
+                  className="mb-1 block text-sm font-medium text-[hsl(var(--muted-foreground))]"
+                >
+                  Currency
+                </label>
+                <select
+                  id="asset-currency"
+                  value={currency}
+                  onChange={(e) => setCurrency(e.target.value)}
+                  className={inputClass}
+                >
+                  {(EDITABLE_CURRENCIES.includes(currency)
+                    ? EDITABLE_CURRENCIES
+                    : [currency, ...EDITABLE_CURRENCIES]
+                  ).map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {livePriced && (
+              <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-600">
+                {asset.symbol} is re-priced live on every read, so this value is
+                overwritten by the market price. Editing it only changes the stored
+                fallback.
+              </p>
+            )}
+
+            {showRate && (
+              <div>
+                <label
+                  htmlFor="asset-rate"
+                  className="mb-1 block text-sm font-medium text-[hsl(var(--muted-foreground))]"
+                >
+                  Interest / Coupon Rate (%){" "}
+                  <span className="text-xs text-[hsl(var(--muted-foreground))]/60">
+                    (reference only — nothing accrues it)
+                  </span>
+                </label>
+                <input
+                  id="asset-rate"
+                  type="number"
+                  step="0.01"
+                  value={interestRate}
+                  onChange={(e) => setInterestRate(e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+            )}
+
+            {showMaturity && (
+              <div>
+                <label
+                  htmlFor="asset-maturity"
+                  className="mb-1 block text-sm font-medium text-[hsl(var(--muted-foreground))]"
+                >
+                  Maturity Date
+                </label>
+                <input
+                  id="asset-maturity"
+                  type="date"
+                  value={maturityDate}
+                  onChange={(e) => setMaturityDate(e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-md px-4 py-2 text-sm font-medium text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:opacity-90 transition-opacity disabled:opacity-50"
+              >
+                {saving && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
+                Save Changes
+              </button>
+            </div>
+          </form>
+        </motion.div>
+      </div>
+    </AnimatePresence>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Emergency Fund Card                                                */
 /* ------------------------------------------------------------------ */
 
@@ -563,6 +821,9 @@ export default function NetWorthPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<number | null>(null);
+  // The asset currently open in the edit dialog.
+  const [editAsset, setEditAsset] = useState<NetWorthAsset | null>(null);
+  const [updating, setUpdating] = useState(false);
 
   // Chosen display currency (localStorage override → user preference → INR).
   const [displayCurrency] = useDisplayCurrency();
@@ -630,6 +891,23 @@ export default function NetWorthPage() {
       toast.error("Failed to add asset");
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** Net worth is the one screen whose numbers go stale by design (property
+   *  revaluation, FD accrual, gold). Before this, "changing a value" meant
+   *  deleting the asset and retyping every field. */
+  async function handleUpdateAsset(id: number, patch: AssetPatch) {
+    setUpdating(true);
+    try {
+      await api.patch(`/net-worth/assets/${id}`, patch);
+      toast.success("Asset updated");
+      setEditAsset(null);
+      await loadData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update asset");
+    } finally {
+      setUpdating(false);
     }
   }
 
@@ -874,19 +1152,29 @@ export default function NetWorthPage() {
                                 via Holdings
                               </span>
                             ) : (
-                              <button
-                                onClick={() => handleDeleteAsset(asset)}
-                                disabled={deleting === asset.id}
-                                title="Delete asset"
-                                aria-label={`Delete ${asset.name}`}
-                                className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--destructive))]/10 hover:text-[hsl(var(--destructive))] transition-colors disabled:opacity-50"
-                              >
-                                {deleting === asset.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Trash2 className="h-4 w-4" />
-                                )}
-                              </button>
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  onClick={() => setEditAsset(asset)}
+                                  title="Edit asset"
+                                  aria-label={`Edit ${asset.name}`}
+                                  className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteAsset(asset)}
+                                  disabled={deleting === asset.id}
+                                  title="Delete asset"
+                                  aria-label={`Delete ${asset.name}`}
+                                  className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--destructive))]/10 hover:text-[hsl(var(--destructive))] transition-colors disabled:opacity-50"
+                                >
+                                  {deleting === asset.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </div>
                             )}
                           </td>
                         </tr>
@@ -918,12 +1206,18 @@ export default function NetWorthPage() {
         </div>
       )}
 
-      {/* ---- Modal ---- */}
+      {/* ---- Modals ---- */}
       <AddAssetModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         onSubmit={handleAddAsset}
         saving={saving}
+      />
+      <EditAssetModal
+        asset={editAsset}
+        onClose={() => setEditAsset(null)}
+        onSubmit={handleUpdateAsset}
+        saving={updating}
       />
     </div>
   );

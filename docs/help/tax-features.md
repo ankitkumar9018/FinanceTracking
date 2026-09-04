@@ -77,7 +77,7 @@ You need to file a Freistellungsauftrag (tax exemption order) with your broker t
 
 ### Vorabpauschale (For Accumulating Funds)
 
-If you own accumulating ETFs (funds that reinvest dividends instead of paying them out), Germany taxes a notional income each year called the Vorabpauschale. FinanceTracker calculates this automatically based on the fund value and the ECB base rate.
+If you own accumulating ETFs (funds that reinvest dividends instead of paying them out), Germany taxes a notional income each year called the Vorabpauschale. FinanceTracker estimates it from the fund value and the **Basiszins** — the base rate published annually by the German Finance Ministry (Bundesministerium der Finanzen), not an ECB rate. The app carries a built-in table of those rates (2023: 2.55%, 2024: 2.29%, 2025: 2.53%; negative-rate years floored to 0%).
 
 ---
 
@@ -142,11 +142,12 @@ No special setup needed. The app uses your transaction dates and the Indian fina
 
 ### For German Investors
 
-Go to **Settings** and configure:
-1. **Tax jurisdiction**: Set to Germany (DE)
-2. **Filing status**: Single or Married/Joint (affects the Freistellungsauftrag)
-3. **Freistellungsauftrag**: Enter your remaining annual exemption
-4. **Church tax**: Toggle on/off and set the rate (8% or 9% depending on your state)
+There is nothing to set in **Settings** — German tax handling is driven from the **Tax** page:
+
+1. **Tax jurisdiction** is not a setting. It is inferred per holding from the exchange: NSE/BSE → India, XETRA → Germany. A portfolio holding both is tracked in both jurisdictions at once.
+2. **Filing status** — the **Single / Joint** toggle on the Tax page. It selects the EUR 1,000 or EUR 2,000 Sparer-Pauschbetrag.
+3. **Freistellungsauftrag** — nothing to enter. The app computes how much of your allowance is used from your own realised gains and dividends, and shows what remains.
+4. **Church tax** — the flag can be stored via `PUT /api/v1/tax/settings`, but there is **no toggle in the UI and it is not applied** to automatic tax computation: German sale records are always written at 26.375%. If you pay church tax, add the difference yourself.
 
 ### For Both Markets
 

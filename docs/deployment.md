@@ -8,10 +8,10 @@ FinanceTracker supports multiple deployment configurations:
 
 | Environment | Backend | Frontend | Database | Task Queue |
 |---|---|---|---|---|
-| **Local Dev** | uvicorn (reload) | next dev | SQLite | APScheduler fallback |
-| **Docker Dev** | Docker Compose | Docker Compose | SQLite/PostgreSQL | Celery + Redis |
-| **Production Web** | Docker / Railway | Vercel | PostgreSQL | Celery + Redis (or APScheduler) |
-| **Desktop** | Bundled PyInstaller sidecar | Static Next.js in Tauri | SQLite (app-data) | APScheduler fallback |
+| **Local Dev** | uvicorn (reload) | next dev | SQLite | APScheduler (default) |
+| **Docker Dev** | Docker Compose | Docker Compose | SQLite/PostgreSQL | Celery + Redis (`USE_CELERY=true`) |
+| **Production Web** | Docker / Railway | Vercel | PostgreSQL | APScheduler (single worker) or Celery + Redis (`USE_CELERY=true`) |
+| **Desktop** | Bundled PyInstaller sidecar | Static Next.js in Tauri | SQLite (app-data) | APScheduler (default) |
 
 The backend is deliberately environment-agnostic. The **same code** runs in all four modes; the only things that change are environment variables (chiefly `DATABASE_URL`) and how the process is launched. There is no separate "production build" of the Python app.
 
@@ -25,8 +25,8 @@ flowchart TB
         api["FastAPI backend<br/>uvicorn/gunicorn : app.main:app"]
         db[("PostgreSQL<br/>(asyncpg)")]
         redis[("Redis<br/><i>optional</i>")]
-        celery["Celery worker + beat<br/><i>optional</i>"]
-        aps["APScheduler<br/>(in-process fallback)"]
+        celery["Celery worker + beat<br/><i>only when USE_CELERY=true</i>"]
+        aps["APScheduler<br/>(in-process, default)"]
         ollama["Ollama / LLM providers<br/><i>optional</i>"]
 
         browser -->|HTTPS REST + WS| api
@@ -34,7 +34,7 @@ flowchart TB
         api -.->|if configured| redis
         celery -.->|broker| redis
         celery --> db
-        api -->|Celery down?| aps
+        api -->|"USE_CELERY unset/false"| aps
         api -.->|AI features| ollama
     end
 
@@ -118,8 +118,9 @@ cd apps/desktop && pnpm tauri dev
 # Start Redis (for background task queue)
 redis-server --daemonize yes
 
-# Start Celery worker (requires Redis)
-cd backend && uv run celery -A app.tasks.celery_app worker --beat -l info
+# Start Celery worker (requires Redis; ONLY if you also set USE_CELERY=true
+# on the API process — otherwise every job runs twice)
+cd backend && USE_CELERY=true uv run celery -A app.tasks.celery_app worker --beat -l info
 
 # Start Ollama (for AI assistant)
 ollama serve
@@ -141,34 +142,45 @@ ollama pull llama3.2
 
 ## Production Configuration
 
-All backend configuration lives in `backend/app/config.py` (a `pydantic-settings` model) and is read from **environment variables** or a `backend/.env` file. Any unknown variable is ignored (`extra="ignore"`), and the in-app **Settings** UI (stored in the `app_settings` table) overrides `.env`/env values at runtime for the subset of keys it exposes. A fully documented template ships in `backend/.env.example`.
+All backend configuration lives in `backend/app/config.py` (a `pydantic-settings` model) and is read from **environment variables** or a `backend/.env` file, both resolved **once at process start**. Any unknown variable is silently ignored (`extra="ignore"`), so a typo'd or unsupported name fails quietly rather than erroring. A fully documented template ships in `backend/.env.example`.
+
+> **There is no runtime override from the UI.** The in-app **Settings** page edits *user* rows (currency, theme, display name, phone, Telegram chat ID, notification toggles) only — it never writes server configuration. An `app_settings` table is declared in `backend/app/models/app_settings.py` but nothing reads or writes it. Changing any variable below therefore requires a **backend restart**.
 
 ### Environment Variable Reference
 
-The names below are the exact field names read by `config.py`; env-var names are the upper-cased form.
+Every name below is a real, declared field (`config.py`, except `LOG_LEVEL` which
+`app/core/logging_config.py` reads directly); env-var names are the upper-cased
+form. Rows marked **Declared but not read** exist in the settings model but no
+code consults them — they are listed so you don't waste time setting them.
+
+Because `Settings` uses `extra="ignore"`, a name that is *not* in this table is
+dropped with no warning at all. `MFAPI_URL` and `NOTIFICATION_CHANNELS` were
+previously documented here and were exactly that: the mfapi.in base URL is fixed
+in `app/services/mutual_fund_service.py`, and notification channels are per-user
+preferences, not a global env list.
 
 | Variable | Default | Required in Prod | Purpose |
 |---|---|---|---|
 | `APP_NAME` | `FinanceTracker` | No | Display name (surfaced in `/health`). |
+| `LOG_LEVEL` | `INFO` | No | Root log level: `CRITICAL`\|`ERROR`\|`WARNING`\|`INFO`\|`DEBUG`. Read at startup by `app/core/logging_config.py` (not a `config.py` field). The `audit` logger stays at INFO regardless, so raising this can never silently disable the security audit trail. |
 | `APP_VERSION` | `0.1.0` | No | Version string (surfaced in `/health`). |
 | `DEBUG` | `false` | Set `false` | Enables SQLAlchemy echo + verbose logging. **Must be `false` in production.** |
-| `API_PORT` | `8420` | No | Preferred port. The CLI `--port` overrides it for the sidecar, and the backend auto-advances to a free port if it's taken (unless `--strict-port`). |
+| `API_PORT` | `8420` | No | **Declared but not read.** The port comes from `python -m app --port N` (default `8420`, auto-advancing to a free port unless `--strict-port`). Setting `API_PORT` in `.env` has no effect. |
 | `SECRET_KEY` | `dev-secret-CHANGE-IN-PRODUCTION` | **Yes** | JWT signing key. Generate a long random value (see below). |
 | `FERNET_KEY` | `""` (empty) | **Yes** | Symmetric key encrypting stored broker credentials/secrets. If empty, an **ephemeral** key is generated per process — encrypted data becomes unreadable after restart. Set a persistent key in production. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | No | Access-token lifetime. |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | No | Refresh-token lifetime. |
 | `DATABASE_URL` | `sqlite+aiosqlite:///…/finance.db` | **Yes** (Postgres) | SQLAlchemy async URL. See "Switching SQLite → PostgreSQL". |
-| `REDIS_URL` | `redis://localhost:6379` | No | Celery broker/result backend **and** the alert-dedup/cache store. App falls back to APScheduler + in-memory when unreachable. |
+| `REDIS_URL` | `redis://localhost:6379` | No | Celery broker/result backend (used only when `USE_CELERY=true`) **and** the alert-dedup/cache store. When unreachable the app uses in-memory caches. Redis reachability does **not** affect which scheduler runs — see `USE_CELERY`. |
+| `USE_CELERY` | `false` | No | **The only switch that selects the scheduler.** `false` (default) → in-process APScheduler. `true` → the app skips APScheduler and expects an external `celery worker`/`beat` you run yourself. Setting it `true` without a running worker means **no** background jobs run at all; leaving it `false` while running a worker means **every job runs twice**. |
 | `PRICE_REFRESH_INTERVAL` | `5` | No | Minutes between background price refreshes. |
 | `DEFAULT_CHART_DAYS` | `30` | No | Default chart lookback. |
-| `MARKET_HOURS_IN` | `09:15-15:30` | No | IST market window (freshness/scheduling). |
-| `MARKET_HOURS_DE` | `09:00-17:30` | No | CET market window. |
+| `MARKET_HOURS_IN` / `MARKET_HOURS_DE` | `09:15-15:30` / `09:00-17:30` | No | **Declared but not read.** The per-exchange sessions used by the staleness logic are hard-coded in `app/services/freshness_service.py`. |
 | `ALERT_CHECK_INTERVAL` | `60` | No | Seconds between alert evaluations. |
 | `SENDGRID_API_KEY` / `EMAIL_FROM` | `""` | No | Email notifications (SendGrid). |
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | `""` | No | WhatsApp + SMS via Twilio. |
 | `TWILIO_WHATSAPP_FROM` / `TWILIO_SMS_FROM` | `""` | No | Twilio sender numbers. |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | `""` | No | Telegram notifications (per-user chat IDs stored on the user row override the global default). |
-| `NOTIFICATION_CHANNELS` | `in_app` | No | Comma-separated enabled channels: `in_app,email,telegram,whatsapp,sms`. |
 | `LLM_PROVIDER` | `ollama` | No | One of `ollama`, `openai`, `anthropic`, `google`, `none`. |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | `http://localhost:11434` / `llama3.2` | No | Local LLM. |
 | `OLLAMA_TIMEOUT` | `300.0` | No | Seconds to wait for an Ollama generation. Raise it on CPU-only or busy machines where local generation is slow. |
@@ -178,12 +190,10 @@ The names below are the exact field names read by `config.py`; env-var names are
 | `AI_DIGEST_TIMEOUT` | `120.0` | No | Budget (seconds) for AI digest and report-summary generation. On expiry the deterministic numbers-only digest is served (or the report renders without the AI section). |
 | `AI_ALERT_EXPLANATIONS` | `true` | No | Append a one-sentence AI explanation to triggered alert notifications. Set `false` to disable. |
 | `AI_ALERT_EXPLAIN_TIMEOUT` | `20.0` | No | Budget (seconds) for that explanation; on expiry the plain alert message is sent. |
-| `ZERODHA_API_KEY` / `ZERODHA_API_SECRET` | `""` | No | Zerodha broker integration. |
-| `ICICI_APP_KEY` / `ICICI_SECRET_KEY` | `""` | No | ICICI Direct broker integration. |
-| `MFAPI_URL` | `https://api.mfapi.in` | No | Mutual-fund NAV source. |
+| `ZERODHA_API_KEY` / `ZERODHA_API_SECRET` | `""` | No | **Not used to connect.** Broker credentials are entered on the in-app **Brokers** page and stored Fernet-encrypted per connection. These fields are read only by `GET /settings/health`, which reports `broker: configured` when either is non-empty. |
+| `ICICI_APP_KEY` / `ICICI_SECRET_KEY` | `""` | No | Same as above — health-check signal only. |
 | `CORS_ORIGINS` | `http://localhost:3000,http://localhost:1420,https://tauri.localhost` | **Yes** | Comma-separated allowed origins for the web app. Set to your web app's real origin(s) in production. |
-| `DEFAULT_CURRENCY` | `INR` | No | One of `INR`, `EUR`, `USD`. |
-| `DEFAULT_THEME` | `dark` | No | One of `dark`, `light`, `system`. |
+| `DEFAULT_CURRENCY` / `DEFAULT_THEME` | `INR` / `dark` | No | **Declared but not read.** New accounts take their currency and theme defaults from the `User` model (`INR`, `dark`); each user then changes them on the Settings page. |
 
 > **Note on `CORS_ORIGINS` in desktop mode:** the sidecar (`python -m app --db-path …`) force-sets `CORS_ORIGINS=*` at startup because it binds to `127.0.0.1` only and different platform webviews send different origins. Do **not** rely on `*` for a public web deployment — set explicit origins there.
 
@@ -240,33 +250,72 @@ uv run gunicorn app.main:app \
     --workers 4 --timeout 120
 ```
 
-**Important — background jobs with multiple workers:** the in-process **APScheduler fallback runs inside every worker**. With N uvicorn/gunicorn workers you would get N schedulers firing the price/alert jobs. In any multi-worker deployment, run Redis + a **single** Celery beat/worker (see below) so periodic jobs fire exactly once, or pin the API to a single worker and let one APScheduler instance own the schedule.
+**Important — background jobs with multiple workers:** APScheduler is the default mode and **runs inside every worker process**. With N uvicorn/gunicorn workers you get N schedulers firing the same price/alert/digest jobs. In any multi-worker deployment either pin the API to a single worker, or set `USE_CELERY=true` on **every** API process and run one external Celery worker/beat (see below) so periodic jobs fire exactly once.
 
 ---
 
-## Background Tasks: Celery + Redis vs APScheduler
+## Background Tasks: APScheduler (default) vs Celery
 
-FinanceTracker runs two periodic jobs — **price refresh** (every `PRICE_REFRESH_INTERVAL` minutes) and **alert evaluation** (every `ALERT_CHECK_INTERVAL` seconds) — through one of two mechanisms, chosen automatically at startup.
+FinanceTracker runs **three** periodic jobs, defined once in the shared `JOBS`
+tuple in `app/tasks/celery_app.py`:
+
+| Job id | What it does | Cadence |
+|---|---|---|
+| `fetch_prices_job` | Refresh prices/RSI for every tracked holding | every `PRICE_REFRESH_INTERVAL` minutes (also once at startup) |
+| `check_alerts_job` | Evaluate every active alert and dispatch notifications | every `ALERT_CHECK_INTERVAL` seconds (also once at startup) |
+| `ai_digest_job` | Generate scheduled AI portfolio digests | daily (never at startup — it would re-send on every restart) |
+
+### Which scheduler runs is decided by `USE_CELERY` — and by nothing else
 
 ```mermaid
 flowchart LR
-    start["Backend startup<br/>start_scheduler()"] --> check{"is_celery_available()?"}
-    check -->|"celery installed AND<br/>Redis broker pings"| celery["Celery worker + beat<br/>owns the schedule"]
-    check -->|"import fails OR<br/>Redis unreachable"| aps["APScheduler starts<br/>in-process (event loop)"]
+    start["Backend startup<br/>start_scheduler()"] --> check{"settings.use_celery<br/>(env USE_CELERY)"}
+    check -->|"false — the default"| aps["APScheduler starts in-process<br/>(FastAPI event loop)"]
+    check -->|"true AND celery importable"| celery["APScheduler skipped —<br/>you must run celery worker + beat"]
+    check -->|"true BUT celery not installed"| warn["Warning logged,<br/>APScheduler starts anyway"]
 ```
 
-- **`is_celery_available()`** (`app/tasks/celery_app.py`) is deliberately strict: importing Celery is not enough — it also opens a Redis connection and issues a `ping()` with a 2s timeout. If the broker is down, a worker/beat can't be running anyway, so the app skips Celery and uses the fallback.
-- **APScheduler fallback** (`app/tasks/scheduler.py`) uses an `AsyncIOScheduler` running inside the FastAPI event loop. `start_scheduler()` is a no-op when Celery is available and is idempotent (safe to call repeatedly). It is started/stopped by the app's lifespan hooks.
-- **When to use Celery:** any multi-worker or horizontally-scaled deployment (so jobs fire once, centrally), or when you want jobs to survive an API restart independently. Start it with:
+- **A reachable Redis changes nothing.** An earlier build auto-detected Celery
+  by pinging Redis; that heuristic was removed because any unrelated local
+  Redis satisfied it and silently disabled APScheduler while no worker
+  consumed the queue — prices and alerts then never refreshed. The
+  `is_celery_available()` helper still exists in `app/tasks/celery_app.py` but
+  is **diagnostic only** and is not consulted by `start_scheduler()`.
+- **APScheduler** (`app/tasks/scheduler.py`) uses an `AsyncIOScheduler` inside
+  the FastAPI event loop, started and stopped by the app's lifespan hooks.
+  `start_scheduler()` is idempotent. This is the mode every standard
+  deployment uses — the desktop sidecar, `run.sh`, and plain `uvicorn`.
+- **Celery** is strictly opt-in. Set `USE_CELERY=true` **and** run the worker
+  yourself:
 
   ```bash
   cd backend
-  uv run celery -A app.tasks.celery_app worker --beat -l info
+  USE_CELERY=true uv run celery -A app.tasks.celery_app worker --beat -l info
   ```
 
-- **When APScheduler is fine:** single-process deployments and the desktop app. No Redis, no extra process — jobs run in-process.
+  The same `USE_CELERY=true` must be set on the **API** process too — that is
+  what stops it from also starting APScheduler.
 
-Redis, when present, is also used for alert deduplication/caching; without it the app uses in-memory fallbacks. Nothing about the feature set requires Redis — it is purely an optimization/scale-out lever.
+> **Get this wrong and it breaks quietly, in one of two directions:**
+> `USE_CELERY=true` with no worker running → *no* background job ever fires
+> (stale prices, no alerts, no digests). `USE_CELERY` left unset while a
+> Celery worker *is* running → every job fires **twice** (duplicate alert
+> emails/Telegram messages, duplicate digests, double the yfinance load).
+
+> **Known limitation of Celery mode:** the WebSocket broadcasts inside the
+> price-refresh and alert-check tasks execute in the *worker* process, whose
+> connection manager holds no browser sockets. Live WS pushes are therefore
+> **not** delivered to connected clients in Celery mode; the UI falls back to
+> its normal polling. This is documented in `app/tasks/celery_app.py`.
+
+- **When to use Celery:** multi-worker or horizontally-scaled deployments (so
+  jobs fire once, centrally), or when jobs must survive an API restart.
+- **When APScheduler is fine:** single-process deployments and the desktop
+  app. No Redis, no extra process, and WS pushes work.
+
+Redis, when present, is also used for alert deduplication/caching; without it
+the app uses in-memory fallbacks. Nothing in the feature set requires Redis —
+it is purely an optimisation/scale-out lever.
 
 ---
 
@@ -292,6 +341,9 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://finance:finance@db:5432/financetracker
       - REDIS_URL=redis://redis:6379/0
+      # REQUIRED here: without it the API also starts its own APScheduler and
+      # every job below runs twice (duplicate alerts, duplicate digests).
+      - USE_CELERY=true
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - FERNET_KEY=${FERNET_KEY}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
@@ -310,6 +362,7 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://finance:finance@db:5432/financetracker
       - REDIS_URL=redis://redis:6379/0
+      - USE_CELERY=true
     depends_on:
       - db
       - redis
@@ -738,7 +791,7 @@ Only the database is treated as critical for the `overall` verdict — Redis, th
 # Database:     OK (SQLite, 12.5 MB)
 # Redis:        WARN (not running, using fallback)
 # Ollama:       OK (llama3.2 loaded)
-# Celery:       WARN (not running, using APScheduler)
+# Celery:       n/a  (USE_CELERY=false — APScheduler owns the schedule)
 ```
 
 ### Logging
@@ -781,7 +834,7 @@ WebSocket routes (`/ws/prices`, `/ws/alerts`) share the same origin/proxy — no
 
 | Component | Scaling Strategy |
 |---|---|
-| Backend API | Horizontal: multiple uvicorn workers behind a load balancer. **Move periodic jobs to Celery** so they don't multiply per worker. |
+| Backend API | Horizontal: multiple uvicorn workers behind a load balancer. **Set `USE_CELERY=true` on every API process and run one Celery worker/beat**, otherwise the in-process APScheduler multiplies the jobs per worker. |
 | Celery Workers | Horizontal: add more worker containers; keep a single `beat`. |
 | PostgreSQL | Vertical: larger instance; read replicas for analytics. |
 | Redis | Vertical: larger instance; or use Upstash (serverless). |

@@ -98,18 +98,34 @@ export function PortfolioTable({ holdings, isLoading }: Props) {
     }
   });
 
+  /** aria-sort for a column header: the direction only counts on the column
+   * that is actually sorted. */
+  function ariaSortFor(key: SortKey): "ascending" | "descending" | "none" {
+    if (sortKey !== key) return "none";
+    return sortDir === "asc" ? "ascending" : "descending";
+  }
+
   function SortHeader({ label, sortKeyName }: { label: string; sortKeyName: SortKey }) {
     const isActive = sortKey === sortKeyName;
+    // The chevron is the only visual cue for sort state, and it is decorative
+    // to assistive tech — so spell the state and the next action out.
+    const nextDir = isActive && sortDir === "asc" ? "descending" : "ascending";
+    const state = isActive ? `, sorted ${sortDir === "asc" ? "ascending" : "descending"}` : "";
     return (
       <button
         onClick={() => handleSort(sortKeyName)}
+        aria-label={`${label}${state}. Activate to sort ${nextDir}.`}
         className="flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] transition-colors"
       >
         {label}
         {isActive ? (
-          sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+          sortDir === "asc" ? (
+            <ChevronUp className="h-3 w-3" aria-hidden="true" />
+          ) : (
+            <ChevronDown className="h-3 w-3" aria-hidden="true" />
+          )
         ) : (
-          <ArrowUpDown className="h-3 w-3 opacity-40" />
+          <ArrowUpDown className="h-3 w-3 opacity-40" aria-hidden="true" />
         )}
       </button>
     );
@@ -147,9 +163,13 @@ export function PortfolioTable({ holdings, isLoading }: Props) {
     <>
       {/* Search */}
       <div className="mb-4 relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
+        <Search
+          className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]"
+          aria-hidden="true"
+        />
         <input
-          type="text"
+          type="search"
+          aria-label="Search holdings by symbol or name"
           placeholder="Search by symbol or name..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -161,15 +181,15 @@ export function PortfolioTable({ holdings, isLoading }: Props) {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">
-                <th className="px-4 py-3 text-left"><SortHeader label="Stock" sortKeyName="stock_symbol" /></th>
-                <th className="px-4 py-3 text-right"><SortHeader label="Qty" sortKeyName="quantity" /></th>
-                <th className="px-4 py-3 text-right"><SortHeader label="Avg Price" sortKeyName="avg_price" /></th>
-                <th className="px-4 py-3 text-right"><SortHeader label="Current" sortKeyName="current_price" /></th>
-                <th className="px-4 py-3 text-right"><SortHeader label="Invested" sortKeyName="invested" /></th>
-                <th className="px-4 py-3 text-right"><SortHeader label="P&L" sortKeyName="pnl_amount" /></th>
-                <th className="px-4 py-3 text-right"><SortHeader label="P&L %" sortKeyName="pnl_percent" /></th>
-                <th className="px-4 py-3 text-center"><SortHeader label="Action" sortKeyName="action_needed" /></th>
-                <th className="px-4 py-3 text-center"><SortHeader label="RSI" sortKeyName="rsi" /></th>
+                <th scope="col" aria-sort={ariaSortFor("stock_symbol")} className="px-4 py-3 text-left"><SortHeader label="Stock" sortKeyName="stock_symbol" /></th>
+                <th scope="col" aria-sort={ariaSortFor("quantity")} className="px-4 py-3 text-right"><SortHeader label="Qty" sortKeyName="quantity" /></th>
+                <th scope="col" aria-sort={ariaSortFor("avg_price")} className="px-4 py-3 text-right"><SortHeader label="Avg Price" sortKeyName="avg_price" /></th>
+                <th scope="col" aria-sort={ariaSortFor("current_price")} className="px-4 py-3 text-right"><SortHeader label="Current" sortKeyName="current_price" /></th>
+                <th scope="col" aria-sort={ariaSortFor("invested")} className="px-4 py-3 text-right"><SortHeader label="Invested" sortKeyName="invested" /></th>
+                <th scope="col" aria-sort={ariaSortFor("pnl_amount")} className="px-4 py-3 text-right"><SortHeader label="P&L" sortKeyName="pnl_amount" /></th>
+                <th scope="col" aria-sort={ariaSortFor("pnl_percent")} className="px-4 py-3 text-right"><SortHeader label="P&L %" sortKeyName="pnl_percent" /></th>
+                <th scope="col" aria-sort={ariaSortFor("action_needed")} className="px-4 py-3 text-center"><SortHeader label="Action" sortKeyName="action_needed" /></th>
+                <th scope="col" aria-sort={ariaSortFor("rsi")} className="px-4 py-3 text-center"><SortHeader label="RSI" sortKeyName="rsi" /></th>
               </tr>
             </thead>
             <tbody>

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Bell, BellOff, Loader2 } from "lucide-react";
+import { Bell, BellOff, Loader2, WifiOff } from "lucide-react";
 import { api, ApiError } from "@/lib/api-client";
 import { formatDate } from "@/lib/utils";
 import { acquireLiveSocket, releaseLiveSocket } from "@/lib/live-socket";
@@ -38,6 +38,10 @@ export function NotificationCenter() {
   const [seenAt, setSeenAt] = useState(0);
   // Mirror of seenAt for use inside async callbacks without re-creating them.
   const seenAtRef = useRef(0);
+  // Live-socket health. `null` = no socket for this session (signed out, or
+  // SSR) and "connecting" = the first handshake is still in flight; neither is
+  // a fault worth flagging, so only an actual close turns the warning on.
+  const [live, setLive] = useState<"up" | "down" | "connecting" | null>(null);
 
   const applySeenAt = useCallback((timestampMs: number) => {
     if (!Number.isFinite(timestampMs)) return;
@@ -90,12 +94,29 @@ export function NotificationCenter() {
   // shared connection rather than opening a second one.
   useEffect(() => {
     const ws = acquireLiveSocket();
-    if (!ws) return;
-    const off = ws.on("alert_triggered", () => {
+    if (!ws) {
+      setLive(null);
+      return;
+    }
+    setLive(ws.isOpen ? "up" : "connecting");
+    const offAlert = ws.on("alert_triggered", () => {
       void load();
     });
+    // The socket retries forever now, but a dead one still means prices and
+    // alerts have silently stopped — say so instead of showing stale numbers
+    // as if they were live.
+    const offUp = ws.on("connected", () => {
+      setLive("up");
+      // A reconnect may have spanned a trigger we never received.
+      void load();
+    });
+    const offDown = ws.on("disconnected", () => setLive("down"));
+    const offAuth = ws.on("auth_failed", () => setLive("down"));
     return () => {
-      off();
+      offAlert();
+      offUp();
+      offDown();
+      offAuth();
       releaseLiveSocket();
     };
   }, [load]);
@@ -132,17 +153,25 @@ export function NotificationCenter() {
       <button
         onClick={handleToggle}
         className="relative rounded-md p-2 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] transition-colors"
-        title="Notifications"
-        aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications"}
+        title={live === "down" ? "Notifications — live updates offline" : "Notifications"}
+        aria-label={
+          (unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications") +
+          (live === "down" ? " — live updates offline" : "")
+        }
         aria-haspopup="true"
         aria-expanded={open}
       >
         <Bell className="h-4 w-4" />
-        {unreadCount > 0 && (
+        {unreadCount > 0 ? (
           <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[hsl(var(--destructive))] px-1 text-[10px] font-semibold leading-none text-white">
             {unreadCount > 9 ? "9+" : unreadCount}
           </span>
-        )}
+        ) : live === "down" ? (
+          <span
+            className="absolute -right-0.5 -top-0.5 block h-2 w-2 rounded-full bg-amber-500 ring-2 ring-[hsl(var(--background))]"
+            aria-hidden="true"
+          />
+        ) : null}
       </button>
 
       <AnimatePresence>
@@ -171,6 +200,16 @@ export function NotificationCenter() {
                   </span>
                 )}
               </div>
+
+              {live === "down" && (
+                <div className="flex items-start gap-2 border-b border-[hsl(var(--border))] bg-amber-500/10 px-4 py-2.5">
+                  <WifiOff className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                  <p className="text-xs text-amber-700 dark:text-amber-500">
+                    Live updates offline — prices and new alerts are paused while we
+                    keep retrying.
+                  </p>
+                </div>
+              )}
 
               <div className="max-h-96 overflow-y-auto">
                 {loading && history.length === 0 ? (

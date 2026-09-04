@@ -331,9 +331,13 @@ Alerts can reach you on any of these channels:
 - **WhatsApp** — via Twilio.
 - **SMS** — via Twilio.
 
-The messaging channels use **your own destination**: your **phone number** (for WhatsApp/SMS) and your **Telegram chat ID** (detected automatically when you message the bot). Set these up once in **Settings → Notifications**; see [Section 17](#17-settings) for the step-by-step for each channel and the **Test** buttons that confirm they work.
+The messaging channels use **your own destination**: your **phone number** (for WhatsApp/SMS) and your **Telegram chat ID**, which you **type in yourself** — the app does not detect it. Enter both once in **Settings → Notifications**; see [Section 17](#172-notifications) for the step-by-step and the **Test** buttons.
 
-> **Tip:** Route noisy, routine alerts (light red / light green) to **In-App + Email**, and reserve **Telegram/WhatsApp/SMS** for the critical ones (dark red / dark green) so your phone only buzzes when it really matters.
+The channels also need server-side credentials (SendGrid / Twilio / a Telegram bot token) in `backend/.env` — there is no place in the app to enter them.
+
+**Each alert notifies on exactly one channel**, chosen from the **Notify Via** dropdown when you create it. There is no global routing matrix; to change an alert's channel, delete it and recreate it.
+
+> **Tip:** Create noisy, routine alerts (light red / light green) on **In-App** or **Email**, and reserve **Telegram/WhatsApp/SMS** for the critical ones (dark red / dark green) so your phone only buzzes when it really matters.
 
 ### 6.4 Allocation-drift alerts
 
@@ -684,7 +688,7 @@ Click **Insights** to open the insights panel, enter a symbol, and switch betwee
 
 ### 14.4 AI providers & privacy
 
-By default the assistant runs **locally via Ollama** — free, private, and works offline. You can optionally connect **OpenAI (GPT)**, **Claude**, or **Gemini** with your own API key in **Settings → AI Assistant**. If the app can't reach any provider, it simply shows an "AI assistant offline" message and everything else keeps working.
+By default the assistant runs **locally via Ollama** — free, private, and works offline. You can optionally connect **OpenAI (GPT)**, **Claude**, or **Gemini** by setting `LLM_PROVIDER` and the matching API key in `backend/.env` and restarting the backend — there is no provider picker or key field in the app (see [17.3](#173-ai--integrations)). If the app can't reach any provider, it simply shows an "AI assistant offline" message and everything else keeps working.
 
 A local model on a CPU-only or busy machine can take a while to answer. If replies time out, raise `OLLAMA_TIMEOUT` (default **300** seconds) in the backend configuration.
 
@@ -843,31 +847,64 @@ The **Import & Export** page includes a framework for India's **Account Aggregat
 
 ## 17. Settings
 
-Open **Settings** in the sidebar. Everything about how the app looks, behaves, and reaches you lives here.
+Open **Settings** in the sidebar. It has four sections: **Display**, **Notifications**, **Security**, and **AI & Integrations**. Changes are saved with the **Save Changes** button at the top.
+
+> **What Settings is not.** It never stores API keys. There is no field anywhere in the app for a SendGrid key, Twilio credentials, a Telegram bot token, or an OpenAI/Anthropic/Google key — those are *server* settings that live in `backend/.env` (desktop app: OS environment variables — see [18](#18-the-desktop-app)) and are read when the backend starts. Settings only turns channels on and off and stores where to reach you.
 
 ### 17.1 Display
 
-- **Theme** — Dark, Light, or **System** (follows your operating system). You can also toggle theme from the sun/moon in the top bar.
+- **Display name** — the name shown in the app.
 - **Currency** — INR, EUR, or USD — your account's **base** currency. (For quick viewing in another currency, use the top-bar **display-currency** dropdown instead — it doesn't change this base.)
-- **Table density** — Compact, Comfortable, or Spacious (remembered between visits).
-- **Default chart period** — 7d, 30d, 90d, or 1Y.
-- **Customize columns** — see [5.7](#57-custom-columns).
+- **Theme** — Dark, Light, or **System** (follows your operating system). You can also toggle theme from the sun/moon in the top bar.
+
+That is the whole Display section. Two related controls live elsewhere, on the page they affect:
+
+- **Table density** (Compact / Comfortable / Spacious) — the toggle above the **Holdings** table; remembered in your browser.
+- **Customize columns** — the **Columns** button on the **Holdings** page; see [5.7](#57-custom-columns).
 
 ### 17.2 Notifications
 
-Set up each channel once, then use its **Test** button to confirm it works:
+Five toggles — **In-App**, **Email**, **Telegram**, **WhatsApp**, **SMS** — plus the two destination fields they reveal:
 
-- **Email** — enter your **SendGrid API key** and a **From** address; **Test** sends a sample email; toggle email alerts on/off.
-- **WhatsApp** — enter your **Twilio** Account SID, Auth Token, and WhatsApp number; **Test** sends a message.
-- **Telegram** — enter your **Bot Token** (create one via **@BotFather** on Telegram). Message your bot once and the app detects your **Chat ID** automatically; **Test** confirms it.
-- **SMS** — via Twilio; toggle on/off.
-- **Desktop push** — works in both the browser and the desktop app, with **no external service**.
+- Ticking **Telegram** shows a **Telegram chat ID** box. **Type your chat ID in** — the app does not detect it. Get it by messaging your bot and opening `https://api.telegram.org/bot<TOKEN>/getUpdates`, or by messaging `@userinfobot`.
+- Ticking **WhatsApp** or **SMS** shows a **Phone number** box; enter it in E.164 form (`+9198XXXXXXXX`).
 
-Your **phone number** and **Telegram chat ID** here are the personal destinations used for your alerts (see [6.3](#63-notification-channels--per-user-destinations)).
+A **Test Email** and/or **Test Telegram** button appears *only* once the backend actually holds the matching credential — if you see no button, the server-side key is missing. There is no test for WhatsApp or SMS, and there is **no desktop-push channel** at all.
 
-### 17.3 AI Assistant
+**Server-side credentials** (in `backend/.env`, then restart the backend):
 
-Choose your AI provider and (if using a cloud one) paste your **API key** for OpenAI, Claude, or Gemini. Leave it on the default local **Ollama** to keep everything offline and private. A **Test** button checks the connection.
+| Channel | Variables |
+|---|---|
+| Email | `SENDGRID_API_KEY`, `EMAIL_FROM` |
+| Telegram | `TELEGRAM_BOT_TOKEN` |
+| WhatsApp / SMS | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`, `TWILIO_SMS_FROM` |
+
+Step-by-step walkthroughs for each provider are in [docs/help/notifications-setup.md](help/notifications-setup.md).
+
+> **These toggles do not route your stock alerts.** Each alert carries its own channel, picked from **Notify Via** when you create it on the Alerts page. What the toggles control is which channels the daily **AI portfolio digest** goes out on. Your **phone number** and **Telegram chat ID** here are the personal destinations both use (see [6.3](#63-notification-channels--per-user-destinations)).
+
+### 17.3 AI & Integrations
+
+This section is **read-only**. It reports what the backend resolved:
+
+- **LLM Provider** — the provider and model in use, or "AI features disabled".
+- **Market Data** — the current price-refresh interval and default chart period.
+
+There is no provider dropdown, no API-key box and no Test button in the UI. To change any of it, edit `backend/.env` and restart the backend:
+
+```bash
+LLM_PROVIDER=ollama          # ollama | openai | anthropic | google | none
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.2
+# ...or a cloud provider:
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_API_KEY=...
+PRICE_REFRESH_INTERVAL=5     # minutes
+DEFAULT_CHART_DAYS=30
+```
+
+Leaving it on the default local **Ollama** keeps everything offline and private.
 
 ### 17.4 Security
 
@@ -934,10 +971,10 @@ Click the **Refresh** button in the top bar. Market data is public and can be de
 Make sure you picked the right **exchange** when adding it — the same company can trade on NSE, BSE, and XETRA. Try re-selecting the stock from the search dropdown so the correct market symbol is used.
 
 **The AI assistant says it's offline.**
-That only affects the AI features. Either start your local **Ollama** model or add a cloud provider's API key in **Settings → AI Assistant**. Everything else in the app works regardless.
+That only affects the AI features. Either start your local **Ollama** model, or switch to a cloud provider by setting `LLM_PROVIDER` and its API key in `backend/.env` and restarting the backend. **Settings → AI & Integrations** shows which provider the backend resolved, but it is read-only. Everything else in the app works regardless.
 
 **I didn't get an email/WhatsApp/Telegram alert.**
-Open **Settings → Notifications** and press the channel's **Test** button. Check your API keys/tokens and, for Telegram, that you've messaged the bot at least once so it can detect your Chat ID. The **in-app** bell always works even when other channels don't.
+First check the alert itself: each alert notifies on the **single** channel chosen in its **Notify Via** dropdown, so an alert created as "In-App" will never email you. Then open **Settings → Notifications**: if the **Test Email** / **Test Telegram** button is missing, the backend has no SendGrid key / bot token — add it to `backend/.env` and restart. For Telegram, confirm you typed the right **chat ID**; for WhatsApp/SMS, that your phone number is in E.164 form. The **in-app** bell always works even when other channels don't.
 
 **My tax numbers look off.**
 Tax figures depend on complete, accurate **transactions** — especially your **sells**. Make sure every buy and sell is recorded with the right date, quantity, and price, then re-open the Tax page. Remember the figures are **estimates**; confirm with a professional.

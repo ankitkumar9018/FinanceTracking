@@ -20,21 +20,26 @@ This guide walks you through everything you need to know to use FinanceTracker e
 10. [Connecting Your Broker](#connecting-your-broker)
 11. [Using the AI Assistant](#using-the-ai-assistant)
 12. [Risk Dashboard](#risk-dashboard)
-13. [Tax Features](#tax-features)
-14. [Corporate Actions](#corporate-actions)
-15. [Goal-Based Investing](#goal-based-investing)
-16. [Mutual Funds and Dividends](#mutual-funds-and-dividends)
-17. [Watchlist](#watchlist)
-18. [Net Worth Tracking](#net-worth-tracking)
-19. [ESG Scoring](#esg-scoring)
-20. [What-If Simulator](#what-if-simulator)
-21. [Earnings Calendar](#earnings-calendar)
-22. [Economic Calendar](#economic-calendar)
-23. [Market Heatmap](#market-heatmap)
-24. [Futures & Options (F&O)](#futures--options-fo)
-25. [SIP Calendar](#sip-calendar)
-26. [Cash Flow Timeline](#cash-flow-timeline)
-27. [Settings and Configuration](#settings-and-configuration)
+13. [Analytics](#analytics)
+14. [Backtest](#backtest)
+15. [Optimizer](#optimizer)
+16. [Tax Features](#tax-features)
+17. [Corporate Actions](#corporate-actions)
+18. [Goal-Based Investing](#goal-based-investing)
+19. [Mutual Funds and Dividends](#mutual-funds-and-dividends)
+20. [Watchlist](#watchlist)
+21. [Net Worth Tracking](#net-worth-tracking)
+22. [ESG Scoring](#esg-scoring)
+23. [What-If Simulator](#what-if-simulator)
+24. [Earnings Calendar](#earnings-calendar)
+25. [Economic Calendar](#economic-calendar)
+26. [Market Heatmap](#market-heatmap)
+27. [IPO Tracker](#ipo-tracker)
+28. [Futures & Options (F&O)](#futures--options-fo)
+29. [SIP Calendar](#sip-calendar)
+30. [Cash Flow Timeline](#cash-flow-timeline)
+31. [Snapshot](#snapshot)
+32. [Settings and Configuration](#settings-and-configuration)
 
 ---
 
@@ -50,15 +55,15 @@ This guide walks you through everything you need to know to use FinanceTracker e
 
 ### First-Time Setup Wizard
 
-After your first login, you will see a guided setup wizard that walks you through:
+After your first login, a five-step overlay walks you through the basics:
 
-1. **Welcome** -- A brief introduction to the app
-2. **Import Your Portfolio** -- Upload your existing Excel file, or skip to add stocks manually later
-3. **Set Your Preferences** -- Choose your preferred theme (dark or light), chart period, and table layout
-4. **Configure Notifications** -- Connect your email, WhatsApp, or Telegram for alerts (optional)
-5. **Connect a Broker** -- Link your Zerodha, ICICI Direct, or other broker account (optional)
+1. **Welcome** -- a brief introduction to the app
+2. **Import Your Portfolio** -- a link straight to the Excel import, or **Add Manually** to enter stocks one at a time
+3. **Your Dashboard** -- a preview of the heatmap colour coding, so you know what the greens and reds mean
+4. **Stay Informed** -- links to the Alerts page and to Settings, where you enable notification channels
+5. **All Set** -- a button through to your dashboard
 
-You can skip any step and come back to it later from the Settings page.
+Every step has **Skip for now**, and the ✕ in the corner dismisses the whole wizard. It only appears once; afterwards use the **Help** section in the sidebar.
 
 ### Forgot Your Password?
 
@@ -316,42 +321,50 @@ Results appear in a sortable table -- click any column header to sort. A summary
 
 ## Setting Up Notifications
 
-FinanceTracker can alert you through multiple channels when your stocks need attention.
+FinanceTracker can alert you through five channels: **In-App, Email, Telegram, WhatsApp** and **SMS**. There is no desktop/browser push channel.
 
-### Email
+### First: credentials are server-side, not in the app
 
-1. Go to **Settings** then **Notifications** then **Email**
-2. Enter your SendGrid API key (get one free at sendgrid.com)
-3. Set the "From" email address
-4. Click **Test** to send a test email
-5. Enable/disable email notifications with the toggle
+The app has **no field for an API key**. SendGrid, Twilio and Telegram credentials go in `backend/.env` (desktop app: OS environment variables) and are read when the backend starts:
 
-### WhatsApp
+```bash
+SENDGRID_API_KEY=SG.xxxx          # Email
+EMAIL_FROM=alerts@example.com     # must be verified in SendGrid
+TELEGRAM_BOT_TOKEN=123456789:ABC  # Telegram (create the bot via @BotFather)
+TWILIO_ACCOUNT_SID=ACxxxx         # WhatsApp + SMS
+TWILIO_AUTH_TOKEN=xxxx
+TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+TWILIO_SMS_FROM=+14155238886
+```
 
-1. Go to **Settings** then **Notifications** then **WhatsApp**
-2. Enter your Twilio Account SID, Auth Token, and WhatsApp number
-3. Click **Test** to receive a test WhatsApp message
+Restart the backend after editing it. The full walkthrough for each provider is in [help/notifications-setup.md](help/notifications-setup.md).
 
-### Telegram
+### Then: turn the channel on in the app
 
-1. Go to **Settings** then **Notifications** then **Telegram**
-2. Enter the Telegram Bot Token (create one via @BotFather on Telegram)
-3. The app will detect your Chat ID automatically when you message the bot
-4. Click **Test** to send a test message
-
-### Desktop Push Notifications
-
-Enable from Settings -- these work in both the browser and the desktop app. No external service needed.
+1. Go to **Settings** then **Notifications**
+2. Tick the channels you want
+3. Ticking **Telegram** reveals a **Telegram chat ID** box — **type your chat ID in**; the app does not detect it (message `@userinfobot` to find it)
+4. Ticking **WhatsApp** or **SMS** reveals a **Phone number** box — enter it in E.164 form (`+9198XXXXXXXX`)
+5. Click **Save Changes**
+6. A **Test Email** / **Test Telegram** button appears only once the backend actually holds that credential. If no button appears, the key never reached the server. There is no test for WhatsApp or SMS.
 
 ### In-App Notification Center
 
-The bell icon in the top bar is your in-app notification center. It lists your recently triggered alerts and shows an unread badge counting the alerts you have not looked at yet. Open the panel to read them -- opening it marks everything as seen and clears the badge.
+The bell icon in the top bar is your in-app notification center. It lists your recently triggered alerts and shows an unread badge counting the alerts you have not looked at yet. Open the panel to read them -- opening it marks everything as seen and clears the badge. There is no pop-up toast for triggered alerts.
 
 ### Alert Routing
 
-You can choose which alert types go to which channels. For example:
-- Critical alerts (dark red/dark green) go to all channels
-- Routine alerts (light red/light green) go to email and in-app only
+Routing is **per alert**, not a global matrix. When you create an alert on the **Alerts** page you pick one channel from the **Notify Via** dropdown, and that alert only ever uses that channel. To change it, delete the alert and recreate it. (API users can call `PUT /alerts/{alert_id}/channels`, which accepts a list, to fan one alert out to several channels.)
+
+The Settings toggles do **not** route stock alerts — they choose which channels the daily **AI portfolio digest** is delivered on.
+
+A workable arrangement:
+- Critical alerts (dark red/dark green) on Telegram or SMS
+- Routine alerts (light red/light green) on Email or In-App
+
+### Cooldown
+
+After an alert fires it will not fire again for **5 minutes**. This is a fixed constant (`ALERT_COOLDOWN_SECONDS` in `backend/app/services/alert_service.py`) — there is no setting for it.
 
 ---
 
@@ -466,6 +479,60 @@ A table breaks down each holding's beta, correlation, volatility, weight, and co
 ### Portfolio Hedge Calculator
 
 This panel gives an **informational estimate** of what it would cost to protect your portfolio's downside using index put options -- roughly how much buying protective puts against a market index would cost for a portfolio your size. It is a rough guide to help you think about hedging costs, **not investment advice**, and the app does not place any trades on your behalf.
+
+---
+
+## Analytics
+
+Go to **Analytics** from the sidebar (under *Analysis*) for deeper visual breakdowns of the selected portfolio. The page is four tabs:
+
+### Correlation Heatmap
+
+A grid of every pair of holdings, coloured by how closely they move together over the recent period. Values near +1 mean the two names rise and fall in lockstep (little diversification benefit); values near 0 or below mean they offset each other. Hover a cell to read the exact figure.
+
+### Sector Allocation
+
+A treemap of your portfolio by sector: rectangle size is the money you hold in that sector, so it shows at a glance where you are concentrated.
+
+### Monthly Returns
+
+A colour-coded calendar grid of your portfolio's month-by-month return -- green months above zero, red below -- so long stretches of good or bad performance are obvious.
+
+### Drawdown Chart
+
+Your portfolio's decline from its running peak, plotted over time. It answers "how far down was I, and for how long?", which the headline return figure hides.
+
+Each tab loads its data independently, so one unavailable chart never blanks the page.
+
+---
+
+## Backtest
+
+Go to **Backtest** from the sidebar (under *Tools*) to test a mechanical trading rule against a stock's historical prices.
+
+1. Pick a **strategy**:
+   - **RSI** -- buy when RSI is oversold, sell when overbought (defaults: buy below 30, sell above 70)
+   - **SMA crossover** -- buy when the short moving average crosses above the long one (defaults: 20 / 50 day)
+   - **Bollinger Bands** -- buy at the lower band, sell at the upper (defaults: 20-day window, 2 standard deviations)
+2. Adjust the strategy's parameters if you want -- each one is pre-filled with its defaults
+3. Choose a symbol and a period (90 days, 180 days, 1 year, or 2 years)
+4. Run it
+
+You get an **equity curve** tracing a notional 100,000 starting balance through the rule's trades, headline metrics (**Total Return**, **Sharpe Ratio**, **Max Drawdown**, trade count), and the individual trades it would have made.
+
+This is a historical simulation on past prices only. It does not place orders, and a rule that worked in the past is not a prediction.
+
+---
+
+## Optimizer
+
+Go to **Optimizer** from the sidebar (under *Tools*). Pick a **risk tolerance** -- **Conservative**, **Moderate**, or **Aggressive** -- and run it.
+
+Using **mean-variance optimisation**, it proposes a set of weights for your existing holdings, reports the resulting **Expected Return**, **Expected Volatility** and **Sharpe Ratio**, and plots an **efficient frontier** -- the curve of best-possible return for each level of risk, with the chosen point marked.
+
+Treat the suggested weights as a conversation starter, not an instruction. The optimiser sees only historical price behaviour: it knows nothing about your tax position, your conviction in a name, or your reason for holding it.
+
+> If SciPy is not installed on the backend, the optimiser falls back to a Monte-Carlo search (10,000 random weightings) instead of the analytical solver. The output shape is the same.
 
 ---
 
@@ -679,6 +746,20 @@ A visual treemap of market sectors showing relative performance.
 
 ---
 
+## IPO Tracker
+
+Go to **IPO Tracker** from the sidebar (under *Planning*) to follow new Indian listings on three tabs:
+
+- **Upcoming** -- issues that have not opened yet
+- **Open** -- issues currently accepting applications
+- **Listed** -- issues that have already listed
+
+Each issue is a card showing its name, symbol and exchange, the **price band**, the **lot size**, the open date, and either the close date or the subscription multiple. Listed issues also show the listing gain against the issue price.
+
+This is a read-only tracker fed by a public Indian IPO feed (NSE/BSE), cached for five minutes. If the upstream source is unavailable the tab simply shows no IPOs rather than an error. You cannot apply for an IPO from the app, and holdings are not created when one lists -- add the shares yourself once you are allotted.
+
+---
+
 ## Futures & Options (F&O)
 
 Track your derivatives positions alongside your equity holdings.
@@ -712,23 +793,47 @@ The Cash Flow page shows how money has moved through your portfolio over time.
 
 ---
 
+## Snapshot
+
+Go to **Snapshot** from the sidebar (under *Tools*) to produce a plain-text summary of your portfolio you can paste anywhere -- a message to a friend, a forum post, a note to your adviser.
+
+The snapshot is a short header (portfolio name, date, total value, total P&L %, number of holdings) followed by one line per holding: **symbol | weight % | P&L %**, largest position first.
+
+1. The **Values Hidden** toggle starts **on**, which masks the **total value** as `****`. Percentages, weights and symbols are always shown -- the toggle hides what the portfolio is worth, not what is in it.
+2. Click **Copy to Clipboard**.
+
+With values hidden you share the shape of the portfolio -- the names and the weights -- without disclosing the amount.
+
+> Clipboard access is blocked by browsers on insecure (non-HTTPS) origins; if the copy fails the app says so, and you can select the text manually.
+
+---
+
 ## Settings and Configuration
+
+The **Settings** page has four sections: **Display**, **Notifications**, **Security**, and **AI & Integrations**. Press **Save Changes** at the top to persist edits.
 
 ### Display Settings
 
-- **Theme**: Dark, Light, or System (follows your OS)
+- **Display Name**: the name shown in the app
 - **Currency**: INR, EUR, or USD -- your account's base currency
-- **Table Density**: Compact, Comfortable, or Spacious
-- **Default Chart Period**: 7 days, 30 days, 90 days, or 1 year
+- **Theme**: Dark, Light, or System (follows your OS)
 
-For quick viewing in a different currency without changing your base currency, use the **display-currency** dropdown in the top bar (see [Understanding the Dashboard](#understanding-the-dashboard)).
+That is the whole section. For quick viewing in a different currency without changing your base currency, use the **display-currency** dropdown in the top bar (see [Understanding the Dashboard](#understanding-the-dashboard)).
+
+**Table density** is not here -- it is the Compact / Comfortable / Spacious toggle above the **Holdings** table, remembered in your browser.
+
+### AI & Integrations (read-only)
+
+This section *reports* server configuration; it does not let you change it. It shows the LLM provider and model the backend resolved (or "AI features disabled"), and the current price-refresh interval and default chart period. All of it comes from `backend/.env` and needs a backend restart to change. There is no API-key field and no Test button here.
 
 ### Custom Columns
 
-1. Go to **Settings** then **Display** then **Customize Columns**
-2. Toggle built-in columns on/off (Sector, P&L Amount, Volume, Dividend Yield, etc.)
-3. Click **+ Add Custom Column** to create your own (name and type: text, number, or date)
-4. Drag columns to reorder them
+Column management lives on the **Holdings** page, not in Settings.
+
+1. Open **Holdings** and click the **Columns** button above the table
+2. Hide or show the six optional built-in columns: **P&L Amount, P&L %, Sector, Exchange, Day Change, Notes**. The other seven (Symbol, Name, Quantity, Avg Price, Current Price, Action, RSI) are fixed.
+3. Fill in the **Add Column** form to create your own (name -- lowercase letters, digits and underscores -- a display label, and a type: text, number, or date), then click **Add Column**
+4. Use the up/down arrows beside a column to reorder it; the order is saved to your account
 
 ### Security
 

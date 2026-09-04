@@ -798,10 +798,12 @@
           <li><strong>WhatsApp</strong> — via Twilio.</li>
           <li><strong>SMS</strong> — via Twilio.</li>
         </ul>
-        <p>The messaging channels use <strong>your own destination</strong>: your <strong>phone number</strong> (for WhatsApp/SMS) and your <strong>Telegram chat ID</strong> (detected automatically when you message the bot). Set these up once in <strong>Settings → Notifications</strong>; see <a href="#settings">Section 17</a> for the step-by-step for each channel and the <strong>Test</strong> buttons that confirm they work.</p>
+        <p>The messaging channels use <strong>your own destination</strong>: your <strong>phone number</strong> (for WhatsApp/SMS) and your <strong>Telegram chat ID</strong>, which you <strong>type in yourself</strong> — the app does not detect it. Enter both once in <strong>Settings → Notifications</strong>; see <a href="#settings">Section 17</a> for the step-by-step and the <strong>Test</strong> buttons.</p>
+        <p>The channels also need server-side credentials (SendGrid / Twilio / a Telegram bot token) in <code>backend/.env</code> — there is no place in the app to enter them.</p>
+        <p><strong>Each alert notifies on exactly one channel</strong>, chosen from the <strong>Notify Via</strong> dropdown when you create it. There is no global routing matrix; to change an alert's channel, delete it and recreate it.</p>
         <div class="callout tip">
           <span class="co-ico">→</span>
-          <div><span class="co-label">Tip</span><p>Route noisy, routine alerts (light red / light green) to <strong>In-App + Email</strong>, and reserve <strong>Telegram/WhatsApp/SMS</strong> for the critical ones (dark red / dark green) so your phone only buzzes when it really matters.</p></div>
+          <div><span class="co-label">Tip</span><p>Create noisy, routine alerts (light red / light green) on <strong>In-App</strong> or <strong>Email</strong>, and reserve <strong>Telegram/WhatsApp/SMS</strong> for the critical ones (dark red / dark green) so your phone only buzzes when it really matters.</p></div>
         </div>
 
         <h3>6.4 Allocation-drift alerts</h3>
@@ -1188,7 +1190,7 @@
         </ul>
 
         <h3>14.4 AI providers &amp; privacy</h3>
-        <p>By default the assistant runs <strong>locally via Ollama</strong> — free, private, and works offline. You can optionally connect <strong>OpenAI (GPT)</strong>, <strong>Claude</strong>, or <strong>Gemini</strong> with your own API key in <strong>Settings → AI Assistant</strong>. If the app can't reach any provider, it simply shows an "AI assistant offline" message and everything else keeps working.</p>
+        <p>By default the assistant runs <strong>locally via Ollama</strong> — free, private, and works offline. You can optionally connect <strong>OpenAI (GPT)</strong>, <strong>Claude</strong>, or <strong>Gemini</strong> by setting <code>LLM_PROVIDER</code> and the matching API key in <code>backend/.env</code> and restarting the backend — there is no provider picker or key field in the app (see <a href="#settings">17.3</a>). If the app can't reach any provider, it simply shows an "AI assistant offline" message and everything else keeps working.</p>
         <p>A local model on a CPU-only or busy machine can take a while to answer. If replies time out, raise <code>OLLAMA_TIMEOUT</code> (default <strong>300</strong> seconds) in the backend configuration.</p>
         <div class="callout warn">
           <span class="co-ico">!</span>
@@ -1349,30 +1351,53 @@
       <!-- ============ 17 ============ -->
       <section id="settings">
         <h2><span class="h2num">17</span><span>Settings</span></h2>
-        <p>Open <strong>Settings</strong> in the sidebar. Everything about how the app looks, behaves, and reaches you lives here.</p>
+        <p>Open <strong>Settings</strong> in the sidebar. It has four sections: <strong>Display</strong>, <strong>Notifications</strong>, <strong>Security</strong>, and <strong>AI &amp; Integrations</strong>. Changes are saved with the <strong>Save Changes</strong> button at the top.</p>
+
+        <div class="callout warn">
+          <span class="co-ico">!</span>
+          <div><span class="co-label">What Settings is not</span><p>It never stores API keys. There is no field anywhere in the app for a SendGrid key, Twilio credentials, a Telegram bot token, or an OpenAI/Anthropic/Google key — those are <em>server</em> settings that live in <code>backend/.env</code> (desktop app: OS environment variables) and are read when the backend starts. Settings only turns channels on and off and stores where to reach you.</p></div>
+        </div>
 
         <h3>17.1 Display</h3>
         <ul>
-          <li><strong>Theme</strong> — Dark, Light, or <strong>System</strong> (follows your operating system). You can also toggle theme from the sun/moon in the top bar.</li>
+          <li><strong>Display name</strong> — the name shown in the app.</li>
           <li><strong>Currency</strong> — INR, EUR, or USD — your account's <strong>base</strong> currency. (For quick viewing in another currency, use the top-bar <strong>display-currency</strong> dropdown instead — it doesn't change this base.)</li>
-          <li><strong>Table density</strong> — Compact, Comfortable, or Spacious (remembered between visits).</li>
-          <li><strong>Default chart period</strong> — 7d, 30d, 90d, or 1Y.</li>
-          <li><strong>Customize columns</strong> — see <a href="#holdings-transactions">5.7</a>.</li>
+          <li><strong>Theme</strong> — Dark, Light, or <strong>System</strong> (follows your operating system). You can also toggle theme from the sun/moon in the top bar.</li>
+        </ul>
+        <p>That is the whole Display section. Two related controls live elsewhere, on the page they affect:</p>
+        <ul>
+          <li><strong>Table density</strong> (Compact / Comfortable / Spacious) — the toggle above the <strong>Holdings</strong> table; remembered in your browser.</li>
+          <li><strong>Customize columns</strong> — the <strong>Columns</strong> button on the <strong>Holdings</strong> page; see <a href="#holdings-transactions">5.7</a>.</li>
         </ul>
 
         <h3>17.2 Notifications</h3>
-        <p>Set up each channel once, then use its <strong>Test</strong> button to confirm it works:</p>
+        <p>Five toggles — <strong>In-App</strong>, <strong>Email</strong>, <strong>Telegram</strong>, <strong>WhatsApp</strong>, <strong>SMS</strong> — plus the two destination fields they reveal:</p>
         <ul>
-          <li><strong>Email</strong> — enter your <strong>SendGrid API key</strong> and a <strong>From</strong> address; <strong>Test</strong> sends a sample email; toggle email alerts on/off.</li>
-          <li><strong>WhatsApp</strong> — enter your <strong>Twilio</strong> Account SID, Auth Token, and WhatsApp number; <strong>Test</strong> sends a message.</li>
-          <li><strong>Telegram</strong> — enter your <strong>Bot Token</strong> (create one via <strong>@BotFather</strong> on Telegram). Message your bot once and the app detects your <strong>Chat ID</strong> automatically; <strong>Test</strong> confirms it.</li>
-          <li><strong>SMS</strong> — via Twilio; toggle on/off.</li>
-          <li><strong>Desktop push</strong> — works in both the browser and the desktop app, with <strong>no external service</strong>.</li>
+          <li>Ticking <strong>Telegram</strong> shows a <strong>Telegram chat ID</strong> box. <strong>Type your chat ID in</strong> — the app does not detect it. Get it by messaging your bot and opening <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>, or by messaging <code>@userinfobot</code>.</li>
+          <li>Ticking <strong>WhatsApp</strong> or <strong>SMS</strong> shows a <strong>Phone number</strong> box; enter it in E.164 form (<code>+9198XXXXXXXX</code>).</li>
         </ul>
-        <p>Your <strong>phone number</strong> and <strong>Telegram chat ID</strong> here are the personal destinations used for your alerts (see <a href="#watchlist-alerts">6.3</a>).</p>
+        <p>A <strong>Test Email</strong> and/or <strong>Test Telegram</strong> button appears <em>only</em> once the backend actually holds the matching credential — if you see no button, the server-side key is missing. There is no test for WhatsApp or SMS, and there is <strong>no desktop-push channel</strong> at all.</p>
+        <p><strong>Server-side credentials</strong> (in <code>backend/.env</code>, then restart the backend):</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Channel</th><th>Variables</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Email</td><td><code>SENDGRID_API_KEY</code>, <code>EMAIL_FROM</code></td></tr>
+              <tr><td>Telegram</td><td><code>TELEGRAM_BOT_TOKEN</code></td></tr>
+              <tr><td>WhatsApp / SMS</td><td><code>TWILIO_ACCOUNT_SID</code>, <code>TWILIO_AUTH_TOKEN</code>, <code>TWILIO_WHATSAPP_FROM</code>, <code>TWILIO_SMS_FROM</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout warn">
+          <span class="co-ico">!</span>
+          <div><span class="co-label">These toggles do not route your stock alerts</span><p>Each alert carries its own single channel, picked from <strong>Notify Via</strong> when you create it on the Alerts page. What the toggles control is which channels the daily <strong>AI portfolio digest</strong> goes out on. Your <strong>phone number</strong> and <strong>Telegram chat ID</strong> here are the personal destinations both use (see <a href="#watchlist-alerts">6.3</a>).</p></div>
+        </div>
 
-        <h3>17.3 AI Assistant</h3>
-        <p>Choose your AI provider and (if using a cloud one) paste your <strong>API key</strong> for OpenAI, Claude, or Gemini. Leave it on the default local <strong>Ollama</strong> to keep everything offline and private. A <strong>Test</strong> button checks the connection.</p>
+        <h3>17.3 AI &amp; Integrations</h3>
+        <p>This section is <strong>read-only</strong>. It reports what the backend resolved: the <strong>LLM Provider</strong> and model in use (or "AI features disabled"), and the current <strong>Market Data</strong> refresh interval and default chart period.</p>
+        <p>There is no provider dropdown, no API-key box and no Test button in the UI. To change any of it, edit <code>backend/.env</code> and restart the backend — <code>LLM_PROVIDER</code> (<code>ollama</code>, <code>openai</code>, <code>anthropic</code>, <code>google</code> or <code>none</code>), plus <code>OLLAMA_URL</code> / <code>OLLAMA_MODEL</code> for the local model or <code>OPENAI_API_KEY</code> / <code>ANTHROPIC_API_KEY</code> / <code>GOOGLE_API_KEY</code> for a cloud one, and <code>PRICE_REFRESH_INTERVAL</code> / <code>DEFAULT_CHART_DAYS</code> for market data. Leaving it on the default local <strong>Ollama</strong> keeps everything offline and private.</p>
 
         <h3>17.4 Security</h3>
         <ul>
@@ -1458,10 +1483,10 @@
         <p>Make sure you picked the right <strong>exchange</strong> when adding it — the same company can trade on NSE, BSE, and XETRA. Try re-selecting the stock from the search dropdown so the correct market symbol is used.</p>
 
         <h4>The AI assistant says it's offline.</h4>
-        <p>That only affects the AI features. Either start your local <strong>Ollama</strong> model or add a cloud provider's API key in <strong>Settings → AI Assistant</strong>. Everything else in the app works regardless.</p>
+        <p>That only affects the AI features. Either start your local <strong>Ollama</strong> model, or switch to a cloud provider by setting <code>LLM_PROVIDER</code> and its API key in <code>backend/.env</code> and restarting the backend. <strong>Settings → AI &amp; Integrations</strong> shows which provider the backend resolved, but it is read-only. Everything else in the app works regardless.</p>
 
         <h4>I didn't get an email/WhatsApp/Telegram alert.</h4>
-        <p>Open <strong>Settings → Notifications</strong> and press the channel's <strong>Test</strong> button. Check your API keys/tokens and, for Telegram, that you've messaged the bot at least once so it can detect your Chat ID. The <strong>in-app</strong> bell always works even when other channels don't.</p>
+        <p>First check the alert itself: each alert notifies on the <strong>single</strong> channel chosen in its <strong>Notify Via</strong> dropdown, so an alert created as "In-App" will never email you. Then open <strong>Settings → Notifications</strong>: if the <strong>Test Email</strong> / <strong>Test Telegram</strong> button is missing, the backend has no SendGrid key / bot token — add it to <code>backend/.env</code> and restart. For Telegram, confirm you typed the right <strong>chat ID</strong>; for WhatsApp/SMS, that your phone number is in E.164 form. The <strong>in-app</strong> bell always works even when other channels don't.</p>
 
         <h4>My tax numbers look off.</h4>
         <p>Tax figures depend on complete, accurate <strong>transactions</strong> — especially your <strong>sells</strong>. Make sure every buy and sell is recorded with the right date, quantity, and price, then re-open the Tax page. Remember the figures are <strong>estimates</strong>; confirm with a professional.</p>
