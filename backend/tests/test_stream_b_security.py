@@ -395,3 +395,37 @@ async def test_created_alert_response_is_offset_aware(
     )
     assert updated.status_code == 200
     assert updated.json()["created_at"].endswith(("Z", "+00:00"))
+
+
+@pytest.mark.asyncio
+async def test_pcat_stamp_strictly_advances_within_one_second():
+    """Two password changes in the SAME second must still revoke the old token.
+
+    `pcat` is compared at whole-second resolution with a strict `<`, so two
+    changes inside one second produced EQUAL stamps and the token minted before
+    the second change survived it. Slow machines never hit this; CI did.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.api.v1.auth import _next_pcat_stamp
+
+    # No previous stamp: "now".
+    first = _next_pcat_stamp(None)
+    assert first.tzinfo is None, "must be naive UTC to match the column"
+
+    # A change in the same second must produce a STRICTLY later stamp, so the
+    # earlier token's pcat compares strictly less and is rejected.
+    second = _next_pcat_stamp(first)
+    assert second > first
+    assert int(second.timestamp()) > int(first.timestamp()), (
+        "stamps must differ at the whole-second resolution pcat is compared at"
+    )
+
+    # And again, so repeated rapid changes keep advancing rather than plateauing.
+    third = _next_pcat_stamp(second)
+    assert int(third.timestamp()) > int(second.timestamp())
+
+    # A stamp comfortably in the past just becomes "now", not past+1s.
+    old = datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=1)
+    assert _next_pcat_stamp(old) > old
+    assert (datetime.now(UTC).replace(tzinfo=None) - _next_pcat_stamp(old)) < timedelta(seconds=2)

@@ -373,6 +373,31 @@ async def forgot_password(
     return {"message": _GENERIC_RESET_MESSAGE}
 
 
+def _next_pcat_stamp(previous: datetime | None) -> datetime:
+    """A password-change stamp that STRICTLY advances past the previous one.
+
+    ``pcat`` is compared at whole-second resolution (JWT ``iat``-style epoch
+    ints), and revocation is a strict ``token_pcat < current_pcat``. Two
+    password changes inside the SAME second therefore produced equal stamps,
+    and a token minted before the change survived it — a real, if narrow,
+    revocation hole that only a fast machine exposes (CI caught it; a slower
+    local run did not).
+
+    Advancing to at least one second past the previous stamp closes it
+    deterministically: older tokens compare strictly less and are rejected,
+    while the pair minted alongside this stamp carries the new value and is
+    honoured. Stored naive-UTC to match the column, so mint-time and
+    validation-time epochs agree.
+    """
+    now = datetime.now(UTC).replace(tzinfo=None)
+    # Compare at WHOLE-SECOND resolution — the resolution pcat is actually
+    # compared at. Comparing raw datetimes looks like it advances (12:00:00.500
+    # -> .501) while the epoch ints stay equal, which leaves the hole open.
+    if previous is not None and int(previous.timestamp()) >= int(now.timestamp()):
+        return previous + timedelta(seconds=1)
+    return now
+
+
 @router.post("/reset-password")
 @limiter.limit("5/minute")
 async def reset_password(
@@ -408,8 +433,9 @@ async def reset_password(
 
     user.password_hash = hash_password(body.new_password)
     # Bump the password-change stamp so any tokens minted before now (carrying an
-    # older "pcat") are rejected by get_current_user.
-    user.password_changed_at = now
+    # older "pcat") are rejected by get_current_user. Must STRICTLY advance —
+    # see _next_pcat_stamp.
+    user.password_changed_at = _next_pcat_stamp(user.password_changed_at)
     reset.used_at = now
 
     # Invalidate this user's other outstanding reset tokens.
@@ -474,7 +500,7 @@ async def change_password(
     # equals what ``validate_pcat`` recomputes from the reloaded row on the very
     # next request — mint it from an aware value instead and, on a server west
     # of UTC, the fresh token is rejected the moment it is used.
-    user.password_changed_at = datetime.now(UTC).replace(tzinfo=None)
+    user.password_changed_at = _next_pcat_stamp(user.password_changed_at)
     await db.flush()
     await audit_log(
         db,
