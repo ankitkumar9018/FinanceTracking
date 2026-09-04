@@ -15,6 +15,7 @@ from app.api.deps import (
     verify_holding_ownership,
     verify_portfolio_ownership,
 )
+from app.core.markets import currency_for
 from app.database import get_db
 from app.models.alert import Alert
 from app.models.holding import Holding
@@ -148,6 +149,7 @@ async def create_holding(
         stock_symbol=symbol,
         stock_name=body.stock_name.strip() if body.stock_name else symbol,
         exchange=exchange,
+        currency=currency_for(exchange, body.currency),
         cumulative_quantity=body.cumulative_quantity,
         average_price=body.average_price,
         current_price=current_price,
@@ -160,7 +162,6 @@ async def create_holding(
         sector=body.sector,
         notes=body.notes,
         custom_fields=body.custom_fields or {},
-        currency=body.currency,
     )
 
     holding.action_needed = determine_action_needed(holding.current_price, holding)

@@ -53,6 +53,15 @@ class HoldingSummaryRow(BaseModel):
     # priced). Without this field the response_model silently dropped the
     # freshness value the service now emits.
     last_price_update: str | None = None
+    # The 5-zone levels. The service computes and emits these, but they were
+    # absent here, so the response_model silently stripped them and the stock
+    # detail panel rendered "—" for every zone plus an empty 52-week bar.
+    base_level: float | None = None
+    top_level: float | None = None
+    lower_mid_range_1: float | None = None
+    lower_mid_range_2: float | None = None
+    upper_mid_range_1: float | None = None
+    upper_mid_range_2: float | None = None
 
     model_config = {"from_attributes": True}
 

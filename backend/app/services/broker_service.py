@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.brokers import BROKER_REGISTRY, get_broker
 from app.brokers.base import BrokerAdapter
+from app.core.markets import currency_for
 from app.models.broker_connection import BrokerConnection
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
@@ -231,6 +232,7 @@ async def sync_holdings(
                     stock_symbol=bh.symbol,
                     stock_name=bh.symbol,  # Use symbol as name; can be enriched later
                     exchange=bh.exchange,
+                    currency=currency_for(bh.exchange),
                     cumulative_quantity=bh.quantity,
                     average_price=bh.average_price,
                     current_price=bh.last_price,

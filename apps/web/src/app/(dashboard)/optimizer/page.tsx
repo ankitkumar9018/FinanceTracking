@@ -47,6 +47,20 @@ interface Allocation {
   sector?: string;
 }
 
+// The API (POST /backtest/optimize/{id}) returns asdict(OptimizationResult),
+// whose allocations are DICTS named current_weights / optimal_weights — not the
+// Allocation[] this page renders. Modelled as sent, then adapted in `toAlloc`
+// below; reading the wrong names made every successful optimize throw
+// "Cannot read properties of undefined (reading 'map')".
+interface OptimizationResultWire {
+  current_weights: Record<string, number>;
+  optimal_weights: Record<string, number>;
+  expected_return: number;
+  expected_volatility: number;
+  sharpe_ratio: number;
+  efficient_frontier: { volatility: number; return: number; is_optimal?: boolean }[];
+}
+
 interface OptimizationResult {
   current_allocation: Allocation[];
   optimal_allocation: Allocation[];
@@ -119,14 +133,24 @@ export default function OptimizerPage() {
     setLoading(true);
     try {
       const [optData, suggestData] = await Promise.all([
-        api.post<OptimizationResult>(`/backtest/optimize/${activePortfolioId}`, {
+        api.post<OptimizationResultWire>(`/backtest/optimize/${activePortfolioId}`, {
           risk_tolerance: riskTolerance,
         }),
         api.get<RebalanceSuggestion[]>(
           `/backtest/optimize/${activePortfolioId}/suggestions`
         ),
       ]);
-      setResult(optData);
+      const toAlloc = (w: Record<string, number> | null | undefined): Allocation[] =>
+        Object.entries(w ?? {}).map(([symbol, weight]) => ({ symbol, weight }));
+      setResult(
+        optData
+          ? {
+              ...optData,
+              current_allocation: toAlloc(optData.current_weights),
+              optimal_allocation: toAlloc(optData.optimal_weights),
+            }
+          : null
+      );
       setSuggestions(suggestData);
     } catch (err) {
       setResult(null);

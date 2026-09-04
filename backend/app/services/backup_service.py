@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.markets import currency_for
 from app.models.asset import Asset
 from app.models.dividend import Dividend
 from app.models.fno_position import FnoPosition
@@ -296,7 +297,7 @@ async def import_portfolio_json(
             stock_symbol=h_data["stock_symbol"],
             stock_name=h_data["stock_name"],
             exchange=h_data["exchange"],
-            currency=h_data.get("currency", "INR"),
+            currency=currency_for(h_data.get("exchange"), h_data.get("currency")),
             cumulative_quantity=0.0,
             average_price=0.0,
             sector=h_data.get("sector"),

@@ -49,6 +49,24 @@ JURISDICTION: dict[str, str] = {
 }
 
 
+def currency_for(exchange: str | None, explicit: str | None = None) -> str:
+    """Currency a holding on ``exchange`` is denominated in.
+
+    An explicitly supplied currency always wins (a caller may legitimately hold
+    a cross-listed instrument, and restores carry their own stored value);
+    otherwise it is DERIVED from the exchange.
+
+    This exists because ``currency`` used to default to "INR" at every creation
+    site with nothing deriving it, so XETRA/NASDAQ positions were stored — and
+    then summed, converted and taxed — as rupees.
+    """
+    if explicit:
+        return explicit
+    if not exchange:
+        return "INR"
+    return CURRENCY.get(exchange.strip().upper(), "INR")
+
+
 def ticker_symbol(symbol: str, exchange: str | None) -> str:
     """Return the yfinance ticker string for a symbol and exchange.
 

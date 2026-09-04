@@ -488,3 +488,41 @@ async def test_task_prices_watchlist_after_holdings(db: AsyncSession, monkeypatc
 
     result_db = await db.execute(select(WatchlistItem))
     assert float(result_db.scalars().one().current_price) == 3900.0
+
+
+@pytest.mark.asyncio
+async def test_scheduler_jobs_are_scheduled_not_paused():
+    """Every JOBS entry must be ACTIVE, and only startup jobs run immediately.
+
+    Regression: `next_run_time=None` was passed for jobs with
+    run_at_startup=False. APScheduler treats an explicit None as "add this job
+    PAUSED", so the daily AI digest never fired at all — silently, with no
+    error anywhere. The correct "schedule normally" value is the `undefined`
+    sentinel.
+    """
+    from datetime import UTC, datetime
+
+    from app.tasks import scheduler as sched
+    from app.tasks.celery_app import JOBS
+
+    sched.stop_scheduler()
+    try:
+        sched.start_scheduler()
+        s = sched.get_scheduler()
+        assert s is not None
+        jobs = {j.id: j for j in s.get_jobs()}
+        assert set(jobs) == {spec.id for spec in JOBS}
+
+        now = datetime.now(UTC)
+        for spec in JOBS:
+            job = jobs[spec.id]
+            # None here means PAUSED — the exact bug this guards.
+            assert job.next_run_time is not None, f"{spec.id} was added PAUSED"
+            delay = (job.next_run_time - now).total_seconds()
+            if spec.run_at_startup:
+                assert delay < 5, f"{spec.id} should run at startup, got {delay}s"
+            else:
+                # Scheduled roughly one full interval out, not immediately.
+                assert delay > 60, f"{spec.id} must not fire at startup, got {delay}s"
+    finally:
+        sched.stop_scheduler()

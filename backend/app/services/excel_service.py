@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.markets import currency_for
 from app.models.holding import Holding
 from app.models.portfolio import Portfolio
 from app.models.transaction import Transaction
@@ -267,6 +268,7 @@ async def import_to_portfolio(
                 stock_symbol=row["stock_symbol"],
                 stock_name=row["stock_name"],
                 exchange=row["exchange"],
+                currency=currency_for(row.get("exchange")),
                 cumulative_quantity=0.0,
                 average_price=0.0,
                 lower_mid_range_1=row.get("lower_mid_range_1"),

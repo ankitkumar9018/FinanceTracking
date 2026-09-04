@@ -26,12 +26,17 @@ import { PortfolioSelector } from "@/components/shared/portfolio-selector";
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
+// NOTE ON UNITS: the API returns max_drawdown / value_at_risk_* / volatility_annual
+// and every per-holding volatility, weight and contribution as DECIMAL FRACTIONS
+// (-0.25 = -25%). This page renders and threshold-tests them as PERCENTAGES, so
+// `toPct` below converts once at the fetch boundary. Without it the page showed a
+// 25% drawdown as "-0.3%" with a green "Low Risk" badge.
 interface RiskMetrics {
   sharpe_ratio: number | null;
   sortino_ratio: number | null;
   max_drawdown: number | null;
   value_at_risk_95: number | null;
-  volatility: number | null;
+  volatility_annual: number | null;
 }
 
 interface HoldingRisk {
@@ -40,7 +45,7 @@ interface HoldingRisk {
   correlation: number | null;
   volatility: number | null;
   weight: number | null;
-  risk_contribution: number | null;
+  contribution_to_risk: number | null;
 }
 
 interface HedgeEstimate {
@@ -140,8 +145,26 @@ export default function RiskPage() {
           api.get<HoldingRisk[]>(`/indicators/risk/${portfolioId}/holdings`),
         ]);
         if (!isActive()) return;
-        setMetrics(riskData);
-        setHoldingRisks(holdingsData);
+        const toPct = (v: number | null | undefined) =>
+          typeof v === "number" && Number.isFinite(v) ? v * 100 : null;
+        setMetrics(
+          riskData
+            ? {
+                ...riskData,
+                max_drawdown: toPct(riskData.max_drawdown),
+                value_at_risk_95: toPct(riskData.value_at_risk_95),
+                volatility_annual: toPct(riskData.volatility_annual),
+              }
+            : null
+        );
+        setHoldingRisks(
+          (holdingsData ?? []).map((h) => ({
+            ...h,
+            volatility: toPct(h.volatility),
+            weight: toPct(h.weight),
+            contribution_to_risk: toPct(h.contribution_to_risk),
+          }))
+        );
       } catch (err) {
         if (!isActive()) return;
         setMetrics(null);
@@ -282,18 +305,18 @@ export default function RiskPage() {
         {
           title: "Volatility",
           value:
-            metrics.volatility != null
-              ? `${metrics.volatility.toFixed(1)}%`
+            metrics.volatility_annual != null
+              ? `${metrics.volatility_annual.toFixed(1)}%`
               : "--",
           subtitle:
-            metrics.volatility != null
-              ? metrics.volatility < 15
+            metrics.volatility_annual != null
+              ? metrics.volatility_annual < 15
                 ? "Low"
-                : metrics.volatility <= 30
+                : metrics.volatility_annual <= 30
                   ? "Moderate"
                   : "High"
               : "N/A",
-          colorClass: getVolatilityColor(metrics.volatility),
+          colorClass: getVolatilityColor(metrics.volatility_annual),
           icon: Activity,
           description: "Annualized standard deviation",
         },
@@ -658,22 +681,22 @@ export default function RiskPage() {
                         <div className="h-1.5 w-16 overflow-hidden rounded-full bg-[hsl(var(--muted))]">
                           <div
                             className={`h-full rounded-full ${
-                              holding.risk_contribution != null
-                                ? holding.risk_contribution < 10
+                              holding.contribution_to_risk != null
+                                ? holding.contribution_to_risk < 10
                                   ? "bg-green-500"
-                                  : holding.risk_contribution <= 25
+                                  : holding.contribution_to_risk <= 25
                                     ? "bg-yellow-500"
                                     : "bg-red-500"
                                 : "bg-[hsl(var(--muted))]"
                             }`}
                             style={{
-                              width: `${Math.min((holding.risk_contribution ?? 0) / 50 * 100, 100)}%`,
+                              width: `${Math.min((holding.contribution_to_risk ?? 0) / 50 * 100, 100)}%`,
                             }}
                           />
                         </div>
                         <span className="font-mono text-xs">
-                          {holding.risk_contribution != null
-                            ? `${holding.risk_contribution.toFixed(1)}%`
+                          {holding.contribution_to_risk != null
+                            ? `${holding.contribution_to_risk.toFixed(1)}%`
                             : "--"}
                         </span>
                       </div>

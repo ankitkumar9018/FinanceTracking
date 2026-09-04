@@ -102,7 +102,13 @@ def start_scheduler() -> None:
     # never refreshed at all). Run once at startup, then on the interval.
     from datetime import datetime as _dt
 
+    from apscheduler.util import undefined
+
     for spec in JOBS:
+        # MUST be the `undefined` sentinel, NOT None, for jobs that should not
+        # run at startup: APScheduler treats an explicit next_run_time=None as
+        # "add this job PAUSED", so the daily digest never fired at all. The
+        # sentinel means "schedule normally, first run one interval from now".
         _scheduler.add_job(
             _make_job(spec),
             trigger="interval",
@@ -110,7 +116,7 @@ def start_scheduler() -> None:
             id=spec.id,
             name=spec.name,
             replace_existing=True,
-            next_run_time=_dt.now(_UTC) if spec.run_at_startup else None,
+            next_run_time=_dt.now(_UTC) if spec.run_at_startup else undefined,
         )
 
     _scheduler.start()

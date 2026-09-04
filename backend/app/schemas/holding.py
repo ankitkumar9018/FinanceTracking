@@ -20,7 +20,8 @@ class HoldingCreate(BaseModel):
     upper_mid_range_2: float | None = Field(default=None, ge=0)
     base_level: float | None = Field(default=None, ge=0)
     top_level: float | None = Field(default=None, ge=0)
-    currency: str = Field(default="INR", max_length=10)
+    # None = derive from the exchange (see markets.currency_for).
+    currency: str | None = Field(default=None, max_length=10)
     sector: str | None = None
     notes: str | None = None
     custom_fields: dict | None = None
