@@ -209,20 +209,20 @@ export function PortfolioTable({ holdings, isLoading }: Props) {
                       {holding.quantity}
                     </td>
                     <td className="px-4 py-3 text-right font-mono">
-                      {formatCurrency(holding.avg_price)}
+                      {formatCurrency(holding.avg_price, holding.currency)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono">
                       {holding.current_price
-                        ? formatCurrency(holding.current_price)
+                        ? formatCurrency(holding.current_price, holding.currency)
                         : "—"}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-[hsl(var(--muted-foreground))]">
-                      {formatCurrency(invested)}
+                      {formatCurrency(invested, holding.currency)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono">
                       {pnlAmount !== null ? (
                         <span className={pnlAmount >= 0 ? "text-[hsl(var(--profit))]" : "text-[hsl(var(--loss))]"}>
-                          {pnlAmount >= 0 ? "+" : ""}{formatCurrency(pnlAmount)}
+                          {pnlAmount >= 0 ? "+" : ""}{formatCurrency(pnlAmount, holding.currency)}
                         </span>
                       ) : "—"}
                     </td>

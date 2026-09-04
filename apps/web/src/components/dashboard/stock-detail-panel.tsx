@@ -58,7 +58,7 @@ export function StockDetailPanel({ holding, type, onClose }: Props) {
               </span>
               {holding.current_price && (
                 <span className="font-mono text-lg font-semibold">
-                  {formatCurrency(holding.current_price)}
+                  {formatCurrency(holding.current_price, holding.currency)}
                 </span>
               )}
               <a
@@ -98,16 +98,16 @@ export function StockDetailPanel({ holding, type, onClose }: Props) {
 
           {/* Holding details */}
           <div className="mt-6 grid grid-cols-2 gap-4">
-            <DetailItem label="Current Price" value={holding.current_price ? formatCurrency(holding.current_price) : "—"} />
-            <DetailItem label="Average Price" value={formatCurrency(holding.avg_price)} />
+            <DetailItem label="Current Price" value={holding.current_price ? formatCurrency(holding.current_price, holding.currency) : "—"} />
+            <DetailItem label="Average Price" value={formatCurrency(holding.avg_price, holding.currency)} />
             <DetailItem label="Quantity" value={String(holding.quantity)} />
             <DetailItem label="RSI" value={holding.rsi ? holding.rsi.toFixed(1) : "—"} />
-            <DetailItem label="Base Level" value={holding.base_level ? formatCurrency(holding.base_level) : "—"} />
-            <DetailItem label="Top Level" value={holding.top_level ? formatCurrency(holding.top_level) : "—"} />
-            <DetailItem label="Lower Mid 1" value={holding.lower_mid_range_1 ? formatCurrency(holding.lower_mid_range_1) : "—"} />
-            <DetailItem label="Upper Mid 1" value={holding.upper_mid_range_1 ? formatCurrency(holding.upper_mid_range_1) : "—"} />
-            <DetailItem label="Lower Mid 2" value={holding.lower_mid_range_2 ? formatCurrency(holding.lower_mid_range_2) : "—"} />
-            <DetailItem label="Upper Mid 2" value={holding.upper_mid_range_2 ? formatCurrency(holding.upper_mid_range_2) : "—"} />
+            <DetailItem label="Base Level" value={holding.base_level ? formatCurrency(holding.base_level, holding.currency) : "—"} />
+            <DetailItem label="Top Level" value={holding.top_level ? formatCurrency(holding.top_level, holding.currency) : "—"} />
+            <DetailItem label="Lower Mid 1" value={holding.lower_mid_range_1 ? formatCurrency(holding.lower_mid_range_1, holding.currency) : "—"} />
+            <DetailItem label="Upper Mid 1" value={holding.upper_mid_range_1 ? formatCurrency(holding.upper_mid_range_1, holding.currency) : "—"} />
+            <DetailItem label="Lower Mid 2" value={holding.lower_mid_range_2 ? formatCurrency(holding.lower_mid_range_2, holding.currency) : "—"} />
+            <DetailItem label="Upper Mid 2" value={holding.upper_mid_range_2 ? formatCurrency(holding.upper_mid_range_2, holding.currency) : "—"} />
           </div>
         </div>
       </motion.div>

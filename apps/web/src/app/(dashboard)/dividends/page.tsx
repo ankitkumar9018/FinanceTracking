@@ -52,12 +52,20 @@ interface Dividend {
 }
 
 interface DividendSummary {
+  // Every monetary figure below is ALREADY converted into this currency by the
+  // backend (dividend_service converts via RateCache before summing), so it
+  // must be labelled with this — not with the holding's exchange currency.
+  currency?: string;
   total_dividends: number;
   dividend_yield: number | null;
   yield_on_cost: number | null;
   total_reinvested: number;
   count: number;
   calendar: Array<Record<string, unknown>>;
+}
+
+interface DividendForecastMeta {
+  currency?: string;
 }
 
 interface ForecastMonth {
@@ -75,6 +83,7 @@ interface ForecastHolding {
 
 interface DividendForecast {
   monthly: ForecastMonth[];
+  currency?: string;
   total_forward_12m: number;
   forward_yield_pct: number | null;
   by_holding: ForecastHolding[];
@@ -200,7 +209,7 @@ export default function DividendsPage() {
     ? [
         {
           title: "Total Received",
-          value: formatCurrency(summary.total_dividends),
+          value: formatCurrency(summary.total_dividends, summary.currency),
           icon: CircleDollarSign,
           color: "text-[hsl(var(--profit))]",
         },
@@ -215,7 +224,7 @@ export default function DividendsPage() {
         },
         {
           title: "Total Reinvested",
-          value: formatCurrency(summary.total_reinvested),
+          value: formatCurrency(summary.total_reinvested, summary.currency),
           icon: Repeat,
           color: "text-[hsl(var(--primary))]",
         },
@@ -330,7 +339,7 @@ export default function DividendsPage() {
                   Est. 12-Month Income
                 </p>
                 <p className="mt-1 text-2xl font-bold text-[hsl(var(--profit))]">
-                  {formatCurrency(forecast.total_forward_12m)}
+                  {formatCurrency(forecast.total_forward_12m, forecast.currency)}
                 </p>
               </div>
               <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4">
@@ -402,7 +411,7 @@ export default function DividendsPage() {
                           <td className="px-4 py-2 text-right font-mono text-[hsl(var(--profit))]">
                             {formatCurrency(
                               h.annual_estimate,
-                              currencyForExchange(h.exchange),
+                              forecast.currency,
                             )}
                           </td>
                           <td className="px-4 py-2 text-right font-mono">

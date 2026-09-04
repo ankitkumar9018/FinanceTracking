@@ -62,6 +62,12 @@ class HoldingSummaryRow(BaseModel):
     lower_mid_range_2: float | None = None
     upper_mid_range_1: float | None = None
     upper_mid_range_2: float | None = None
+    # Converted values, present only when ?display_currency= was requested AND
+    # every needed FX rate resolved. Computed by _add_display_currency; they
+    # were being stripped here, which is why the market heatmap and any
+    # per-row converted display had nothing to work with.
+    invested_display: float | None = None
+    current_value_display: float | None = None
 
     model_config = {"from_attributes": True}
 
@@ -76,3 +82,11 @@ class PortfolioSummaryResponse(BaseModel):
     total_current_value: float
     total_pnl_percent: float | None
     holdings: list[HoldingSummaryRow]
+    # Display-currency conversion (absent unless ?display_currency= was passed
+    # and all rates resolved — the endpoint stays all-or-nothing).
+    display_currency: str | None = None
+    display_base_currency: str | None = None
+    display_fx_rate: float | None = None
+    total_invested_display: float | None = None
+    total_current_value_display: float | None = None
+    total_pnl_percent_display: float | None = None

@@ -5,12 +5,31 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatCurrency(value: number | null | undefined, currency = "INR", locale = "en-IN"): string {
+// Grouping is a property of the LOCALE, not the currency symbol, so a fixed
+// "en-IN" rendered euros with Indian lakh/crore grouping — "€12,34,567.50"
+// instead of "12.345.678,50 €". Derive a sensible locale per currency unless
+// the caller pins one explicitly.
+const LOCALE_BY_CURRENCY: Record<string, string> = {
+  INR: "en-IN",
+  EUR: "de-DE",
+  USD: "en-US",
+  GBP: "en-GB",
+  CHF: "de-CH",
+  JPY: "ja-JP",
+};
+
+export function formatCurrency(
+  value: number | null | undefined,
+  currency = "INR",
+  locale?: string
+): string {
   // Guard null/undefined AND NaN/Infinity so we never render "₹NaN".
   if (value == null || !Number.isFinite(value)) return "—";
-  return new Intl.NumberFormat(locale, {
+  const ccy = (currency || "INR").toUpperCase();
+  const resolved = locale ?? LOCALE_BY_CURRENCY[ccy] ?? "en-US";
+  return new Intl.NumberFormat(resolved, {
     style: "currency",
-    currency,
+    currency: ccy,
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(value);

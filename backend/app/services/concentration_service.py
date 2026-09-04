@@ -39,6 +39,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.holding import Holding
+from app.models.portfolio import Portfolio
+from app.services.forex_service import RateCache
 from app.services.market_data_service import _ticker_symbol
 from app.services.valuation import market_value
 
@@ -204,7 +206,27 @@ async def analyze_concentration(
     if not holdings:
         return _neutral_state(single_name_threshold, sector_threshold)
 
-    values = [_market_value(h) for h in holdings]
+    # Weights MUST be computed in one currency. Summing a EUR position's raw
+    # market value with an INR one made a mixed India/Germany portfolio — the
+    # exact case this app targets — collapse to "1.0 effective holdings, grade
+    # F", because the rupee figures dwarfed the euro ones numerically.
+    portfolio = await db.get(Portfolio, portfolio_id)
+    base_currency = (getattr(portfolio, "currency", None) or "INR").upper()
+    rates = RateCache(base_currency, db)
+
+    values: list[float] = []
+    unconverted: list[str] = []
+    for h in holdings:
+        native = _market_value(h)
+        converted_value, ok = await rates.to_base(native, h.currency)
+        if ok:
+            values.append(converted_value)
+        else:
+            # No rate available: excluding it is the lesser evil versus
+            # counting foreign units as base-currency units.
+            values.append(0.0)
+            unconverted.append(h.stock_symbol)
+
     total_value = sum(values)
     if total_value <= 0:
         return _neutral_state(single_name_threshold, sector_threshold)
@@ -326,4 +348,9 @@ async def analyze_concentration(
         "by_market_cap": by_market_cap,
         "by_exchange": by_exchange,
         "warnings": warnings,
+        # Currency of every figure above, plus any holding excluded because no
+        # FX rate was available — so a caller can say so instead of quietly
+        # reporting weights that don't cover the whole portfolio.
+        "currency": base_currency,
+        "unconverted_symbols": unconverted,
     }

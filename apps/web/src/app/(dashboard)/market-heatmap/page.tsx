@@ -38,17 +38,29 @@ interface SectorGroup {
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
+/** Market value in ONE currency, for cross-holding aggregation.
+ *
+ *  Tile size and weight compare holdings against each other, so they must not
+ *  mix currencies: summing a ₹100,000 NSE position with a €1,000 XETRA one as
+ *  101,000 made the euro position look ~1% of a portfolio it actually halves.
+ *  `current_value_display` is the backend's converted figure (present when the
+ *  summary was fetched with a display currency); the native product is the
+ *  fallback for single-currency portfolios, where it is already consistent. */
+function comparableValue(h: Holding): number {
+  if (typeof h.current_value_display === "number" && Number.isFinite(h.current_value_display)) {
+    return h.current_value_display;
+  }
+  return (h.current_price ?? h.avg_price) * h.quantity;
+}
+
 function buildHeatmapData(holdings: Holding[]): HeatmapTile[] {
-  const totalValue = holdings.reduce((sum, h) => {
-    const currentVal = (h.current_price ?? h.avg_price) * h.quantity;
-    return sum + currentVal;
-  }, 0);
+  const totalValue = holdings.reduce((sum, h) => sum + comparableValue(h), 0);
 
   if (totalValue === 0) return [];
 
   return holdings.map((h) => {
     const currentPrice = h.current_price ?? h.avg_price;
-    const marketValue = currentPrice * h.quantity;
+    const marketValue = comparableValue(h);
     const totalPnlPct =
       h.current_price !== null && h.avg_price > 0
         ? ((h.current_price - h.avg_price) / h.avg_price) * 100

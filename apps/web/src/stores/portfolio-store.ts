@@ -1,5 +1,22 @@
 import { create } from "zustand";
 import { api } from "@/lib/api-client";
+import { useAuthStore } from "@/stores/auth-store";
+
+/** Currency to convert summary figures into: the user's explicit display
+ *  override if set, otherwise their account preference. Returns null only when
+ *  neither is known (then the API returns native values, as before). */
+function displayCurrency(): string | null {
+  try {
+    const stored =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem("ft-display-currency")
+        : null;
+    if (stored) return stored;
+  } catch {
+    // localStorage can throw in private mode — fall through to the account value.
+  }
+  return useAuthStore.getState().user?.preferred_currency ?? null;
+}
 
 // This interface matches the /portfolios/{id}/summary endpoint response
 export interface Holding {
@@ -26,6 +43,13 @@ export interface Holding {
   upper_mid_range_2?: number | null;
   base_level?: number | null;
   top_level?: number | null;
+  /** Value converted into the requested display currency. Present only when
+   *  the summary was fetched with ?display_currency= AND every FX rate
+   *  resolved (the endpoint is all-or-nothing). Anything that AGGREGATES
+   *  across holdings must prefer these — summing native values mixes INR with
+   *  EUR and silently produces nonsense weights. */
+  invested_display?: number | null;
+  current_value_display?: number | null;
 }
 
 export interface Portfolio {
@@ -129,7 +153,14 @@ export const usePortfolioStore = create<PortfolioState>((set, get) => ({
     const seq = ++holdingsFetchSeq;
     set({ isLoading: true, error: null });
     try {
-      const data = await api.get<{ holdings: Holding[] }>(`/portfolios/${portfolioId}/summary`);
+      // Request converted values so cross-holding aggregates (heatmap tiles,
+      // allocation weights) can add like with like. The backend only ADDS
+      // *_display fields, so native values are untouched.
+      const display = displayCurrency();
+      const path = display
+        ? `/portfolios/${portfolioId}/summary?display_currency=${encodeURIComponent(display)}`
+        : `/portfolios/${portfolioId}/summary`;
+      const data = await api.get<{ holdings: Holding[] }>(path);
       // Bail if a newer fetch started or the user switched portfolios while
       // this response was in flight — last-started wins, not last-landed.
       if (seq !== holdingsFetchSeq || portfolioId !== get().activePortfolioId) return;
