@@ -1,4 +1,4 @@
-"""Shared numeric parsing helpers.
+"""Shared numeric parsing and money-rounding helpers.
 
 Two parsers with distinct contracts:
 
@@ -10,13 +10,18 @@ Two parsers with distinct contracts:
   it without behavior change.
 - :func:`coerce_float` — plain NaN/Inf-safe ``float()`` coercion with no
   locale logic, matching ``app.services.market_data_service._safe_float``.
+
+Plus one pair of rounding helpers, :func:`round4` / :func:`round4_variants`,
+used to build the scale-4 natural keys that both write paths into
+``tax_records`` (CSV import and JSON backup restore) dedup on.
 """
 
 from __future__ import annotations
 
 import math
+from decimal import ROUND_HALF_UP, Decimal
 
-__all__ = ["coerce_float", "parse_number"]
+__all__ = ["coerce_float", "parse_number", "round4", "round4_variants"]
 
 
 def _normalize_numeric_str(s: str) -> str:
@@ -101,3 +106,58 @@ def coerce_float(value: object) -> float | None:
         return None if math.isnan(f) or math.isinf(f) else f
     except (ValueError, TypeError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# Scale-4 money rounding for natural-key dedup
+# ---------------------------------------------------------------------------
+
+_QUANT4 = Decimal("0.0001")
+
+
+def round4_variants(value: object) -> tuple[object, ...]:
+    """Every scale-4 form a value may take once the database has stored it.
+
+    The money columns natural keys are built from are ``Numeric(18, 4)``, so a
+    full-precision incoming float (a CSV cell, a JSON backup field) has to be
+    normalised to scale 4 before it can be compared with what comes back out of
+    the column. The catch is that the two backends round a tie differently, and
+    the incoming side cannot know which one it is talking to:
+
+    - PostgreSQL ``numeric`` rounds half away from zero — ``2.50005`` is stored
+      as ``2.5001``.
+    - SQLite gets the value as a binary double and formats it to 4 places, i.e.
+      nearest-with-ties-to-even on the *binary* value — the same ``2.50005`` is
+      stored as ``2.5000``.
+
+    So this returns the half-up form first (the canonical key) and the
+    binary-rounded form after it when they disagree, which happens only for
+    exact-half values at the 5th decimal. Callers look up every variant, so
+    dedup works on either backend instead of silently missing.
+
+    ``None`` stays ``None``; a value that is not a number is returned unchanged
+    rather than collapsed to ``None``, so two different unparseable values never
+    collide into the same key.
+    """
+    if value is None:
+        return (None,)
+    try:
+        half_up = Decimal(str(value)).quantize(_QUANT4, rounding=ROUND_HALF_UP)
+    except (TypeError, ValueError, ArithmeticError):
+        return (value,)
+    try:
+        binary = Decimal(f"{float(value):.4f}")  # type: ignore[arg-type]
+    except (TypeError, ValueError, ArithmeticError, OverflowError):
+        return (half_up,)
+    return (half_up,) if binary == half_up else (half_up, binary)
+
+
+def round4(value: object) -> object:
+    """Canonical scale-4 form of a numeric — see :func:`round4_variants`.
+
+    Values read back from the database are already at scale 4, so quantizing
+    them again is the identity and this single form is exact for them.  Build
+    the *stored* side of a natural key with this, and look the *incoming* side
+    up through every :func:`round4_variants` form.
+    """
+    return round4_variants(value)[0]

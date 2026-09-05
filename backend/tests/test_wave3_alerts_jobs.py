@@ -3,7 +3,9 @@
 Covers, in order:
 
 1.  Alerts are edge-triggered — a condition that merely *stays* true does not
-    re-notify every cooldown window (it used to, up to 288 times a day).
+    re-notify every cooldown window (it used to, up to 288 times a day). The
+    latch's durability across a restart is covered in
+    ``test_alert_edge_durability.py``.
 2.  The read-only evaluation used by the alerts UI is still level-triggered
     and leaves both ``last_triggered`` and the edge latch untouched.
 3.  ``{"once": true}`` in the condition deactivates the alert after one send.
@@ -39,21 +41,9 @@ from app.models.notification_log import NotificationLog
 from app.models.portfolio import Portfolio
 from app.models.user import User
 from app.services import alert_service
-from app.services.alert_service import (
-    check_alerts_for_holding,
-    reset_edge_state,
-)
+from app.services.alert_service import check_alerts_for_holding
 
 from .conftest import TestSessionFactory
-
-
-@pytest.fixture(autouse=True)
-def _clean_edge_state():
-    """The edge latch is process-local; keep it from leaking between tests."""
-    reset_edge_state()
-    yield
-    reset_edge_state()
-
 
 # ---------------------------------------------------------------------------
 # Seed helpers
@@ -208,8 +198,8 @@ async def test_one_shot_alert_deactivates_itself(db: AsyncSession):
     await db.commit()
     assert alert.is_active is False
 
-    # Even with the latch forgotten (a restart) and no cooldown, it stays quiet.
-    reset_edge_state()
+    # Even with the latch forcibly cleared and no cooldown, it stays quiet.
+    alert.condition_was_true = False
     alert.last_triggered = None
     await db.commit()
     assert await check_alerts_for_holding(holding, db) == []
@@ -376,7 +366,9 @@ async def test_price_broadcast_omits_the_private_action_zone(monkeypatch):
     seen: list[tuple[str, dict]] = []
 
     class _Recorder:
-        async def broadcast_price_update(self, symbol: str, data: dict) -> None:
+        async def broadcast_price_update(
+            self, symbol: str, data: dict, exchange: str | None = None
+        ) -> None:
             seen.append((symbol, data))
 
     monkeypatch.setattr(fp, "manager", _Recorder())

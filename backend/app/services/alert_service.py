@@ -19,8 +19,9 @@ logger = logging.getLogger(__name__)
 ALERT_COOLDOWN_SECONDS = 300  # 5 minutes
 
 # Condition keys that ask for a single notification: ``{"above": 1400,
-# "once": true}``. ``Alert.condition`` is a free-form JSON dict that the API
-# passes through untouched, so this needs no schema or model change.
+# "once": true}``. ``AlertCreate.once`` / ``AlertUpdate.once`` write the
+# canonical ``"once"`` key; ``"one_shot"`` is still read so conditions
+# hand-written before that field existed keep working.
 ONE_SHOT_KEYS = ("one_shot", "once")
 
 # ---------------------------------------------------------------------------
@@ -32,62 +33,43 @@ ONE_SHOT_KEYS = ("one_shot", "once")
 # day for one alert. Dispatch now happens only on a false -> true transition
 # of the condition (a *rising edge*).
 #
-# The previous truth value lives in this process-local map rather than in a new
-# ``Alert`` column (that model is not owned here). Both consequences are
-# benign: a restart forgets the latch, so a still-true alert notifies once more
-# after startup (the cooldown still applies), and only the single scheduler
-# process evaluates alerts, so there is no cross-process consistency problem.
-# For a durable latch, see ``one_shot`` below, which persists via ``is_active``.
+# The previous truth value is persisted on ``Alert.condition_was_true``. It
+# used to live in a process-local dict, which meant a restart forgot the latch
+# and every alert whose condition was still true notified once more on the
+# next cycle — and a desktop shell that kills the backend on window close
+# turned that into a re-send on every launch. A column also makes the latch
+# correct if a second worker ever evaluates alerts.
 #
-# Keyed by alert id *and* the alert's ``created_at`` so a recycled primary key
-# (SQLite hands out max(id)+1 again once the last row is deleted) cannot
-# inherit the latch of the alert it replaced and swallow its first
-# notification.
-_CONDITION_WAS_TRUE: dict[int, tuple[datetime | None, bool]] = {}
+# Writes go through the ORM instance; the caller flushes (and
+# ``check_alerts_task`` commits) so a falling edge is durable too — without
+# that, a re-arm would be lost on restart and the *next* real crossing would
+# be swallowed.
 
 
-def reset_edge_state(alert_id: int | None = None) -> None:
-    """Forget the latched truth value for one alert, or for all of them.
+def reset_edge_state(alert: Alert) -> None:
+    """Forget *alert*'s latched truth value.
 
     Call this after an alert's condition is edited so the next evaluation is
     treated as a fresh rising edge rather than a continuation of the old one.
+    The caller is responsible for flushing.
     """
-    if alert_id is None:
-        _CONDITION_WAS_TRUE.clear()
-    else:
-        _CONDITION_WAS_TRUE.pop(alert_id, None)
+    alert.condition_was_true = False
 
 
-def _alert_identity(alert: Alert) -> datetime | None:
-    """The alert's ``created_at``, or None if it isn't loaded on this instance.
+def _record_condition_state(
+    alert: Alert, condition_true: bool
+) -> tuple[bool, bool]:
+    """Store *alert*'s current truth value.
 
-    Guarded because a lazy attribute load from this synchronous helper would
-    raise ``MissingGreenlet`` under the async session, and losing the identity
-    check must never be able to take the alert job down.
+    Returns ``(rising_edge, state_changed)`` — whether the condition just went
+    false -> true, and whether the stored latch was modified at all (so the
+    caller knows a flush is needed even when nothing notified).
     """
-    try:
-        return getattr(alert, "created_at", None)
-    except Exception:  # pragma: no cover - defensive
-        return None
-
-
-def _remembered_condition_state(alert: Alert) -> tuple[datetime | None, bool]:
-    """Return ``(identity, was_true)`` for *alert*'s remembered truth value."""
-    identity = _alert_identity(alert)
-    remembered_identity, was_true = _CONDITION_WAS_TRUE.get(alert.id, (None, False))
-    if remembered_identity != identity:
-        was_true = False  # recycled id — the remembered state isn't ours
-    return identity, was_true
-
-
-def _record_condition_state(alert: Alert, condition_true: bool) -> bool:
-    """Store *alert*'s current truth value; report whether it just rose."""
-    identity, was_true = _remembered_condition_state(alert)
-    if condition_true:
-        _CONDITION_WAS_TRUE[alert.id] = (identity, True)
-    else:
-        _CONDITION_WAS_TRUE.pop(alert.id, None)
-    return condition_true and not was_true
+    was_true = bool(alert.condition_was_true)
+    if condition_true == was_true:
+        return False, False
+    alert.condition_was_true = condition_true
+    return condition_true, True
 
 
 def _in_cooldown(alert: Alert, now: datetime) -> bool:
@@ -262,8 +244,13 @@ def _consider_alert(
     now: datetime,
     *,
     update_state: bool,
-) -> dict | None:
+) -> tuple[dict | None, bool]:
     """Evaluate one alert and decide whether it should notify right now.
+
+    Returns ``(payload, state_changed)``: the notification payload when the
+    alert fires, and whether any persistent state on *alert* was modified (the
+    edge latch, ``last_triggered`` or ``is_active``), so the caller can flush
+    exactly when there is something to write.
 
     ``update_state=False`` is the read-only view used by the alerts UI: it
     reports every condition that currently holds and neither stamps
@@ -274,26 +261,27 @@ def _consider_alert(
     # The cooldown is checked before the latch is touched, so a rising edge
     # that lands inside the cooldown window is deferred rather than consumed.
     if _in_cooldown(alert, now):
-        return None
+        return None, False
 
     message = _evaluate_alert(alert, item, price, rsi)
 
     if not update_state:
         if message is None:
-            return None
-        return _triggered_payload(alert, item, message, now)
+            return None, False
+        return _triggered_payload(alert, item, message, now), False
 
-    if not _record_condition_state(alert, message is not None) or message is None:
-        return None
+    rising_edge, state_changed = _record_condition_state(alert, message is not None)
+    if not rising_edge or message is None:
+        return None, state_changed
 
     triggered_at = datetime.now(UTC)
     alert.last_triggered = triggered_at
     if _is_one_shot(alert.condition):
-        # Durable one-shot: the latch above is process-local, is_active is not.
+        # Durable one-shot: is_active survives a restart just as the latch does.
         alert.is_active = False
-        reset_edge_state(alert.id)
+        reset_edge_state(alert)
         logger.info("alert %s deactivated after its one-shot trigger", alert.id)
-    return _triggered_payload(alert, item, message, triggered_at)
+    return _triggered_payload(alert, item, message, triggered_at), True
 
 
 def _triggered_payload(
@@ -345,14 +333,19 @@ async def check_alerts_for_holding(
     rsi = float(holding.current_rsi) if holding.current_rsi is not None else None
     now = datetime.now(UTC)
 
+    state_changed = False
     for alert in alerts:
-        payload = _consider_alert(
+        payload, changed = _consider_alert(
             alert, holding, price, rsi, now, update_state=update_state
         )
+        state_changed = state_changed or changed
         if payload is not None:
             triggered.append(payload)
 
-    if triggered and update_state:
+    # Flush on any state change, not just on a trigger: a *falling* edge writes
+    # the latch back to false and re-arms the alert, and losing that write
+    # would swallow the next genuine crossing after a restart.
+    if state_changed and update_state:
         await db.flush()
 
     return triggered
@@ -413,7 +406,7 @@ async def check_all_alerts_for_user(
         wl_items = {w.id: w for w in wl_items_result.scalars().all()}
 
         now = datetime.now(UTC)
-        wl_triggered = 0
+        wl_state_changed = False
 
         for alert in wl_alerts:
             wl_item = (
@@ -429,7 +422,7 @@ async def check_all_alerts_for_user(
                 if wl_item.current_rsi is not None
                 else None
             )
-            payload = _consider_alert(
+            payload, changed = _consider_alert(
                 alert,
                 wl_item,
                 float(wl_item.current_price),
@@ -437,14 +430,14 @@ async def check_all_alerts_for_user(
                 now,
                 update_state=update_state,
             )
+            wl_state_changed = wl_state_changed or changed
             if payload is not None:
-                wl_triggered += 1
                 all_triggered.append(payload)
 
         # Flush only when this pass actually changed something. The old
         # condition ("any alert has a last_triggered") flushed on every call
         # once a single alert had ever fired.
-        if wl_triggered and update_state:
+        if wl_state_changed and update_state:
             await db.flush()
 
     return all_triggered

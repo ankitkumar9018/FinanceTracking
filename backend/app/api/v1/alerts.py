@@ -19,8 +19,10 @@ from app.schemas.alert import (
     AlertCreate,
     AlertResponse,
     AlertUpdate,
+    apply_once,
+    validate_condition,
 )
-from app.services.alert_service import check_all_alerts_for_user
+from app.services.alert_service import check_all_alerts_for_user, reset_edge_state
 
 router = APIRouter()
 
@@ -154,12 +156,46 @@ async def update_alert(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AlertResponse:
-    """Update an alert's type, condition, or active status."""
+    """Update an alert's type, condition, one-shot flag, or active status."""
     alert = await _get_user_alert(alert_id, user, db)
 
     update_data = body.model_dump(exclude_unset=True)
+    # ``once`` is a typed convenience for a key inside the condition JSON, not
+    # a column — merge it rather than setattr-ing a stray attribute.
+    once = update_data.pop("once", None)
+    new_condition = update_data.pop("condition", None)
+
+    previous_condition = alert.condition
+    previous_type = alert.alert_type
+
     for key, value in update_data.items():
         setattr(alert, key, value)
+
+    type_changed = alert.alert_type != previous_type
+    if new_condition is not None or once is not None or type_changed:
+        base = new_condition if new_condition is not None else alert.condition
+        if not isinstance(base, dict):
+            base = {}
+        try:
+            # Re-checked here against the alert's *effective* type, which the
+            # schema validator cannot see: giving an RSI alert a bare price
+            # threshold — or retyping a price alert to RSI and leaving its
+            # ``above`` behind — would otherwise be stored and never fire.
+            merged = validate_condition(apply_once(base, once), alert.alert_type)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+        # Reassign rather than mutate: the JSON column has no mutation tracking.
+        alert.condition = merged
+
+    if alert.condition != previous_condition or type_changed:
+        # Alerts are edge-triggered, and the latch says "the OLD condition was
+        # already satisfied". Carrying it across an edit means a freshly raised
+        # threshold that the price has *just* crossed reads as a continuation
+        # and never notifies. Re-arm so the next evaluation is a clean edge.
+        reset_edge_state(alert)
 
     await db.flush()
     await db.refresh(alert)

@@ -8,7 +8,7 @@ import { Menu, Moon, Sun, RefreshCw, LogOut, User, Plus, Loader2 } from "lucide-
 import { NotificationCenter } from "@/components/layout/notification-center";
 import { Modal } from "@/components/shared/modal";
 import { useDisplayCurrency } from "@/hooks/use-display-currency";
-import { useState } from "react";
+import { useId, useState } from "react";
 import toast from "react-hot-toast";
 
 interface NewPortfolioForm {
@@ -30,6 +30,8 @@ interface TopBarProps {
 }
 
 export function TopBar({ onMenuClick }: TopBarProps) {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   const { user, logout } = useAuthStore();
   const { portfolios, activePortfolioId, setActivePortfolio, fetchPortfolios, refreshPrices } =
     usePortfolioStore();
@@ -190,8 +192,9 @@ export function TopBar({ onMenuClick }: TopBarProps) {
       >
         <form onSubmit={handleCreatePortfolio} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Name *</label>
+            <label htmlFor={`${uid}-name`} className="block text-sm font-medium mb-1">Name *</label>
             <input
+              id={`${uid}-name`}
               type="text"
               required
               autoFocus
@@ -203,8 +206,9 @@ export function TopBar({ onMenuClick }: TopBarProps) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Currency</label>
+            <label htmlFor={`${uid}-currency`} className="block text-sm font-medium mb-1">Currency</label>
             <select
+              id={`${uid}-currency`}
               value={createForm.currency}
               onChange={(e) => setCreateForm({ ...createForm, currency: e.target.value })}
               className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
@@ -215,8 +219,9 @@ export function TopBar({ onMenuClick }: TopBarProps) {
             </select>
           </div>
 
-          <label className="flex items-center gap-2 text-sm">
+          <label htmlFor={`${uid}-default`} className="flex items-center gap-2 text-sm">
             <input
+              id={`${uid}-default`}
               type="checkbox"
               checked={createForm.is_default}
               onChange={(e) => setCreateForm({ ...createForm, is_default: e.target.checked })}

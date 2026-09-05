@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useId, useState, useCallback } from "react";
 import {
   Banknote,
   Plus,
@@ -90,6 +90,8 @@ interface DividendForecast {
 /* ------------------------------------------------------------------ */
 
 export default function DividendsPage() {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   const [dividends, setDividends] = useState<Dividend[]>([]);
   const [summary, setSummary] = useState<DividendSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -583,8 +585,9 @@ export default function DividendsPage() {
               <div className="mt-4 space-y-4">
                 {/* Holding ID */}
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">Holding ID</label>
+                  <label htmlFor={`${uid}-holding`} className="text-sm font-medium">Holding ID</label>
                   <input
+                    id={`${uid}-holding`}
                     type="number"
                     value={formHoldingId}
                     onChange={(e) => setFormHoldingId(e.target.value)}
@@ -595,8 +598,9 @@ export default function DividendsPage() {
 
                 {/* Ex Date */}
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">Ex-Dividend Date</label>
+                  <label htmlFor={`${uid}-exdate`} className="text-sm font-medium">Ex-Dividend Date</label>
                   <input
+                    id={`${uid}-exdate`}
                     type="date"
                     value={formExDate}
                     onChange={(e) => setFormExDate(e.target.value)}
@@ -606,13 +610,14 @@ export default function DividendsPage() {
 
                 {/* Payment Date */}
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">
+                  <label htmlFor={`${uid}-paydate`} className="text-sm font-medium">
                     Payment Date{" "}
                     <span className="text-[hsl(var(--muted-foreground))]">
                       (optional)
                     </span>
                   </label>
                   <input
+                    id={`${uid}-paydate`}
                     type="date"
                     value={formPaymentDate}
                     onChange={(e) => setFormPaymentDate(e.target.value)}
@@ -622,8 +627,9 @@ export default function DividendsPage() {
 
                 {/* Amount per share */}
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">Amount per Share</label>
+                  <label htmlFor={`${uid}-pershare`} className="text-sm font-medium">Amount per Share</label>
                   <input
+                    id={`${uid}-pershare`}
                     type="number"
                     step="0.01"
                     value={formAmountPerShare}
@@ -635,8 +641,9 @@ export default function DividendsPage() {
 
                 {/* Total amount */}
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">Total Amount</label>
+                  <label htmlFor={`${uid}-total`} className="text-sm font-medium">Total Amount</label>
                   <input
+                    id={`${uid}-total`}
                     type="number"
                     step="0.01"
                     value={formTotal}
@@ -647,8 +654,9 @@ export default function DividendsPage() {
                 </div>
 
                 {/* Reinvested toggle */}
-                <label className="flex items-center gap-2 text-sm">
+                <label htmlFor={`${uid}-reinvested`} className="flex items-center gap-2 text-sm">
                   <input
+                    id={`${uid}-reinvested`}
                     type="checkbox"
                     checked={formReinvested}
                     onChange={(e) => setFormReinvested(e.target.checked)}
@@ -660,8 +668,9 @@ export default function DividendsPage() {
                 {formReinvested && (
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <label className="text-sm font-medium">Reinvest Price</label>
+                      <label htmlFor={`${uid}-reinvest-price`} className="text-sm font-medium">Reinvest Price</label>
                       <input
+                        id={`${uid}-reinvest-price`}
                         type="number"
                         step="0.01"
                         value={formReinvestPrice}
@@ -671,8 +680,9 @@ export default function DividendsPage() {
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-sm font-medium">Reinvest Shares</label>
+                      <label htmlFor={`${uid}-reinvest-shares`} className="text-sm font-medium">Reinvest Shares</label>
                       <input
+                        id={`${uid}-reinvest-shares`}
                         type="number"
                         step="0.001"
                         value={formReinvestShares}

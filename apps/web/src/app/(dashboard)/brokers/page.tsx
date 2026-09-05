@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   Link2,
   Plus,
@@ -47,6 +47,8 @@ interface ConnectedBroker {
 /* ------------------------------------------------------------------ */
 
 export default function BrokersPage() {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   // A failed load now surfaces as a real error state instead of a fake
   // "no brokers available" empty state.
   const availableApi = useApiData<AvailableBroker[]>("/broker/available");
@@ -426,10 +428,11 @@ export default function BrokersPage() {
                   </a>
 
                   <div className="space-y-1">
-                    <label className="text-sm font-medium">Request Token</label>
+                    <label htmlFor={`${uid}-request-token`} className="text-sm font-medium">Request Token</label>
                     <div className="relative">
-                      <Key className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
+                      <Key className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" aria-hidden="true" />
                       <input
+                        id={`${uid}-request-token`}
                         type="text"
                         value={requestToken}
                         onChange={(e) => setRequestToken(e.target.value)}
@@ -462,10 +465,11 @@ export default function BrokersPage() {
               <div className="mt-5 space-y-4">
                 {/* API Key */}
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">API Key</label>
+                  <label htmlFor={`${uid}-api-key`} className="text-sm font-medium">API Key</label>
                   <div className="relative">
-                    <Key className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
+                    <Key className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" aria-hidden="true" />
                     <input
+                      id={`${uid}-api-key`}
                       type="text"
                       value={formApiKey}
                       onChange={(e) => setFormApiKey(e.target.value)}
@@ -477,10 +481,11 @@ export default function BrokersPage() {
 
                 {/* API Secret */}
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">API Secret</label>
+                  <label htmlFor={`${uid}-api-secret`} className="text-sm font-medium">API Secret</label>
                   <div className="relative">
-                    <Key className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
+                    <Key className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" aria-hidden="true" />
                     <input
+                      id={`${uid}-api-secret`}
                       type={showSecret ? "text" : "password"}
                       value={formApiSecret}
                       onChange={(e) => setFormApiSecret(e.target.value)}
@@ -490,6 +495,8 @@ export default function BrokersPage() {
                     <button
                       type="button"
                       onClick={() => setShowSecret(!showSecret)}
+                      aria-label={showSecret ? "Hide API secret" : "Show API secret"}
+                      aria-pressed={showSecret}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
                     >
                       {showSecret ? (

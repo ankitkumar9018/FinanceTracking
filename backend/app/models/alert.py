@@ -32,6 +32,14 @@ class Alert(Base):
         Boolean, default=True, server_default="1"
     )
     last_triggered: Mapped[datetime | None] = mapped_column(nullable=True)
+    # Edge-trigger latch: was ``condition`` satisfied at the previous
+    # evaluation? Alerts notify only on a false -> true transition, and the
+    # latch lives here rather than in the scheduler's memory so a restart (or a
+    # second worker) cannot forget that an alert has already fired and re-send
+    # a notification for a threshold that was merely still crossed.
+    condition_was_true: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
     channels: Mapped[list] = mapped_column(
         JSON, default=lambda: ["in_app"], server_default='["in_app"]'
     )

@@ -9,7 +9,7 @@ import logging
 from collections.abc import Callable
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -442,10 +442,28 @@ async def upload_csv_mutual_funds(
 @router.post("/csv/tax-records")
 async def upload_csv_tax_records(
     file: UploadFile,
+    allow_duplicates: bool = Query(
+        False,
+        description=(
+            "Insert every parsed row without matching it against records "
+            "already imported. Off by default so re-uploading a statement is "
+            "a no-op; turn it on only for a file whose rows are genuinely "
+            "distinct disposals that happen to share the same numbers."
+        ),
+    ),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Upload a CSV file to import tax records (user-level, no portfolio needed)."""
+    """Upload a CSV file to import tax records (user-level, no portfolio needed).
+
+    Rows matching a previously imported record on the natural key are skipped
+    (and reported in ``tax_records_skipped`` / ``tax_records_skipped_detail``)
+    rather than inserted, because a duplicated gain wrongly consumes the
+    per-year s.112A exemption / Sparer-Pauschbetrag.  Two brokers can, however,
+    legitimately report two different disposals with identical dates and
+    amounts, and this schema cannot tell those apart from a re-upload — pass
+    ``allow_duplicates=true`` to bypass matching for such a file.
+    """
     file_bytes = await _read_upload(file, (".csv",))
 
     parsed = _parse_upload(
@@ -457,7 +475,9 @@ async def upload_csv_tax_records(
             detail="No valid tax record rows found in the uploaded file",
         )
 
-    summary = await import_tax_records(parsed, user.id, db)
+    summary = await import_tax_records(
+        parsed, user.id, db, allow_duplicates=allow_duplicates
+    )
     return {
         "status": "success",
         **_row_report(

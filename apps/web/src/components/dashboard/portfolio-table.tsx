@@ -51,6 +51,13 @@ export function PortfolioTable({ holdings, isLoading }: Props) {
     }
   }, [holdings, selectedHoldingId]);
 
+  /** Open the slide-over for a row. Shared by the row click (mouse) and the
+   * per-row button (keyboard), so both paths behave identically. */
+  function openDetail(holdingId: number) {
+    setSelectedHoldingId(holdingId);
+    setDetailType("price");
+  }
+
   function handleSort(key: SortKey) {
     if (sortKey === key) {
       setSortDir(sortDir === "asc" ? "desc" : "asc");
@@ -210,20 +217,35 @@ export function PortfolioTable({ holdings, isLoading }: Props) {
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     className="border-b border-[hsl(var(--border))] last:border-0 hover:bg-[hsl(var(--muted))]/30 transition-colors cursor-pointer"
-                    onClick={() => { setSelectedHoldingId(holding.holding_id); setDetailType("price"); }}
+                    onClick={() => openDetail(holding.holding_id)}
                   >
                     <td className="px-4 py-3">
-                      <div>
-                        <span className="font-medium">{holding.stock_symbol}</span>
-                        <span className="ml-2 text-xs text-[hsl(var(--muted-foreground))]">
-                          {holding.exchange}
+                      {/* A <tr> cannot hold focus without breaking table
+                          semantics, so the row's action lives on a real button
+                          in the first cell: keyboard users tab to it and press
+                          Enter/Space, mouse users can still click anywhere on
+                          the row (the click bubbles to the same handler). */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openDetail(holding.holding_id);
+                        }}
+                        aria-label={`View details for ${holding.stock_symbol}${holding.stock_name ? ` (${holding.stock_name})` : ""}`}
+                        className="block w-full text-left rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+                      >
+                        <span className="block">
+                          <span className="font-medium">{holding.stock_symbol}</span>
+                          <span className="ml-2 text-xs text-[hsl(var(--muted-foreground))]">
+                            {holding.exchange}
+                          </span>
                         </span>
-                      </div>
-                      {holding.stock_name && (
-                        <div className="text-xs text-[hsl(var(--muted-foreground))]">
-                          {holding.stock_name}
-                        </div>
-                      )}
+                        {holding.stock_name && (
+                          <span className="block text-xs text-[hsl(var(--muted-foreground))]">
+                            {holding.stock_name}
+                          </span>
+                        )}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-right font-mono">
                       {holding.quantity}

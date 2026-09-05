@@ -1,7 +1,9 @@
 "use client";
 
+import { useId, useRef } from "react";
 import { motion } from "framer-motion";
 import { X, ExternalLink } from "lucide-react";
+import { useDialogA11y } from "@/components/shared/modal";
 import type { Holding } from "@/stores/portfolio-store";
 import { formatCurrency } from "@/lib/utils";
 import { createLazyComponent } from "@/components/shared/lazy-component";
@@ -30,6 +32,15 @@ interface Props {
 }
 
 export function StockDetailPanel({ holding, type, onClose }: Props) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+
+  // The panel is a modal slide-over, not a <Modal> card (it needs full height),
+  // so it takes the same a11y contract directly: Escape-to-close, scroll lock,
+  // focus in on open / back to the opener on close, and a Tab trap. The panel
+  // is only ever rendered while open, so `open` is a constant true.
+  useDialogA11y(panelRef, { open: true, onClose });
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -38,7 +49,7 @@ export function StockDetailPanel({ holding, type, onClose }: Props) {
       className="fixed inset-0 z-50"
     >
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden="true" />
 
       {/* Panel — a flex column whose body scrolls. The content (400px chart +
           52W bar + 10 detail tiles) is taller than the panel at any realistic
@@ -50,13 +61,18 @@ export function StockDetailPanel({ holding, type, onClose }: Props) {
         animate={{ x: 0 }}
         exit={{ x: "100%" }}
         transition={{ type: "spring", damping: 25, stiffness: 200 }}
-        className="absolute right-0 top-0 flex h-full w-full max-w-xl flex-col border-l border-[hsl(var(--border))] bg-[hsl(var(--background))] shadow-2xl"
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="absolute right-0 top-0 flex h-full w-full max-w-xl flex-col border-l border-[hsl(var(--border))] bg-[hsl(var(--background))] shadow-2xl outline-none"
       >
         {/* Header */}
         <div className="flex shrink-0 items-center justify-between border-b border-[hsl(var(--border))] p-4">
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-lg font-bold">{holding.stock_symbol}</h2>
+              <h2 id={titleId} className="text-lg font-bold">{holding.stock_symbol}</h2>
               <span className="rounded bg-[hsl(var(--accent))] px-2 py-0.5 text-xs font-medium">
                 {holding.exchange}
               </span>

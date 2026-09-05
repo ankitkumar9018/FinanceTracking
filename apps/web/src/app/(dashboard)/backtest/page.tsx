@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useId, useState, useCallback } from "react";
 import {
   FlaskConical,
   Play,
@@ -131,6 +131,8 @@ const DAYS_OPTIONS = [
 /* ------------------------------------------------------------------ */
 
 export default function BacktestPage() {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [selectedStrategy, setSelectedStrategy] = useState<string>("");
   const [symbol, setSymbol] = useState("");
@@ -301,10 +303,11 @@ export default function BacktestPage() {
 
             {/* Symbol */}
             <div className="mb-3">
-              <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <label htmlFor={`${uid}-symbol`} className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 Symbol
               </label>
               <input
+                id={`${uid}-symbol`}
                 type="text"
                 value={symbol}
                 onChange={(e) => setSymbol(e.target.value)}
@@ -315,10 +318,11 @@ export default function BacktestPage() {
 
             {/* Exchange */}
             <div className="mb-3">
-              <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <label htmlFor={`${uid}-exchange`} className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 Exchange
               </label>
               <select
+                id={`${uid}-exchange`}
                 value={exchange}
                 onChange={(e) => setExchange(e.target.value)}
                 className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
@@ -333,13 +337,14 @@ export default function BacktestPage() {
 
             {/* Strategy */}
             <div className="mb-3">
-              <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <label htmlFor={`${uid}-strategy`} className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 Strategy
               </label>
               {strategiesLoading ? (
                 <div className="h-9 animate-pulse rounded-md bg-[hsl(var(--muted))]" />
               ) : (
                 <select
+                  id={`${uid}-strategy`}
                   value={selectedStrategy}
                   onChange={(e) => handleStrategyChange(e.target.value)}
                   className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
@@ -361,10 +366,11 @@ export default function BacktestPage() {
             {/* Strategy Parameters */}
             {currentStrategy?.parameters.map((param) => (
               <div key={param.name} className="mb-3">
-                <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+                <label htmlFor={`${uid}-param-${param.name}`} className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
                   {param.label}
                 </label>
                 <input
+                  id={`${uid}-param-${param.name}`}
                   type="number"
                   value={params[param.name] ?? String(param.default)}
                   min={param.min}
@@ -379,13 +385,18 @@ export default function BacktestPage() {
 
             {/* Days */}
             <div className="mb-4">
-              <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <p
+                id={`${uid}-lookback`}
+                className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1"
+              >
                 Lookback Period
-              </label>
-              <div className="grid grid-cols-2 gap-2">
+              </p>
+              <div className="grid grid-cols-2 gap-2" role="group" aria-labelledby={`${uid}-lookback`}>
                 {DAYS_OPTIONS.map((opt) => (
                   <button
                     key={opt.value}
+                    type="button"
+                    aria-pressed={days === opt.value}
                     onClick={() => setDays(opt.value)}
                     className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
                       days === opt.value

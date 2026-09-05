@@ -157,7 +157,9 @@ class _RecordingManager:
         self.price_updates: list[tuple[str, dict]] = []
         self.broadcasts: list[dict] = []
 
-    async def broadcast_price_update(self, symbol: str, data: dict) -> None:
+    async def broadcast_price_update(
+        self, symbol: str, data: dict, exchange: str | None = None
+    ) -> None:
         self.price_updates.append((symbol, data))
 
     async def broadcast_all(self, data: dict) -> None:
@@ -260,7 +262,9 @@ async def test_broadcast_failure_never_breaks_the_refresh(monkeypatch):
     from app.tasks import fetch_prices as fp
 
     class _Exploding:
-        async def broadcast_price_update(self, symbol: str, data: dict) -> None:
+        async def broadcast_price_update(
+            self, symbol: str, data: dict, exchange: str | None = None
+        ) -> None:
             raise RuntimeError("socket gone")
 
     monkeypatch.setattr(fp, "manager", _Exploding())

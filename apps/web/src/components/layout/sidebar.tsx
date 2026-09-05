@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
+import { useDialogA11y } from "@/components/shared/modal";
 import {
   LayoutDashboard,
   Briefcase,
@@ -199,6 +200,7 @@ export function Sidebar() {
 /* Mobile slide-in drawer variant — rendered below md: only */
 export function MobileSidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const pathname = usePathname();
+  const drawerRef = useRef<HTMLElement>(null);
 
   // Close on route change
   useEffect(() => {
@@ -206,15 +208,9 @@ export function MobileSidebar({ open, onClose }: { open: boolean; onClose: () =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
-  // Close on Escape
-  useEffect(() => {
-    if (!open) return;
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [open, onClose]);
+  // Escape-to-close, scroll lock, focus into the drawer and back to the
+  // hamburger on close, and a Tab trap — the same contract <Modal> gets.
+  useDialogA11y(drawerRef, { open, onClose });
 
   return (
     <AnimatePresence>
@@ -235,10 +231,12 @@ export function MobileSidebar({ open, onClose }: { open: boolean; onClose: () =>
             animate={{ x: 0 }}
             exit={{ x: "-100%" }}
             transition={{ type: "tween", duration: 0.25, ease: "easeOut" }}
-            className="absolute inset-y-0 left-0 flex w-64 max-w-[80vw] flex-col border-r border-[hsl(var(--border))] bg-[hsl(var(--card))]"
+            ref={drawerRef}
+            className="absolute inset-y-0 left-0 flex w-64 max-w-[80vw] flex-col border-r border-[hsl(var(--border))] bg-[hsl(var(--card))] outline-none"
             role="dialog"
             aria-modal="true"
             aria-label="Navigation menu"
+            tabIndex={-1}
           >
             <div className="flex h-14 shrink-0 items-center gap-2 border-b border-[hsl(var(--border))] px-4">
               <TrendingUp className="h-6 w-6 shrink-0 text-[hsl(var(--primary))]" />

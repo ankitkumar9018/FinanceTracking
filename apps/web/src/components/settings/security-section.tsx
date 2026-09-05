@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState , useId} from "react";
 import { api } from "@/lib/api-client";
 import {
   Copy,
@@ -70,6 +70,14 @@ function downloadBackupCodes(codes: string[]) {
 }
 
 export function SecuritySection() {
+  const totpCodeId = useId();
+  const totpVerifyId = useId();
+  const backupVerifyId = useId();
+  const currentPwId = useId();
+  const newPwId = useId();
+  const confirmPwId = useId();
+  const secretLabelId = useId();
+  const setupUriLabelId = useId();
   /* ---- 2FA state ---- */
   const [totpEnabled, setTotpEnabled] = useState<boolean | null>(null);
   const [setup, setSetup] = useState<TwoFactorSetupResponse | null>(null);
@@ -275,11 +283,11 @@ export function SecuritySection() {
             </p>
 
             <div>
-              <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <span id={secretLabelId} className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 Secret key
-              </label>
+              </span>
               <div className="flex items-center gap-2">
-                <code className="flex-1 break-all rounded-md bg-[hsl(var(--background))] px-3 py-2 font-mono text-sm font-semibold tracking-wider">
+                <code aria-labelledby={secretLabelId} className="flex-1 break-all rounded-md bg-[hsl(var(--background))] px-3 py-2 font-mono text-sm font-semibold tracking-wider">
                   {setup.totp_secret}
                 </code>
                 <button
@@ -293,11 +301,11 @@ export function SecuritySection() {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <span id={setupUriLabelId} className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 Setup URI (paste into an authenticator that accepts otpauth links)
-              </label>
+              </span>
               <div className="flex items-center gap-2">
-                <code className="flex-1 break-all rounded-md bg-[hsl(var(--background))] px-3 py-2 font-mono text-[11px] text-[hsl(var(--muted-foreground))]">
+                <code aria-labelledby={setupUriLabelId} className="flex-1 break-all rounded-md bg-[hsl(var(--background))] px-3 py-2 font-mono text-[11px] text-[hsl(var(--muted-foreground))]">
                   {setup.totp_uri}
                 </code>
                 <button
@@ -312,10 +320,10 @@ export function SecuritySection() {
 
             <div className="flex items-end gap-2">
               <div className="flex-1">
-                <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+                <label htmlFor={totpCodeId} className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
                   6-digit code from your app
                 </label>
-                <input
+                <input id={totpCodeId}
                   type="text"
                   inputMode="numeric"
                   maxLength={6}
@@ -350,10 +358,10 @@ export function SecuritySection() {
         {totpEnabled && (
           <div className="flex items-end gap-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 p-4">
             <div className="flex-1">
-              <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <label htmlFor={totpVerifyId} className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 Enter your current 6-digit code to disable 2FA
               </label>
-              <input
+              <input id={totpVerifyId}
                 type="text"
                 inputMode="numeric"
                 maxLength={6}
@@ -459,10 +467,10 @@ export function SecuritySection() {
             {showRegen && (
               <div className="flex items-end gap-2">
                 <div className="flex-1">
-                  <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+                  <label htmlFor={backupVerifyId} className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
                     Enter a current 6-digit code to replace your backup codes
                   </label>
-                  <input
+                  <input id={backupVerifyId}
                     type="text"
                     inputMode="numeric"
                     maxLength={6}
@@ -506,10 +514,10 @@ export function SecuritySection() {
         </div>
         <div className="mt-3 space-y-3">
           <div>
-            <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+            <label htmlFor={currentPwId} className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
               Current password
             </label>
-            <input
+            <input id={currentPwId}
               type="password"
               autoComplete="current-password"
               value={currentPassword}
@@ -519,10 +527,10 @@ export function SecuritySection() {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <label htmlFor={newPwId} className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 New password
               </label>
-              <input
+              <input id={newPwId}
                 type="password"
                 autoComplete="new-password"
                 value={newPassword}
@@ -531,10 +539,10 @@ export function SecuritySection() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <label htmlFor={confirmPwId} className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 Confirm new password
               </label>
-              <input
+              <input id={confirmPwId}
                 type="password"
                 autoComplete="new-password"
                 value={confirmPassword}

@@ -12,6 +12,8 @@ import {
   Info,
   Hourglass,
   Clock,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { useApiData } from "@/hooks/use-api-data";
@@ -116,6 +118,20 @@ const INDIA_FYS = ["2025-26", "2024-25", "2023-24", "2022-23"];
 const GERMANY_FYS = ["2025", "2024", "2023", "2022"];
 
 /* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+/** One record's money, in that record's own currency — an Indian and a German
+ * disposal can sit in the same list, so the page currency cannot be assumed. */
+function formatRecordAmount(rec: TaxRecord, amount: number | null): string {
+  return formatCurrency(
+    amount,
+    rec.currency,
+    rec.currency === "EUR" ? "de-DE" : "en-IN"
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -123,6 +139,7 @@ export default function TaxPage() {
   const [jurisdiction, setJurisdiction] = useState<"IN" | "DE">("IN");
   const [financialYear, setFinancialYear] = useState(INDIA_FYS[0]);
   const [savingFiling, setSavingFiling] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const activePortfolioId = usePortfolioStore((s) => s.activePortfolioId);
   const fetchPortfolios = usePortfolioStore((s) => s.fetchPortfolios);
@@ -222,6 +239,57 @@ export default function TaxPage() {
       toast.error("Failed to update filing status");
     } finally {
       setSavingFiling(false);
+    }
+  }
+
+  /* Delete one stored tax record.
+   *
+   * Re-uploading a tax CSV before the importer learned to dedupe inserted a
+   * second copy of every disposal, and a phantom row does more than inflate
+   * the displayed gain: the s.112A exemption and the Sparer-Pauschbetrag are
+   * per-assessee-per-year allowances, so the duplicate eats headroom that a
+   * real later disposal then pays tax on. Until now the only way to undo that
+   * was editing the database, so the repair lives here.
+   *
+   * The confirmation names the record because deleting one moves a number the
+   * user may already have filed — a bare "Are you sure?" is not enough to tell
+   * two same-looking rows apart, which is exactly the situation a duplicated
+   * import creates. */
+  async function handleDeleteRecord(rec: TaxRecord) {
+    const sold = rec.sale_date ? ` · sold ${formatDate(rec.sale_date)}` : "";
+    const origin = rec.transaction_id
+      ? `\n\nThis record was computed from transaction #${rec.transaction_id} ` +
+        "rather than imported, so it will reappear the next time that sale is " +
+        "recalculated. Delete the transaction itself if the sale is the mistake."
+      : "";
+    const confirmed = window.confirm(
+      "Delete this tax record?\n\n" +
+        `FY ${rec.financial_year} · ${rec.tax_jurisdiction} · ${rec.gain_type}${sold}\n` +
+        `Gain ${formatRecordAmount(rec, rec.gain_amount)} · ` +
+        `tax ${formatRecordAmount(rec, rec.tax_amount)}\n\n` +
+        `The FY ${rec.financial_year} gains, tax payable and exemption used will ` +
+        "all change. This cannot be undone." +
+        origin
+    );
+    if (!confirmed) return;
+
+    setDeletingId(rec.id);
+    try {
+      await api.delete(`/tax/${rec.id}`);
+      toast.success(`Tax record deleted — FY ${rec.financial_year} totals updated`);
+      /* The summary cards and the German allowance are both computed
+       * server-side from these rows, so refetch them: the point of the delete
+       * is the corrected total, and leaving the old one on screen would be the
+       * same wrong number the duplicate caused. */
+      recordsApi.reload();
+      summaryApi.reload();
+      if (jurisdiction === "DE") allowanceApi.reload();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to delete tax record"
+      );
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -707,6 +775,12 @@ export default function TaxPage() {
               ? `Could not load FY ${financialYear}`
               : `${summary?.records_count ?? 0} records for FY ${financialYear}`}
           </p>
+          {!gainsError && records.length > 0 && (
+            <p className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]">
+              Delete a row if an import duplicated it — the totals above are the
+              sum of these records.
+            </p>
+          )}
         </div>
 
         {gainsError ? (
@@ -749,6 +823,9 @@ export default function TaxPage() {
                   <th className="px-5 py-3 font-medium">Sale Date</th>
                   <th className="px-5 py-3 font-medium text-right">Gain Amount</th>
                   <th className="px-5 py-3 font-medium text-right">Tax Amount</th>
+                  <th className="px-5 py-3 font-medium text-right">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -791,22 +868,25 @@ export default function TaxPage() {
                           : "text-[hsl(var(--loss))]"
                       }`}
                     >
-                      {rec.gain_amount !== null
-                        ? formatCurrency(
-                            rec.gain_amount,
-                            rec.currency,
-                            rec.currency === "EUR" ? "de-DE" : "en-IN"
-                          )
-                        : "—"}
+                      {formatRecordAmount(rec, rec.gain_amount)}
                     </td>
                     <td className="px-5 py-3 text-right font-mono text-[hsl(var(--muted-foreground))]">
-                      {rec.tax_amount !== null
-                        ? formatCurrency(
-                            rec.tax_amount,
-                            rec.currency,
-                            rec.currency === "EUR" ? "de-DE" : "en-IN"
-                          )
-                        : "—"}
+                      {formatRecordAmount(rec, rec.tax_amount)}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <button
+                        onClick={() => handleDeleteRecord(rec)}
+                        disabled={deletingId === rec.id}
+                        title="Delete tax record"
+                        aria-label={`Delete the FY ${rec.financial_year} ${rec.gain_type} record for ${formatRecordAmount(rec, rec.gain_amount)}`}
+                        className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--destructive))]/10 hover:text-[hsl(var(--destructive))] disabled:opacity-50"
+                      >
+                        {deletingId === rec.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </button>
                     </td>
                   </motion.tr>
                 ))}

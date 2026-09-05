@@ -42,6 +42,7 @@ from app.services.tax_service import (
     estimate_portfolio_vorabpauschale,
     generate_tax_summary,
     get_harvesting_suggestions,
+    recompute_stored_tax_records,
 )
 
 router = APIRouter()
@@ -97,6 +98,61 @@ class HoldingPeriodTimer(BaseModel):
     portfolio_id: int
     lots: list[HoldingPeriodLot]
     summary: HoldingPeriodSummary
+
+
+class DroppedTaxRecord(BaseModel):
+    """One stored record the repair deleted because it can never be re-derived."""
+
+    record_id: int
+    transaction_id: int | None = None
+    gain_type: str
+    tax_amount: float
+    reason: str
+
+
+class TaxRecomputeFailure(BaseModel):
+    """A sale whose tax could not be re-derived, and what was done about it."""
+
+    transaction_id: int
+    records_dropped: int
+    reason: str
+
+
+class TaxRecomputeYear(BaseModel):
+    """Before/after for one (financial year, jurisdiction) the repair touched.
+
+    Totals are in this year's own ``currency`` — they are never added across
+    years, because an Indian FY is in rupees and a German one in euros.
+    """
+
+    financial_year: str
+    jurisdiction: str
+    currency: str | None = None
+    records_before: int
+    records_after: int
+    records_recomputed: int
+    orphans_dropped: int
+    unlinked_records: int
+    total_tax_before: float
+    total_tax_after: float
+    total_tax_delta: float
+    total_gain_before: float
+    total_gain_after: float
+    changed: bool
+    orphans: list[DroppedTaxRecord] = []
+    failures: list[TaxRecomputeFailure] = []
+
+
+class TaxRecomputeReport(BaseModel):
+    """What ``POST /tax/recompute`` changed, so the user can see the correction."""
+
+    financial_year: str | None = None
+    years_scanned: int
+    years_changed: int
+    records_recomputed: int
+    orphans_dropped: int
+    unlinked_records: int
+    years: list[TaxRecomputeYear] = []
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +323,47 @@ async def harvesting_suggestions(
         db=db,
     )
     return suggestions
+
+
+@router.post("/recompute", response_model=TaxRecomputeReport)
+async def recompute_tax_records(
+    financial_year: str | None = Query(
+        default=None,
+        description=(
+            "Only recompute this financial year (e.g. '2024-25' or '2024'). "
+            "Omit to recompute every year that has stored records."
+        ),
+    ),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Re-derive the caller's stored tax records and report the correction.
+
+    A ``TaxRecord`` is a snapshot of what the compute path believed when it
+    ran, and ``/tax/summary`` and the ITR-ready report read those STORED
+    figures. Records written before the capital-gains fixes therefore still
+    show the old numbers — brokerage missing from the cost basis and from the
+    expenses of transfer, no annual intra-head loss set-off, post-23-Jul-2024
+    rates applied to earlier transfers, and split shares carrying a nil cost
+    basis. Nothing recomputes them by itself: the compute path only re-derives
+    when the LEDGER changes, and these records' ledgers did not change.
+
+    The repair recomputes the earliest computed sale of each (financial year,
+    jurisdiction); the existing cascade replays every later sale of that year
+    and re-runs the annual set-off across it. Records whose transaction is
+    gone, is no longer a SELL, or is no longer the caller's are dropped —
+    they cannot be re-derived and would otherwise keep eating the year's
+    exemption. Records with no transaction link at all (CSV-imported or
+    restored from a backup) are counted in ``unlinked_records`` and left
+    exactly as they are: those figures are the user's filed data, not ours.
+
+    This rewrites capital-gains figures for years that may already have been
+    FILED, which is why it is an explicit request that answers with a
+    per-year before/after rather than something that happens on its own.
+    """
+    return await recompute_stored_tax_records(
+        user_id=user.id, db=db, financial_year=financial_year
+    )
 
 
 # ---------------------------------------------------------------------------

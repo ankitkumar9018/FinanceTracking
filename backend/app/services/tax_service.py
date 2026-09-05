@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -1548,6 +1548,325 @@ async def _compute_tax_single(
         )
 
     return tax_records, fy, jurisdiction, sale_date
+
+
+# ---------------------------------------------------------------------------
+# Repairing tax records stored BEFORE the compute path was fixed
+# ---------------------------------------------------------------------------
+# A TaxRecord is a snapshot of what the compute path believed at the moment it
+# ran. Seven defects have since been fixed in that path — brokerage was left
+# out of the cost basis and of the expenses of transfer, the annual intra-head
+# loss set-off was never applied, the Finance (No. 2) Act 2024 rates were used
+# for transfers made before 23-Jul-2024, and a stock split recorded as a
+# zero-cost adjustment lot fabricated both a loss and a short-term gain — but
+# every record written before those fixes still holds the OLD numbers.
+#
+# ``/tax/summary`` and the ITR-ready export both read the STORED figures (see
+# ``generate_tax_summary``), so a user keeps seeing the wrong tax until the
+# records are re-derived. Nothing in the compute path does that on its own:
+# it only re-derives when the LEDGER changes.
+#
+# The functions below are that missing re-derive, driven explicitly by the
+# user through ``POST /api/v1/tax/recompute``.
+
+
+async def _tax_record_groups(
+    user_id: int,
+    db: AsyncSession,
+    financial_year: str | None = None,
+) -> list[tuple[str, str]]:
+    """Every ``(financial_year, jurisdiction)`` this user has records in.
+
+    The jurisdiction is part of the key because set-off, exemptions and even
+    the meaning of "financial year" are per-regime — an Indian FY and a German
+    calendar year that share a label are two different pools, and netting
+    across them would net rupees against euros.
+    """
+    stmt = (
+        select(TaxRecord.financial_year, TaxRecord.tax_jurisdiction)
+        .where(TaxRecord.user_id == user_id)
+        .distinct()
+    )
+    if financial_year is not None:
+        stmt = stmt.where(TaxRecord.financial_year == financial_year)
+    result = await db.execute(stmt)
+    return sorted((fy, jurisdiction) for fy, jurisdiction in result.all())
+
+
+async def _group_snapshot(
+    user_id: int,
+    financial_year: str,
+    jurisdiction: str,
+    db: AsyncSession,
+) -> dict:
+    """Totals for one (FY, jurisdiction) as currently STORED.
+
+    Taken before and after the re-derive so the caller can show the user the
+    correction rather than silently applying it. ``currency`` is ``None``
+    rather than a guess when a group somehow mixes currencies — a single
+    summed figure would be meaningless there.
+    """
+    result = await db.execute(
+        select(TaxRecord).where(
+            TaxRecord.user_id == user_id,
+            TaxRecord.financial_year == financial_year,
+            TaxRecord.tax_jurisdiction == jurisdiction,
+        )
+    )
+    records = list(result.scalars().all())
+    currencies = {r.currency for r in records if r.currency}
+    return {
+        "records": len(records),
+        "linked": sum(1 for r in records if r.transaction_id is not None),
+        "unlinked": sum(1 for r in records if r.transaction_id is None),
+        "total_tax": round(
+            sum(float(r.tax_amount) for r in records if r.tax_amount is not None), 2
+        ),
+        "total_gain": round(
+            sum(float(r.gain_amount) for r in records if r.gain_amount is not None), 2
+        ),
+        "currency": currencies.pop() if len(currencies) == 1 else None,
+    }
+
+
+async def _drop_orphaned_tax_records(
+    user_id: int,
+    financial_year: str,
+    jurisdiction: str,
+    db: AsyncSession,
+) -> list[dict]:
+    """Delete records whose linked transaction can no longer produce them.
+
+    An orphan is PROVABLE: the record still names a ``transaction_id``, but
+    that row is gone, is no longer a SELL, or no longer hangs off a portfolio
+    of this user. Such a record cannot be re-derived and must not stand — it
+    keeps consuming the s.112A exemption / Sparer-Pauschbetrag of everything
+    else in the year, so leaving it silently overtaxes the records that are
+    still real.
+
+    Records with a NULL ``transaction_id`` are deliberately NOT touched. That
+    is exactly the shape a CSV-imported or backup-restored record has
+    (``csv_import_service`` and ``backup_service`` both create them without a
+    transaction), and their figures are the user's own filed data — the FY
+    allocators already refuse to rewrite them (``owned=False``). A ghost left
+    by a deletion made before the ledger-invalidation fix has that same shape,
+    and destroying a filed statement to remove a possible ghost is a far worse
+    trade than reporting it: the caller gets an ``unlinked_records`` count so
+    the user can look.
+    """
+    result = await db.execute(
+        select(
+            TaxRecord,
+            Transaction.id,
+            Transaction.transaction_type,
+            Portfolio.user_id,
+        )
+        .outerjoin(Transaction, Transaction.id == TaxRecord.transaction_id)
+        .outerjoin(Holding, Holding.id == Transaction.holding_id)
+        .outerjoin(Portfolio, Portfolio.id == Holding.portfolio_id)
+        .where(
+            TaxRecord.user_id == user_id,
+            TaxRecord.financial_year == financial_year,
+            TaxRecord.tax_jurisdiction == jurisdiction,
+            TaxRecord.transaction_id.isnot(None),
+        )
+        .order_by(TaxRecord.id)
+    )
+
+    dropped: list[dict] = []
+    for record, txn_id, txn_type, owner_id in result.all():
+        if txn_id is None:
+            reason = "the sale it was derived from no longer exists"
+        elif txn_type != "SELL":
+            reason = f"its transaction is a {txn_type}, not a SELL"
+        elif owner_id is None:
+            reason = "its holding or portfolio no longer exists"
+        elif owner_id != user_id:
+            reason = "its transaction now belongs to a different user"
+        else:
+            continue
+
+        dropped.append(
+            {
+                "record_id": record.id,
+                "transaction_id": record.transaction_id,
+                "gain_type": record.gain_type,
+                "tax_amount": (
+                    float(record.tax_amount) if record.tax_amount is not None else 0.0
+                ),
+                "reason": reason,
+            }
+        )
+        await db.delete(record)
+
+    if dropped:
+        await db.flush()
+        logger.warning(
+            "Tax repair: dropped %d orphaned record(s) in FY %s (%s) for user %d",
+            len(dropped),
+            financial_year,
+            jurisdiction,
+            user_id,
+        )
+    return dropped
+
+
+async def _recompute_financial_year(
+    user_id: int,
+    financial_year: str,
+    jurisdiction: str,
+    db: AsyncSession,
+) -> dict:
+    """Re-derive one stored (FY, jurisdiction) and report what moved.
+
+    Recomputing the EARLIEST computed sell of the year is enough:
+    ``compute_tax_for_transaction`` cascades over every later computed sell in
+    the same year (FIFO makes each later sale depend on the ones before it)
+    and then re-runs the annual set-off across the whole year. Anchoring
+    anywhere later would leave the sales before the anchor on their old
+    numbers.
+
+    A sale that can no longer be re-derived at all (its purchase history is
+    gone, so there is nothing to match FIFO against) is reported as a failure
+    and its stale records are removed rather than left to stand as a figure
+    this service can no longer justify; the next sale in the year becomes the
+    anchor.
+    """
+    before = await _group_snapshot(user_id, financial_year, jurisdiction, db)
+    orphans = await _drop_orphaned_tax_records(
+        user_id, financial_year, jurisdiction, db
+    )
+
+    result = await db.execute(
+        select(TaxRecord.transaction_id)
+        .where(
+            TaxRecord.user_id == user_id,
+            TaxRecord.financial_year == financial_year,
+            TaxRecord.tax_jurisdiction == jurisdiction,
+            TaxRecord.transaction_id.isnot(None),
+        )
+        .order_by(TaxRecord.sale_date, TaxRecord.transaction_id)
+    )
+    candidates: list[int] = []
+    for (txn_id,) in result.all():
+        if txn_id not in candidates:
+            candidates.append(txn_id)
+
+    failures: list[dict] = []
+    anchor: int | None = None
+    for txn_id in candidates:
+        # Counted BEFORE the attempt: _compute_tax_single drops the sale's own
+        # records on its way to raising, so counting the removal afterwards
+        # would report zero for records that really did go.
+        held = (
+            await db.execute(
+                select(func.count())
+                .select_from(TaxRecord)
+                .where(
+                    TaxRecord.transaction_id == txn_id,
+                    TaxRecord.user_id == user_id,
+                )
+            )
+        ).scalar_one()
+        try:
+            await compute_tax_for_transaction(txn_id, user_id, db)
+        except ValueError as exc:
+            # Belt and braces: the paths that raise before that drop step
+            # (transaction missing, not a SELL) leave the records behind.
+            await _drop_records(txn_id, user_id, db)
+            failures.append(
+                {
+                    "transaction_id": txn_id,
+                    "records_dropped": int(held),
+                    "reason": str(exc),
+                }
+            )
+            logger.warning(
+                "Tax repair: FY %s (%s) sale txn=%d could not be re-derived "
+                "(%s); its stale records were removed",
+                financial_year,
+                jurisdiction,
+                txn_id,
+                exc,
+            )
+            continue
+        anchor = txn_id
+        break
+
+    # Always re-run the year's own allocation, even when an anchor succeeded:
+    # a sale whose DATE was edited into a different financial year without the
+    # ledger invalidation running lands its new records in the OTHER year, and
+    # this year's set-off still has to be redone without it.
+    await _reallocate_financial_year(user_id, financial_year, jurisdiction, db)
+
+    after = await _group_snapshot(user_id, financial_year, jurisdiction, db)
+
+    tax_delta = round(after["total_tax"] - before["total_tax"], 2)
+    gain_delta = round(after["total_gain"] - before["total_gain"], 2)
+    return {
+        "financial_year": financial_year,
+        "jurisdiction": jurisdiction,
+        "currency": after["currency"] or before["currency"],
+        "records_before": before["records"],
+        "records_after": after["records"],
+        # An anchor recompute re-derives every linked record left in the year,
+        # via the cascade; with no anchor nothing was re-derived.
+        "records_recomputed": after["linked"] if anchor is not None else 0,
+        "orphans_dropped": len(orphans),
+        "unlinked_records": after["unlinked"],
+        "total_tax_before": before["total_tax"],
+        "total_tax_after": after["total_tax"],
+        "total_tax_delta": tax_delta,
+        "total_gain_before": before["total_gain"],
+        "total_gain_after": after["total_gain"],
+        "changed": (
+            before["records"] != after["records"]
+            or abs(tax_delta) > 0.005
+            or abs(gain_delta) > 0.005
+        ),
+        "orphans": orphans,
+        "failures": failures,
+    }
+
+
+async def recompute_stored_tax_records(
+    user_id: int,
+    db: AsyncSession,
+    financial_year: str | None = None,
+) -> dict:
+    """Re-derive a user's stored tax records and report the correction.
+
+    ``financial_year=None`` covers every year the user has records in;
+    otherwise only that label (in every jurisdiction that uses it).
+
+    This is the repair path for records computed before the tax fixes landed.
+    It is deliberately explicit — the user asks for it and is shown what
+    changed — because a recompute rewrites capital-gains figures for years the
+    user may already have FILED.
+
+    No cross-year or cross-jurisdiction total is returned: an Indian FY is in
+    rupees and a German one in euros, and one summed "total tax" over both is
+    a number that means nothing. Each year carries its own before/after and
+    its own currency.
+
+    Returns ``{financial_year, years_scanned, years_changed, records_recomputed,
+    orphans_dropped, unlinked_records, years: [...]}``.
+    """
+    groups = await _tax_record_groups(user_id, db, financial_year)
+
+    years: list[dict] = []
+    for fy, jurisdiction in groups:
+        years.append(await _recompute_financial_year(user_id, fy, jurisdiction, db))
+
+    return {
+        "financial_year": financial_year,
+        "years_scanned": len(years),
+        "years_changed": sum(1 for y in years if y["changed"]),
+        "records_recomputed": sum(y["records_recomputed"] for y in years),
+        "orphans_dropped": sum(y["orphans_dropped"] for y in years),
+        "unlinked_records": sum(y["unlinked_records"] for y in years),
+        "years": years,
+    }
 
 
 # ---------------------------------------------------------------------------

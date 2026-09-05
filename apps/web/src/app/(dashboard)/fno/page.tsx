@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useId, useState, useRef } from "react";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { api } from "@/lib/api-client";
 import { formatCurrency, formatPercent } from "@/lib/utils";
@@ -50,6 +50,8 @@ const EMPTY_FORM: AddPositionForm = {
 };
 
 export default function FnoPage() {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   const { activePortfolioId, hasLoadedPortfolios } = usePortfolioStore();
   const [positions, setPositions] = useState<FnoPosition[]>([]);
   const [loading, setLoading] = useState(true);
@@ -225,10 +227,11 @@ export default function FnoPage() {
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {/* Instrument Type */}
                 <div>
-                  <label className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                  <label htmlFor={`${uid}-instrument`} className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
                     Instrument Type
                   </label>
                   <select
+                    id={`${uid}-instrument`}
                     value={form.instrument_type}
                     onChange={(e) =>
                       setForm({
@@ -246,10 +249,11 @@ export default function FnoPage() {
 
                 {/* Stock Symbol */}
                 <div>
-                  <label className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                  <label htmlFor={`${uid}-symbol`} className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
                     Stock Symbol
                   </label>
                   <input
+                    id={`${uid}-symbol`}
                     type="text"
                     required
                     value={form.stock_symbol}
@@ -263,12 +267,13 @@ export default function FnoPage() {
 
                 {/* Strike Price */}
                 <div>
-                  <label className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                  <label htmlFor={`${uid}-strike`} className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
                     Strike Price{form.instrument_type === "FUT" && (
                       <span className="text-[hsl(var(--muted-foreground))]/60 ml-1">(N/A for futures)</span>
                     )}
                   </label>
                   <input
+                    id={`${uid}-strike`}
                     type="number"
                     step="0.05"
                     required={form.instrument_type !== "FUT"}
@@ -284,10 +289,11 @@ export default function FnoPage() {
 
                 {/* Expiry Date */}
                 <div>
-                  <label className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                  <label htmlFor={`${uid}-expiry`} className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
                     Expiry Date
                   </label>
                   <input
+                    id={`${uid}-expiry`}
                     type="date"
                     required
                     value={form.expiry_date}
@@ -300,10 +306,11 @@ export default function FnoPage() {
 
                 {/* Lot Size */}
                 <div>
-                  <label className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                  <label htmlFor={`${uid}-lotsize`} className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
                     Lot Size
                   </label>
                   <input
+                    id={`${uid}-lotsize`}
                     type="number"
                     required
                     value={form.lot_size}
@@ -317,10 +324,11 @@ export default function FnoPage() {
 
                 {/* Quantity */}
                 <div>
-                  <label className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                  <label htmlFor={`${uid}-quantity`} className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
                     Quantity (Lots)
                   </label>
                   <input
+                    id={`${uid}-quantity`}
                     type="number"
                     required
                     value={form.quantity}
@@ -334,10 +342,11 @@ export default function FnoPage() {
 
                 {/* Premium */}
                 <div>
-                  <label className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+                  <label htmlFor={`${uid}-premium`} className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
                     Premium Paid
                   </label>
                   <input
+                    id={`${uid}-premium`}
                     type="number"
                     step="0.05"
                     required

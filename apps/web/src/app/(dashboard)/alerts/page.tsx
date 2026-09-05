@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Bell, BellOff, Plus, Trash2, AlertTriangle, X, Loader2 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio-store";
@@ -99,6 +99,8 @@ const CHANNEL_LABELS: Record<string, string> = Object.fromEntries(
 );
 
 export default function AlertsPage() {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   const { activePortfolioId, hasLoadedPortfolios, holdings } = usePortfolioStore();
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
@@ -539,8 +541,9 @@ export default function AlertsPage() {
 
               <form onSubmit={handleCreateAlert} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium mb-1">Stock *</label>
+                  <label htmlFor={`${uid}-holding`} className="block text-sm font-medium mb-1">Stock *</label>
                   <select
+                    id={`${uid}-holding`}
                     required
                     value={createForm.holding_id}
                     onChange={(e) => setCreateForm({ ...createForm, holding_id: e.target.value })}
@@ -562,8 +565,9 @@ export default function AlertsPage() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium mb-1">Alert Type *</label>
+                    <label htmlFor={`${uid}-type`} className="block text-sm font-medium mb-1">Alert Type *</label>
                     <select
+                      id={`${uid}-type`}
                       value={createForm.alert_type}
                       onChange={(e) => setCreateForm({ ...createForm, alert_type: e.target.value as "PRICE_RANGE" | "RSI" })}
                       className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
@@ -573,8 +577,9 @@ export default function AlertsPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium mb-1">Condition *</label>
+                    <label htmlFor={`${uid}-direction`} className="block text-sm font-medium mb-1">Condition *</label>
                     <select
+                      id={`${uid}-direction`}
                       value={createForm.direction}
                       onChange={(e) => setCreateForm({ ...createForm, direction: e.target.value as "above" | "below" })}
                       className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
@@ -587,10 +592,11 @@ export default function AlertsPage() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium mb-1">
+                    <label htmlFor={`${uid}-threshold`} className="block text-sm font-medium mb-1">
                       {createForm.alert_type === "RSI" ? "RSI Threshold *" : "Price Threshold *"}
                     </label>
                     <input
+                      id={`${uid}-threshold`}
                       type="number"
                       required
                       min={createForm.alert_type === "RSI" ? 1 : 0.01}
@@ -603,8 +609,9 @@ export default function AlertsPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium mb-1">Notify Via</label>
+                    <label htmlFor={`${uid}-channel`} className="block text-sm font-medium mb-1">Notify Via</label>
                     <select
+                      id={`${uid}-channel`}
                       value={createForm.channel}
                       onChange={(e) => setCreateForm({ ...createForm, channel: e.target.value })}
                       className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"

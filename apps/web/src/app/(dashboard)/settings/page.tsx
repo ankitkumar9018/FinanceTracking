@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useId, useState, useEffect } from "react";
 import { useTheme } from "@/components/providers/theme-provider";
 import { SecuritySection } from "@/components/settings/security-section";
 import { api } from "@/lib/api-client";
@@ -15,6 +15,8 @@ interface Settings {
 }
 
 export default function SettingsPage() {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   const { setTheme } = useTheme();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [phone, setPhone] = useState("");
@@ -150,8 +152,9 @@ export default function SettingsPage() {
         <h2 className="text-lg font-semibold">Display</h2>
         <div className="mt-4 space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Display Name</label>
+            <label htmlFor={`${uid}-display-name`} className="block text-sm font-medium mb-1">Display Name</label>
             <input
+              id={`${uid}-display-name`}
               type="text"
               value={settings.display.display_name || ""}
               onChange={(e) => setSettings({ ...settings, display: { ...settings.display, display_name: e.target.value } })}
@@ -160,8 +163,9 @@ export default function SettingsPage() {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Currency</label>
+              <label htmlFor={`${uid}-currency`} className="block text-sm font-medium mb-1">Currency</label>
               <select
+                id={`${uid}-currency`}
                 value={settings.display.preferred_currency}
                 onChange={(e) => setSettings({ ...settings, display: { ...settings.display, preferred_currency: e.target.value } })}
                 className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm"
@@ -172,8 +176,9 @@ export default function SettingsPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Theme</label>
+              <label htmlFor={`${uid}-theme`} className="block text-sm font-medium mb-1">Theme</label>
               <select
+                id={`${uid}-theme`}
                 value={settings.display.theme_preference}
                 onChange={(e) => setSettings({ ...settings, display: { ...settings.display, theme_preference: e.target.value } })}
                 className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm"
@@ -198,9 +203,10 @@ export default function SettingsPage() {
             ["whatsapp_enabled", "WhatsApp Notifications"],
             ["sms_enabled", "SMS Notifications"],
           ] as const).map(([key, label]) => (
-            <label key={key} className="flex items-center justify-between">
+            <label key={key} htmlFor={`${uid}-${key}`} className="flex items-center justify-between">
               <span className="text-sm">{label}</span>
               <input
+                id={`${uid}-${key}`}
                 type="checkbox"
                 checked={settings.notifications[key]}
                 onChange={(e) =>
@@ -228,13 +234,13 @@ export default function SettingsPage() {
           )}
           {settings.notifications.telegram_enabled && (
             <div>
-              <label className="block text-sm font-medium mb-1">Telegram chat ID</label>
+              <label htmlFor={`${uid}-telegram-chat-id`} className="block text-sm font-medium mb-1">Telegram chat ID</label>
               <input
+                id={`${uid}-telegram-chat-id`}
                 type="text"
                 value={telegramChatId}
                 onChange={(e) => setTelegramChatId(e.target.value)}
                 disabled={!profileLoaded}
-                aria-label="Telegram chat ID"
                 placeholder="123456789"
                 className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] disabled:opacity-50"
               />
@@ -242,13 +248,13 @@ export default function SettingsPage() {
           )}
           {(settings.notifications.whatsapp_enabled || settings.notifications.sms_enabled) && (
             <div>
-              <label className="block text-sm font-medium mb-1">Phone number (E.164, e.g. +9198...)</label>
+              <label htmlFor={`${uid}-phone`} className="block text-sm font-medium mb-1">Phone number (E.164, e.g. +9198...)</label>
               <input
+                id={`${uid}-phone`}
                 type="tel"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 disabled={!profileLoaded}
-                aria-label="Phone number in E.164 format"
                 placeholder="+9198XXXXXXXX"
                 className="h-9 w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] disabled:opacity-50"
               />
@@ -277,7 +283,7 @@ export default function SettingsPage() {
         <h2 className="text-lg font-semibold">AI & Integrations</h2>
         <div className="mt-4 space-y-3">
           <div>
-            <label className="block text-sm font-medium mb-1">LLM Provider</label>
+            <h3 className="block text-sm font-medium mb-1">LLM Provider</h3>
             <p className="text-sm text-[hsl(var(--muted-foreground))]">
               {settings.integrations.llm_provider === "none"
                 ? "AI features disabled"
@@ -285,7 +291,7 @@ export default function SettingsPage() {
             </p>
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Market Data</label>
+            <h3 className="block text-sm font-medium mb-1">Market Data</h3>
             <p className="text-sm text-[hsl(var(--muted-foreground))]">
               Refresh interval: {settings.market.price_refresh_interval} minutes | Default chart: {settings.market.default_chart_days} days
             </p>

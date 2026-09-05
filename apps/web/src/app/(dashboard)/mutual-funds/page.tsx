@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useId, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import {
   Landmark,
@@ -125,6 +125,8 @@ interface ExpenseAnalysis {
 /* ------------------------------------------------------------------ */
 
 export default function MutualFundsPage() {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   const { activePortfolioId } = usePortfolioStore();
   const [funds, setFunds] = useState<MutualFund[]>([]);
   const [summary, setSummary] = useState<MutualFundSummary | null>(null);
@@ -773,10 +775,11 @@ export default function MutualFundsPage() {
                 {/* Scheme search */}
                 {!selectedScheme ? (
                   <div className="space-y-2">
-                    <label className="text-sm font-medium">Search Scheme</label>
+                    <label htmlFor={`${uid}-scheme`} className="text-sm font-medium">Search Scheme</label>
                     <div className="relative">
-                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
+                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" aria-hidden="true" />
                       <input
+                        id={`${uid}-scheme`}
                         type="text"
                         placeholder="Type to search MF schemes..."
                         value={schemeSearch}
@@ -827,13 +830,14 @@ export default function MutualFundsPage() {
 
                 {/* Folio */}
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">
+                  <label htmlFor={`${uid}-folio`} className="text-sm font-medium">
                     Folio Number{" "}
                     <span className="text-[hsl(var(--muted-foreground))]">
                       (optional)
                     </span>
                   </label>
                   <input
+                    id={`${uid}-folio`}
                     type="text"
                     value={formFolio}
                     onChange={(e) => setFormFolio(e.target.value)}
@@ -844,8 +848,9 @@ export default function MutualFundsPage() {
 
                 {/* Units */}
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">Units</label>
+                  <label htmlFor={`${uid}-units`} className="text-sm font-medium">Units</label>
                   <input
+                    id={`${uid}-units`}
                     type="number"
                     step="0.001"
                     value={formUnits}
@@ -857,8 +862,9 @@ export default function MutualFundsPage() {
 
                 {/* NAV */}
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">NAV (Purchase)</label>
+                  <label htmlFor={`${uid}-nav`} className="text-sm font-medium">NAV (Purchase)</label>
                   <input
+                    id={`${uid}-nav`}
                     type="number"
                     step="0.01"
                     value={formNav}
@@ -870,8 +876,9 @@ export default function MutualFundsPage() {
 
                 {/* Invested amount */}
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">Invested Amount</label>
+                  <label htmlFor={`${uid}-invested`} className="text-sm font-medium">Invested Amount</label>
                   <input
+                    id={`${uid}-invested`}
                     type="number"
                     step="0.01"
                     value={formInvested}

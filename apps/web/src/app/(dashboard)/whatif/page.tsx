@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   Lightbulb,
   Search,
@@ -60,6 +60,8 @@ interface FormData {
 /* ------------------------------------------------------------------ */
 
 export default function WhatIfPage() {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   const [form, setForm] = useState<FormData>({
     symbol: "",
     exchange: "NSE",
@@ -129,12 +131,13 @@ export default function WhatIfPage() {
           <form onSubmit={handleSimulate} className="space-y-4">
             {/* Stock Symbol */}
             <div>
-              <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <label htmlFor={`${uid}-symbol`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 Stock Symbol
               </label>
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" aria-hidden="true" />
                 <input
+                  id={`${uid}-symbol`}
                   type="text"
                   required
                   value={form.symbol}
@@ -147,10 +150,11 @@ export default function WhatIfPage() {
 
             {/* Exchange */}
             <div>
-              <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <label htmlFor={`${uid}-exchange`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 Exchange
               </label>
               <select
+                id={`${uid}-exchange`}
                 value={form.exchange}
                 onChange={(e) => setForm({ ...form, exchange: e.target.value })}
                 className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
@@ -163,12 +167,13 @@ export default function WhatIfPage() {
 
             {/* Investment Amount */}
             <div>
-              <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <label htmlFor={`${uid}-amount`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 Investment Amount
               </label>
               <div className="relative">
-                <IndianRupee className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
+                <IndianRupee className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" aria-hidden="true" />
                 <input
+                  id={`${uid}-amount`}
                   type="number"
                   required
                   min="1"
@@ -184,10 +189,11 @@ export default function WhatIfPage() {
             {/* Date Range */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+                <label htmlFor={`${uid}-start`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
                   Start Date
                 </label>
                 <input
+                  id={`${uid}-start`}
                   type="date"
                   required
                   value={form.start_date}
@@ -196,10 +202,11 @@ export default function WhatIfPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+                <label htmlFor={`${uid}-end`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
                   End Date
                 </label>
                 <input
+                  id={`${uid}-end`}
                   type="date"
                   required
                   value={form.end_date}

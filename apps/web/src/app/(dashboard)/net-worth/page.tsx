@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useId, useState, useCallback, useRef } from "react";
 import {
   Wallet,
   Plus,
@@ -208,6 +208,8 @@ function AddAssetModal({
   onSubmit: (data: AssetFormData) => void;
   saving: boolean;
 }) {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   const [form, setForm] = useState<AssetFormData>(emptyForm);
 
   useEffect(() => {
@@ -255,10 +257,11 @@ function AddAssetModal({
           >
             {/* Asset Type */}
             <div>
-              <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <label htmlFor={`${uid}-type`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 Asset Type
               </label>
               <select
+                id={`${uid}-type`}
                 value={form.asset_type}
                 onChange={(e) =>
                   setForm({ ...form, asset_type: e.target.value as AssetType, metadata: {} })
@@ -275,10 +278,11 @@ function AddAssetModal({
 
             {/* Name */}
             <div>
-              <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <label htmlFor={`${uid}-name`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 Name
               </label>
               <input
+                id={`${uid}-name`}
                 type="text"
                 required
                 value={form.name}
@@ -290,10 +294,11 @@ function AddAssetModal({
 
             {/* Value */}
             <div>
-              <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+              <label htmlFor={`${uid}-value`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
                 Current Value
               </label>
               <input
+                id={`${uid}-value`}
                 type="number"
                 required
                 min="0"
@@ -308,11 +313,12 @@ function AddAssetModal({
             {/* Optional metadata fields based on type */}
             {metaFields.map((field) => (
               <div key={field.key}>
-                <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+                <label htmlFor={`${uid}-meta-${field.key}`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
                   {field.label}{" "}
                   <span className="text-xs text-[hsl(var(--muted-foreground))]/60">(optional)</span>
                 </label>
                 <input
+                  id={`${uid}-meta-${field.key}`}
                   type={field.type}
                   value={form.metadata[field.key] || ""}
                   onChange={(e) =>

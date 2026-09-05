@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useState, type FormEvent } from "react";
 import {
   Target,
   Plus,
@@ -167,6 +167,8 @@ function GoalFormModal({
   portfolios: { id: number; name: string }[];
   saving: boolean;
 }) {
+  // Unique per-instance prefix so every label can point at its own control.
+  const uid = useId();
   const [form, setForm] = useState<GoalFormData>(initialData);
 
   useEffect(() => {
@@ -189,10 +191,11 @@ function GoalFormModal({
       >
         {/* Name */}
         <div>
-          <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+          <label htmlFor={`${uid}-name`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
             Goal Name
           </label>
           <input
+            id={`${uid}-name`}
             type="text"
             required
             value={form.name}
@@ -204,10 +207,11 @@ function GoalFormModal({
 
         {/* Target Amount */}
         <div>
-          <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+          <label htmlFor={`${uid}-amount`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
             Target Amount
           </label>
           <input
+            id={`${uid}-amount`}
             type="number"
             required
             min="1"
@@ -221,10 +225,11 @@ function GoalFormModal({
 
         {/* Target Date */}
         <div>
-          <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+          <label htmlFor={`${uid}-date`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
             Target Date
           </label>
           <input
+            id={`${uid}-date`}
             type="date"
             required
             value={form.target_date}
@@ -235,10 +240,11 @@ function GoalFormModal({
 
         {/* Category */}
         <div>
-          <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+          <label htmlFor={`${uid}-category`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
             Category
           </label>
           <select
+            id={`${uid}-category`}
             value={form.category}
             onChange={(e) => setForm({ ...form, category: e.target.value as GoalCategory })}
             className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/50"
@@ -253,10 +259,11 @@ function GoalFormModal({
 
         {/* Linked Portfolio */}
         <div>
-          <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+          <label htmlFor={`${uid}-portfolio`} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
             Linked Portfolio (optional)
           </label>
           <select
+            id={`${uid}-portfolio`}
             value={form.linked_portfolio_id}
             onChange={(e) =>
               setForm({ ...form, linked_portfolio_id: e.target.value })
@@ -318,13 +325,16 @@ function NumberField({
   min?: string;
   step?: string;
 }) {
+  // Unique per-instance prefix so the label points at this field's own input.
+  const inputId = useId();
   return (
     <div>
-      <label className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
+      <label htmlFor={inputId} className="block text-sm font-medium text-[hsl(var(--muted-foreground))] mb-1">
         {label}
       </label>
       <div className="relative">
         <input
+          id={inputId}
           type="number"
           inputMode="decimal"
           min={min}

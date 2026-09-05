@@ -44,30 +44,43 @@ def _public_price_payload(update: dict) -> dict:
 
 
 async def _broadcast_updates(updates: list[dict]) -> int:
-    """Push one ``price_update`` message per refreshed symbol.
+    """Push one ``price_update`` message per refreshed listing.
 
     Broadcasting is best effort: the DB write has already been committed by the
     time this runs, so a WebSocket failure must never fail (or roll back) the
-    refresh. Each symbol is sent at most once — a symbol that is both held and
-    watchlisted would otherwise be delivered twice — and each payload carries
-    only symbol-level, user-agnostic fields (see ``_PUBLIC_PRICE_FIELDS``).
+    refresh. Each payload carries only symbol-level, user-agnostic fields (see
+    ``_PUBLIC_PRICE_FIELDS``).
+
+    Dedup — and delivery — are keyed on ``(symbol, exchange)``, not the symbol
+    alone. A ticker is not unique: the same symbol trades on NSE and on XETRA
+    at different prices in different currencies. Collapsing on the symbol threw
+    the second listing's update away entirely, so those holders' prices never
+    moved, while the one update that did go out was fanned out to them anyway —
+    the *other* exchange's price on their screen. Genuine duplicates (a symbol
+    that is both held and watchlisted, on the same exchange) are still sent
+    once.
     """
     sent = 0
-    seen: set[str] = set()
+    seen: set[tuple[str, str | None]] = set()
     for update in updates:
         symbol = update.get("symbol")
-        if not symbol or symbol in seen:
+        if not symbol:
             continue
-        seen.add(symbol)
+        exchange = update.get("exchange")
+        key = (symbol, exchange)
+        if key in seen:
+            continue
+        seen.add(key)
         try:
             await manager.broadcast_price_update(
-                symbol, _public_price_payload(update)
+                symbol, _public_price_payload(update), exchange=exchange
             )
             sent += 1
         except Exception:
             logger.warning(
-                "fetch_prices_task: price_update broadcast failed for %s",
+                "fetch_prices_task: price_update broadcast failed for %s on %s",
                 symbol,
+                exchange or "an unknown exchange",
                 exc_info=True,
             )
     return sent

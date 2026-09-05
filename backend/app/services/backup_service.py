@@ -21,6 +21,7 @@ from app.models.portfolio import Portfolio
 from app.models.tax_record import TaxRecord
 from app.models.transaction import Transaction
 from app.services.portfolio_service import calculate_cumulative_holding
+from app.utils.numbers import round4, round4_variants
 
 logger = logging.getLogger(__name__)
 
@@ -245,17 +246,6 @@ def _parse_date_str(s: str | None) -> date | None:
         return None
 
 
-def _round4(value: object) -> float | None:
-    """Round a numeric to 4 decimals for natural-key comparison (Numeric
-    columns store scale-4 values); None stays None."""
-    if value is None:
-        return None
-    try:
-        return round(float(value), 4)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-
-
 def _custom_fields(value: object) -> dict:
     """Coerce a backup's ``custom_fields`` blob to the dict the column stores.
 
@@ -412,21 +402,34 @@ async def import_portfolio_json(
     # Every per-portfolio backup embeds ALL of the user's goals/assets/tax
     # records; re-inserting them unconditionally multiplies user-level data
     # on each restore.
+    #
+    # Money fields in these keys are normalised with the shared scale-4
+    # helpers: the STORED side (read back out of a Numeric(18, 4) column) with
+    # the canonical ``round4``, and the INCOMING side — a full-precision float
+    # straight out of the backup JSON — with every ``round4_variants`` form, so
+    # a value sitting exactly on a rounding tie still matches whichever way the
+    # backend happened to store it (Postgres rounds half away from zero, SQLite
+    # half-to-even on the binary double). Looking the incoming value up under
+    # one form only is how a restore silently re-inserted such a row.
 
     # Goals (natural key: name + target_amount)
     existing_goals = (
         await db.execute(select(Goal).where(Goal.user_id == user_id))
     ).scalars().all()
-    goal_keys: set[tuple[str, float | None]] = {
-        (g.name, _round4(g.target_amount)) for g in existing_goals
+    goal_keys: set[tuple[str, object]] = {
+        (g.name, round4(g.target_amount)) for g in existing_goals
     }
 
     for g_data in data.get("goals", []):
-        goal_key = (str(g_data["name"]), _round4(g_data["target_amount"]))
-        if goal_key in goal_keys:
+        goal_name = str(g_data["name"])
+        goal_candidates = [
+            (goal_name, amount)
+            for amount in round4_variants(g_data["target_amount"])
+        ]
+        if any(key in goal_keys for key in goal_candidates):
             counts["goals_skipped"] += 1
             continue
-        goal_keys.add(goal_key)
+        goal_keys.add(goal_candidates[0])
         goal = Goal(
             user_id=user_id,
             name=g_data["name"],
@@ -477,30 +480,33 @@ async def import_portfolio_json(
     existing_tax = (
         await db.execute(select(TaxRecord).where(TaxRecord.user_id == user_id))
     ).scalars().all()
-    tax_keys: set[tuple[str, date | None, date, float | None, float | None]] = {
+    tax_keys: set[tuple[object, ...]] = {
         (
             tr.financial_year,
             tr.sale_date,
             tr.purchase_date,
-            _round4(tr.purchase_price),
-            _round4(tr.gain_amount),
+            round4(tr.purchase_price),
+            round4(tr.gain_amount),
         )
         for tr in existing_tax
     }
 
     for tr_data in data.get("tax_records", []):
         purchase_date = _parse_date_str(tr_data["purchase_date"]) or date.today()
-        tax_key = (
+        tax_head = (
             str(tr_data["financial_year"]),
             _parse_date_str(tr_data.get("sale_date")),
             purchase_date,
-            _round4(tr_data["purchase_price"]),
-            _round4(tr_data.get("gain_amount")),
         )
-        if tax_key in tax_keys:
+        tax_candidates = [
+            (*tax_head, purchase_price, gain)
+            for purchase_price in round4_variants(tr_data["purchase_price"])
+            for gain in round4_variants(tr_data.get("gain_amount"))
+        ]
+        if any(key in tax_keys for key in tax_candidates):
             counts["tax_records_skipped"] += 1
             continue
-        tax_keys.add(tax_key)
+        tax_keys.add(tax_candidates[0])
         tr = TaxRecord(
             user_id=user_id,
             financial_year=tr_data["financial_year"],

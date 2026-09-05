@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import Link from "next/link";
-import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ChevronDown, FileText, Database, FileJson, Landmark, Banknote, Receipt, Download } from "lucide-react";
+import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, AlertTriangle, ChevronDown, FileText, Database, FileJson, Landmark, Banknote, Receipt, Download } from "lucide-react";
 import { api, download } from "@/lib/api-client";
 import { usePortfolioStore } from "@/stores/portfolio-store";
 import { motion, AnimatePresence } from "framer-motion";
@@ -91,11 +91,155 @@ function getTemplateEndpoint(dataType: DataType): string | null {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/*  Import result rendering                                            */
+/* ------------------------------------------------------------------ */
+
+/** A value an import endpoint can put in its JSON summary. Counts are
+ * numbers, `warning` is a sentence, and `tax_records_skipped_detail` is a
+ * list of one-line explanations — one per row the importer refused to
+ * store. Anything array-shaped was previously dropped on the floor here,
+ * and before that React concatenated its items into one run-on line. */
+type ResultValue = number | string | string[];
+
+/** `status: "success"` is protocol echo, not information about the file. */
+const HIDDEN_RESULT_KEYS = new Set(["status"]);
+
+/** Keys whose generic un-underscoring reads badly, or that mean something
+ * more specific than the raw name suggests. */
+const RESULT_LABELS: Record<string, string> = {
+  rows_read: "Rows in file",
+  rows_parsed: "Rows accepted",
+  rows_skipped: "Rows dropped",
+  warning: "Warning",
+  tax_records_skipped_detail: "Skipped rows",
+  fno_positions: "F&O positions",
+};
+
+function humaniseResultKey(key: string): string {
+  const label = RESULT_LABELS[key];
+  if (label) return label;
+  const words = key.replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Counts that report something the importer did NOT store. */
+function isSkipCount(key: string): boolean {
+  return key.endsWith("_skipped") || key.endsWith("_dropped");
+}
+
+/** Row accounting reads in file → accepted → dropped order; everything else
+ * keeps the order the backend sent it in (Array#sort is stable). */
+const ROW_KEY_ORDER = ["rows_read", "rows_parsed", "rows_skipped"];
+
+function orderCounts(entries: [string, number][]): [string, number][] {
+  return [...entries].sort(([a], [b]) => {
+    const ia = ROW_KEY_ORDER.indexOf(a);
+    const ib = ROW_KEY_ORDER.indexOf(b);
+    if (ia === -1 && ib === -1) return 0;
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+}
+
+/** True when the file did not land whole: rows the parser could not read,
+ * rows the importer refused as already-imported duplicates, or a warning
+ * from the backend. Worth its own headline — a green tick over "10 of 400
+ * rows" is how a half-imported statement gets mistaken for a finished one,
+ * and a re-uploaded tax CSV that was correctly skipped looks identical to a
+ * fresh one that actually landed. */
+function isPartialImport(result: Record<string, ResultValue>): boolean {
+  return Object.entries(result).some(([k, v]) => {
+    if (typeof v === "string") return k === "warning" && v.length > 0;
+    if (typeof v === "number") return isSkipCount(k) && v > 0;
+    return Array.isArray(v) && v.length > 0;
+  });
+}
+
+/** The result summary, split by shape: sentences as callouts, counts as a
+ * labelled list, and string lists as actual lists — one row per line. */
+function ImportResultDetails({ result }: { result: Record<string, ResultValue> }) {
+  const entries = Object.entries(result);
+  const notes = entries.filter(
+    (e): e is [string, string] => typeof e[1] === "string" && e[1].length > 0
+  );
+  const counts = orderCounts(
+    entries.filter((e): e is [string, number] => typeof e[1] === "number")
+  );
+  const lists = entries.filter(
+    (e): e is [string, string[]] => Array.isArray(e[1]) && e[1].length > 0
+  );
+
+  return (
+    <div className="mt-4 w-full max-w-xl space-y-3 text-left">
+      {notes.map(([k, note]) => (
+        <p
+          key={k}
+          className={`rounded-md border px-3 py-2 text-sm ${
+            k === "warning"
+              ? "border-amber-500/40 bg-amber-500/10 text-amber-600"
+              : "border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))]"
+          }`}
+        >
+          {note}
+        </p>
+      ))}
+
+      {counts.length > 0 && (
+        <dl className="divide-y divide-[hsl(var(--border))] overflow-hidden rounded-md border border-[hsl(var(--border))]">
+          {counts.map(([k, v]) => {
+            const flagged = isSkipCount(k) && v > 0;
+            return (
+              <div
+                key={k}
+                className="flex items-baseline justify-between gap-4 px-3 py-2 text-sm"
+              >
+                <dt className="text-[hsl(var(--muted-foreground))]">
+                  {humaniseResultKey(k)}
+                </dt>
+                <dd
+                  className={`font-mono font-medium ${
+                    flagged ? "text-amber-600" : "text-[hsl(var(--foreground))]"
+                  }`}
+                >
+                  {v}
+                </dd>
+              </div>
+            );
+          })}
+        </dl>
+      )}
+
+      {lists.map(([k, items]) => (
+        <div
+          key={k}
+          className="overflow-hidden rounded-md border border-[hsl(var(--border))]"
+        >
+          <p className="border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-3 py-1.5 text-xs font-medium text-[hsl(var(--muted-foreground))]">
+            {humaniseResultKey(k)} ({items.length})
+          </p>
+          <ul className="max-h-48 space-y-1.5 overflow-y-auto px-3 py-2">
+            {items.map((line, i) => (
+              <li key={`${k}-${i}`} className="flex gap-2 text-xs">
+                <span aria-hidden="true" className="text-[hsl(var(--muted-foreground))]">
+                  •
+                </span>
+                <span className="break-words font-mono">{line}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function ImportPage() {
   const { activePortfolioId, fetchPortfolios, refreshActive } = usePortfolioStore();
   const [status, setStatus] = useState<ImportStatus>("idle");
   const [error, setError] = useState("");
-  const [result, setResult] = useState<Record<string, number> | null>(null);
+  const [result, setResult] = useState<Record<string, ResultValue> | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [dataType, setDataType] = useState<DataType>("holdings");
   const [typeOpen, setTypeOpen] = useState(false);
@@ -151,12 +295,18 @@ export default function ImportPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const res = await api.upload<Record<string, number | string>>(endpoint, formData);
-      const counts: Record<string, number> = {};
+      const res = await api.upload<Record<string, unknown>>(endpoint, formData);
+      // Keep counts, sentences AND the per-row explanation lists. Dropping
+      // everything non-numeric here is what hid `warning` (the "10 of 400
+      // rows were skipped" notice) and `tax_records_skipped_detail` (which
+      // rows a repeat tax upload refused, and why) behind a green tick.
+      const summary: Record<string, ResultValue> = {};
       for (const [k, v] of Object.entries(res)) {
-        if (typeof v === "number") counts[k] = v;
+        if (HIDDEN_RESULT_KEYS.has(k)) continue;
+        if (typeof v === "number" || typeof v === "string") summary[k] = v;
+        else if (Array.isArray(v)) summary[k] = v.map((item) => String(item));
       }
-      setResult(counts);
+      setResult(summary);
       setStatus("success");
       // The import mutated the portfolio server-side; nothing else observes
       // that, so pull the holdings back in. fetchPortfolios() alone is not
@@ -193,11 +343,17 @@ export default function ImportPage() {
       formData.append("file", file);
       const res = await api.upload<Record<string, number | string>>(endpoint, formData);
       const parts = Object.entries(res)
-        .filter(([, v]) => typeof v === "number")
-        .map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`);
+        .filter(([k, v]) => typeof v === "number" && !HIDDEN_RESULT_KEYS.has(k))
+        .map(([k, v]) => `${humaniseResultKey(k).toLowerCase()}: ${v}`);
       toast.success(
         parts.length > 0 ? `Import complete — ${parts.join(", ")}` : "Import complete"
       );
+      // A statement can be partly rejected (cash lines that are payees, not
+      // securities). The counts alone never say so, so raise the backend's
+      // explanation rather than let a green toast imply a whole file landed.
+      if (typeof res.warning === "string" && res.warning) {
+        toast(res.warning, { icon: "⚠️", duration: 8000 });
+      }
       fetchPortfolios();
       await refreshActive();
     } catch (err) {
@@ -220,6 +376,7 @@ export default function ImportPage() {
   }
 
   const examples = COLUMN_EXAMPLES[dataType];
+  const partialImport = result !== null && isPartialImport(result);
 
   return (
     <div className="space-y-6">
@@ -361,14 +518,22 @@ export default function ImportPage() {
           )}
 
           {status === "success" && result && (
-            <motion.div key="success" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center">
-              <CheckCircle2 className="h-12 w-12 text-[hsl(var(--profit))]" />
-              <p className="mt-4 text-lg font-medium">Import Successful!</p>
-              <div className="mt-2 text-sm text-[hsl(var(--muted-foreground))]">
-                {Object.entries(result).filter(([k]) => k !== "rows_parsed").map(([k, v]) => (
-                  <p key={k}>{k.replace(/_/g, " ")}: <span className="font-medium text-[hsl(var(--foreground))]">{v}</span></p>
-                ))}
-              </div>
+            <motion.div key="success" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} className="flex w-full flex-col items-center">
+              {partialImport ? (
+                <AlertTriangle className="h-12 w-12 text-amber-500" />
+              ) : (
+                <CheckCircle2 className="h-12 w-12 text-[hsl(var(--profit))]" />
+              )}
+              <p className="mt-4 text-lg font-medium">
+                {partialImport ? "Imported — with rows skipped" : "Import successful"}
+              </p>
+              {partialImport && (
+                <p className="mt-1 max-w-md text-center text-sm text-[hsl(var(--muted-foreground))]">
+                  Not everything in the file was stored. The breakdown below says
+                  what was skipped and why.
+                </p>
+              )}
+              <ImportResultDetails result={result} />
               <button
                 onClick={() => { setStatus("idle"); setResult(null); }}
                 className="mt-4 rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm font-medium text-[hsl(var(--primary-foreground))]"
