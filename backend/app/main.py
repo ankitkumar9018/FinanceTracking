@@ -118,6 +118,20 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+
+# Chromium / WebView2 "Private Network Access": a page fetching a LOCAL address
+# (127.0.0.1) sends a preflight carrying Access-Control-Request-Private-Network
+# and refuses to proceed unless the reply grants it. The Windows desktop shell
+# is exactly that case — the bundled UI on tauri.localhost calling the sidecar
+# on loopback — and without this header every request was dropped before it
+# reached the server (the log showed zero webview requests in four minutes).
+@app.middleware("http")
+async def _allow_private_network(request, call_next):
+    response = await call_next(request)
+    if request.headers.get("access-control-request-private-network", "").lower() == "true":
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
+
 # ── Routes ───────────────────────────────────────────────────────────────
 from app.api.v1.router import api_v1_router  # noqa: E402
 from app.api.ws.alert_stream import router as ws_alert_router  # noqa: E402

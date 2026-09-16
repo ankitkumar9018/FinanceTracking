@@ -40,11 +40,11 @@ def _run_migrations() -> None:
        revision that still runs and stamping past only the ones that
        collide. The additive reconcile below fills any remaining pieces.
     """
-    from alembic.config import Config
     from sqlalchemy import create_engine, inspect
     from sqlalchemy.exc import OperationalError
 
     from alembic import command
+    from alembic.config import Config
 
     # Resolve through app settings (which read backend/.env) rather than raw
     # os.environ, so scripts and `python -m app` migrate the SAME database the
@@ -142,12 +142,12 @@ def _step_past_collisions(cfg: "Config", sync_url: str) -> None:
     (``iterate_revisions`` yields head-down, exclusive of the lower bound,
     making its last element the immediate next step).
     """
-    from alembic.runtime.migration import MigrationContext
-    from alembic.script import ScriptDirectory
     from sqlalchemy import create_engine
     from sqlalchemy.exc import OperationalError
 
     from alembic import command
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(cfg)
     head = script.get_current_head()
