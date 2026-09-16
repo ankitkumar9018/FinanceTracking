@@ -74,6 +74,47 @@ fn get_api_port(state: tauri::State<'_, AppState>) -> u16 {
 /// killing only the tracked PID leaves that child orphaned, still holding the
 /// port. Walking `pgrep -P` keeps the blast radius provably inside our own
 /// process tree (never a name/port sweep that could hit another app).
+
+// ── Diagnostic log file ─────────────────────────────────────────────────────
+// Windows release builds have NO console (windows_subsystem = "windows"), so
+// every println!/eprintln! below — the sidecar's own output, the port chosen,
+// navigation, errors — simply vanished. A white screen on Windows left nothing
+// to look at. Everything is now also appended to <app_data>/desktop.log.
+
+macro_rules! dlog_p { ($($arg:tt)*) => { dlog(&format!($($arg)*)) }; }
+macro_rules! dlog_e { ($($arg:tt)*) => { dlog(&format!($($arg)*)) }; }
+
+static LOG_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+fn init_log(app_data_dir: &std::path::Path) {
+    let path = app_data_dir.join("desktop.log");
+    // Keep the file from growing forever: start fresh past ~2 MB.
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > 2_000_000 {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    let _ = LOG_PATH.set(path);
+    dlog(&format!("==== FinanceTracker desktop start ({} {}) ====",
+        std::env::consts::OS, std::env::consts::ARCH));
+}
+
+/// Log to stdout AND the diagnostic file (best-effort; never fails the app).
+fn dlog(msg: &str) {
+    println!("{}", msg);
+    if let Some(path) = LOG_PATH.get() {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = writeln!(f, "[{}] {}", ts, msg);
+        }
+    }
+}
+
+
 #[cfg(not(target_os = "windows"))]
 fn descendants_of(pid: u32) -> Vec<u32> {
     let mut found = Vec::new();
@@ -238,7 +279,7 @@ fn reap_stale_sidecars(app_data_dir: &std::path::Path) {
         if process_matches(pid, "financetracker-backend") != Some(true) {
             continue;
         }
-        eprintln!(
+        dlog_e!(
             "[sidecar] reaping orphaned backend from a previous run (pid {})",
             pid
         );
@@ -372,12 +413,29 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
+        // The decisive white-screen diagnostic. If "finished" never appears in
+        // desktop.log, the bundled frontend is not being served (asset protocol
+        // / missing dist); if it does and the window is still blank, the page
+        // loaded but its JavaScript failed — inspect via right-click.
+        .on_page_load(|webview, payload| {
+            let state = match payload.event() {
+                tauri::webview::PageLoadEvent::Started => "started",
+                tauri::webview::PageLoadEvent::Finished => "finished",
+            };
+            dlog(&format!(
+                "[webview] page load {}: {} (label={})",
+                state,
+                payload.url(),
+                webview.label()
+            ));
+        })
         .setup(|app| {
             let app_data_dir = app
                 .path()
                 .app_data_dir()
                 .expect("failed to resolve app data dir");
             std::fs::create_dir_all(&app_data_dir).ok();
+            init_log(&app_data_dir);
 
             // A crash or force-quit can leave last run's backend alive, still
             // holding its port. Reap it now — strictly by a PID we recorded
@@ -388,7 +446,7 @@ pub fn run() {
             let db_path = app_data_dir.join("finance.db");
 
             let port = find_port();
-            println!("Backend port: {}, DB: {:?}", port, db_path);
+            dlog_p!("Backend port: {}, DB: {:?}", port, db_path);
 
             // TOCTOU guard: find_port() releases the port immediately, and the
             // onefile sidecar takes 40-120s to extract before uvicorn binds —
@@ -401,7 +459,7 @@ pub fn run() {
             let api_port = Arc::new(AtomicU16::new(port));
 
             let is_first_launch = !db_path.exists();
-            println!("DB path: {:?}, exists: {}, first_launch: {}", db_path, db_path.exists(), is_first_launch);
+            dlog_p!("DB path: {:?}, exists: {}, first_launch: {}", db_path, db_path.exists(), is_first_launch);
 
             // Always pass --seed. The seed function checks if demo user exists
             // and skips if already present. This ensures the demo user is always
@@ -438,7 +496,7 @@ pub fn run() {
                             match event {
                                 CommandEvent::Stdout(line) => {
                                     let text = String::from_utf8_lossy(&line);
-                                    println!("[backend] {}", text);
+                                    dlog_p!("[backend] {}", text);
                                     // The backend announces a port move as:
                                     //   "[startup] Port {req} is in use — serving
                                     //    on free port {port} instead."
@@ -455,7 +513,7 @@ pub fn run() {
                                             let old =
                                                 pump_port.swap(new_port, Ordering::SeqCst);
                                             if old != new_port {
-                                                println!(
+                                                dlog_p!(
                                                     "[desktop] port {} was taken during startup; following backend to port {}",
                                                     old, new_port
                                                 );
@@ -464,10 +522,10 @@ pub fn run() {
                                     }
                                 }
                                 CommandEvent::Stderr(line) => {
-                                    eprintln!("[backend] {}", String::from_utf8_lossy(&line));
+                                    dlog_e!("[backend] {}", String::from_utf8_lossy(&line));
                                 }
                                 CommandEvent::Terminated(payload) => {
-                                    eprintln!("[backend] terminated: {:?}", payload.code);
+                                    dlog_e!("[backend] terminated: {:?}", payload.code);
                                     break;
                                 }
                                 _ => {}
@@ -477,7 +535,7 @@ pub fn run() {
                     (Some(child), None)
                 }
                 Err(e) => {
-                    eprintln!("ERROR: Failed to spawn backend sidecar: {}", e);
+                    dlog_e!("ERROR: Failed to spawn backend sidecar: {}", e);
                     (None, Some(e.to_string()))
                 }
             };
@@ -538,15 +596,6 @@ pub fn run() {
                 // during extraction, we navigate to where it actually is.
                 if wait_for_backend(&nav_port, 120) {
                     let port = nav_port.load(Ordering::SeqCst);
-                    // 127.0.0.1, not "localhost": the backend binds IPv4 only,
-                    // and the literal address avoids any resolver/ATS detour.
-                    let url = format!("http://127.0.0.1:{}/#ftport={}", port, port);
-                    println!("Backend ready -- navigating window to {}", url);
-                    // Use the NATIVE navigation API rather than injecting
-                    // `location.replace` via eval(). On an `about:blank` page the
-                    // injected script silently did nothing — the webview issued
-                    // no request at all and the window stayed blank — so errors
-                    // here are logged instead of being discarded.
                     // The UI is served from the BUNDLED frontend
                     // (tauri://localhost) — see frontendDist. We do NOT
                     // navigate the window to the backend's http origin:
@@ -555,9 +604,9 @@ pub fn run() {
                     // URL runs fine in Safari), leaving a blank window. The
                     // frontend discovers the API port over IPC (get_api_port)
                     // instead.
-                    println!("Backend ready on port {} -- UI served from bundle", port);
+                    dlog_p!("Backend ready on port {} -- UI served from bundle", port);
                 } else {
-                    eprintln!("WARNING: Backend did not respond within 120 seconds");
+                    dlog_e!("WARNING: Backend did not respond within 120 seconds");
                     let port = nav_port.load(Ordering::SeqCst);
                     let recovery = recovery_script(port);
                     let _ = window.eval(&recovery);

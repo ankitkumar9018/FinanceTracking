@@ -4,6 +4,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { ServiceWorkerRegister } from "@/components/providers/sw-register";
 import { ToasterProvider } from "@/components/providers/toaster-provider";
+import { BackendGate } from "@/components/providers/backend-gate";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -31,7 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.variable} font-sans antialiased`} suppressHydrationWarning>
         <ThemeProvider defaultTheme="dark" storageKey="ft-theme">
-          {children}
+          <BackendGate>{children}</BackendGate>
           <ToasterProvider />
           <ServiceWorkerRegister />
         </ThemeProvider>

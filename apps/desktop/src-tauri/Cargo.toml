@@ -8,7 +8,10 @@ description = "FinanceTracker Desktop App"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# "devtools": right-click -> Inspect Element in RELEASE builds. Windows release
+# builds hide the console (windows_subsystem = "windows"), so without this a
+# white screen on Windows is completely undiagnosable.
+tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }

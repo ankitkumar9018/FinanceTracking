@@ -1,3 +1,8 @@
+// NOTE: the desktop sidecar is launched with `--host 127.0.0.1` (IPv4 only), so
+// the address here is the literal 127.0.0.1, NOT "localhost". On Windows
+// "localhost" commonly resolves to ::1 first; the backend is not listening
+// there, and WebView2's fallback to IPv4 is neither guaranteed nor fast — the
+// symptom is "Load failed" on every request against a perfectly healthy server.
 /**
  * Resolves the backend API port for Tauri desktop builds.
  *
@@ -128,7 +133,7 @@ export async function resolveApiPort(): Promise<number | null> {
 
 export async function getApiBaseAsync(): Promise<string> {
   const port = await resolveApiPort();
-  if (port) return `http://localhost:${port}/api/v1`;
+  if (port) return `http://127.0.0.1:${port}/api/v1`;
   return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8420/api/v1";
 }
 
@@ -136,16 +141,16 @@ export function getApiBaseSync(): string {
   if (typeof window !== "undefined") {
     const w = window as unknown as Record<string, unknown>;
     if (typeof w.__FINANCETRACKER_API_PORT__ === "number") {
-      return `http://localhost:${w.__FINANCETRACKER_API_PORT__}/api/v1`;
+      return `http://127.0.0.1:${w.__FINANCETRACKER_API_PORT__}/api/v1`;
     }
     const urlPort = portFromUrlOrStorage();
-    if (urlPort) return `http://localhost:${urlPort}/api/v1`;
+    if (urlPort) return `http://127.0.0.1:${urlPort}/api/v1`;
   }
   return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8420/api/v1";
 }
 
 export async function getWsBaseAsync(): Promise<string> {
   const port = await resolveApiPort();
-  if (port) return `ws://localhost:${port}`;
+  if (port) return `ws://127.0.0.1:${port}`;
   return process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8420";
 }
