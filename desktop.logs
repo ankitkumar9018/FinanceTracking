@@ -1,0 +1,189 @@
+[1789522848] ==== FinanceTracker desktop start (windows x86_64) ====
+[1789522848] Backend port: 8420, DB: "C:\\Users\\clara\\AppData\\Roaming\\com.financetracker.app\\finance.db"
+[1789522848] DB path: "C:\\Users\\clara\\AppData\\Roaming\\com.financetracker.app\\finance.db", exists: true, first_launch: false
+[1789522855] [webview] page load started: http://tauri.localhost/ (label=main)
+[1789522855] [webview] page load finished: http://tauri.localhost/ (label=main)
+[1789522863] [backend] INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+
+[1789522863] [backend] INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+
+[1789522866] [backend] INFO  [app.main] Serving static frontend from C:\Users\clara\AppData\Local\Temp\_MEI159722\static
+
+[1789522866] [backend] INFO:     Started server process [20280]
+
+[1789522866] [backend] INFO:     Waiting for application startup.
+
+[1789522866] [backend] INFO  [app.main] Starting FinanceTracker v0.1.0
+
+[1789522866] [backend] INFO  [app.main] Log level: INFO (override with LOG_LEVEL)
+
+[1789522866] [backend] INFO  [app.main] Database ready (SQLite)
+
+[1789522869] [backend] INFO  [app.main] Service Status:
+
+[1789522869] [backend]   Database: SQLite \u2713
+
+[1789522869] [backend]   Redis:    Not available \u26a0 (using in-memory fallback)
+
+[1789522869] [backend]   Ollama:   Not available \u26a0 (AI features disabled)
+
+[1789522869] [backend]   Alerts:   No channels configured \u26a0 (in-app only)
+
+[1789522869] [backend] INFO  [app.tasks.celery_app] Celery not installed � background tasks will use APScheduler fallback
+
+[1789522869] [backend] INFO  [apscheduler.scheduler] Adding job tentatively -- it will be properly scheduled when the scheduler starts
+
+[1789522869] [backend] INFO  [apscheduler.scheduler] Adding job tentatively -- it will be properly scheduled when the scheduler starts
+
+[1789522869] [backend] INFO  [apscheduler.scheduler] Adding job tentatively -- it will be properly scheduled when the scheduler starts
+
+[1789522869] [backend] INFO  [apscheduler.scheduler] Added job "Fetch prices for all holdings" to job store "default"
+
+[1789522869] [backend] INFO  [apscheduler.scheduler] Added job "Check all active alerts" to job store "default"
+
+[1789522869] [backend] INFO  [apscheduler.scheduler] Added job "Generate scheduled AI portfolio digests" to job store "default"
+
+[1789522869] [backend] INFO  [apscheduler.scheduler] Scheduler started
+
+[1789522869] [backend] INFO  [app.tasks.scheduler] APScheduler started: price_interval=5m, alert_interval=60s
+
+[1789522869] [backend] INFO:     Application startup complete.
+
+[1789522869] [backend] INFO  [apscheduler.executors.default] Running job "Fetch prices for all holdings (trigger: interval[0:05:00], next run at: 2026-09-16 01:46:09 UTC)" (scheduled at 2026-09-16 01:41:09.276581+00:00)
+
+[1789522869] [backend] INFO  [app.tasks.fetch_prices] fetch_prices_task: starting price refresh
+
+[1789522869] [backend] INFO  [apscheduler.executors.default] Running job "Check all active alerts (trigger: interval[0:01:00], next run at: 2026-09-16 01:42:09 UTC)" (scheduled at 2026-09-16 01:41:09.277066+00:00)
+
+[1789522869] [backend] INFO  [app.tasks.check_alerts] check_alerts_task: starting alert evaluation
+
+[1789522869] [backend] INFO:     Uvicorn running on http://127.0.0.1:8420 (Press CTRL+C to quit)
+
+[1789522869] [backend] INFO  [apscheduler.executors.default] Job "Check all active alerts (trigger: interval[0:01:00], next run at: 2026-09-16 01:42:09 UTC)" executed successfully
+
+[1789522869] [backend] [migrate] Running alembic upgrade head...
+
+[1789522869] [backend] [migrate] Migrations complete.
+
+[1789522869] Backend ready on port 8420 -- UI served from bundle
+[1789522869] [backend] [seed] Demo user already exists, skipping.
+
+[1789522869] [backend] INFO:     127.0.0.1:57722 - "GET /health HTTP/1.1" 200 OK
+
+[1789522871] [backend] INFO  [app.tasks.fetch_prices] fetch_prices_task: updated=2, failed=0, total=2 (watchlist updated=0, failed=0, total=0)
+
+[1789522871] [backend] INFO  [apscheduler.executors.default] Job "Fetch prices for all holdings (trigger: interval[0:05:00], next run at: 2026-09-16 01:46:09 UTC)" executed successfully
+
+[1789522873] [backend] terminated: Some(1)
+[1789522966] ==== FinanceTracker desktop start (windows x86_64) ====
+[1789522966] Backend port: 8420, DB: "C:\\Users\\clara\\AppData\\Roaming\\com.financetracker.app\\finance.db"
+[1789522966] DB path: "C:\\Users\\clara\\AppData\\Roaming\\com.financetracker.app\\finance.db", exists: true, first_launch: false
+[1789522967] [webview] page load started: http://tauri.localhost/ (label=main)
+[1789522967] [webview] page load finished: http://tauri.localhost/ (label=main)
+[1789522976] [backend] INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+
+[1789522976] [backend] INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+
+[1789522979] [backend] INFO  [app.main] Serving static frontend from C:\Users\clara\AppData\Local\Temp\_MEI210202\static
+
+[1789522979] [backend] INFO:     Started server process [11872]
+
+[1789522979] [backend] INFO:     Waiting for application startup.
+
+[1789522979] [backend] INFO  [app.main] Starting FinanceTracker v0.1.0
+
+[1789522979] [backend] INFO  [app.main] Log level: INFO (override with LOG_LEVEL)
+
+[1789522979] [backend] INFO  [app.main] Database ready (SQLite)
+
+[1789522982] [backend] INFO  [app.main] Service Status:
+
+[1789522982] [backend]   Database: SQLite \u2713
+
+[1789522982] [backend]   Redis:    Not available \u26a0 (using in-memory fallback)
+
+[1789522982] [backend]   Ollama:   Not available \u26a0 (AI features disabled)
+
+[1789522982] [backend]   Alerts:   No channels configured \u26a0 (in-app only)
+
+[1789522982] [backend] INFO  [app.tasks.celery_app] Celery not installed � background tasks will use APScheduler fallback
+
+[1789522982] [backend] INFO  [apscheduler.scheduler] Adding job tentatively -- it will be properly scheduled when the scheduler starts
+
+[1789522982] [backend] INFO  [apscheduler.scheduler] Adding job tentatively -- it will be properly scheduled when the scheduler starts
+
+[1789522982] [backend] INFO  [apscheduler.scheduler] Adding job tentatively -- it will be properly scheduled when the scheduler starts
+
+[1789522982] [backend] INFO  [apscheduler.scheduler] Added job "Fetch prices for all holdings" to job store "default"
+
+[1789522982] [backend] INFO  [apscheduler.scheduler] Added job "Check all active alerts" to job store "default"
+
+[1789522982] [backend] INFO  [apscheduler.scheduler] Added job "Generate scheduled AI portfolio digests" to job store "default"
+
+[1789522982] [backend] INFO  [apscheduler.scheduler] Scheduler started
+
+[1789522982] [backend] INFO  [app.tasks.scheduler] APScheduler started: price_interval=5m, alert_interval=60s
+
+[1789522982] [backend] INFO:     Application startup complete.
+
+[1789522982] [backend] INFO  [apscheduler.executors.default] Running job "Fetch prices for all holdings (trigger: interval[0:05:00], next run at: 2026-09-16 01:48:02 UTC)" (scheduled at 2026-09-16 01:43:02.729601+00:00)
+
+[1789522982] [backend] INFO  [app.tasks.fetch_prices] fetch_prices_task: starting price refresh
+
+[1789522982] [backend] INFO  [apscheduler.executors.default] Running job "Check all active alerts (trigger: interval[0:01:00], next run at: 2026-09-16 01:44:02 UTC)" (scheduled at 2026-09-16 01:43:02.730227+00:00)
+
+[1789522982] [backend] INFO  [app.tasks.check_alerts] check_alerts_task: starting alert evaluation
+
+[1789522982] [backend] INFO:     Uvicorn running on http://127.0.0.1:8420 (Press CTRL+C to quit)
+
+[1789522982] [backend] INFO  [apscheduler.executors.default] Job "Check all active alerts (trigger: interval[0:01:00], next run at: 2026-09-16 01:44:02 UTC)" executed successfully
+
+[1789522982] [backend] [migrate] Running alembic upgrade head...
+
+[1789522982] [backend] [migrate] Migrations complete.
+
+[1789522982] Backend ready on port 8420 -- UI served from bundle
+[1789522982] [backend] [seed] Demo user already exists, skipping.
+
+[1789522982] [backend] INFO:     127.0.0.1:60661 - "GET /health HTTP/1.1" 200 OK
+
+[1789522982] [backend] ERROR [asyncio] Exception in callback _ProactorBasePipeTransport._call_connection_lost()
+
+[1789522982] [backend] handle: <Handle _ProactorBasePipeTransport._call_connection_lost()>
+
+[1789522982] [backend] Traceback (most recent call last):
+
+[1789522982] [backend]   File "asyncio\events.py", line 89, in _run
+
+[1789522982] [backend]   File "asyncio\proactor_events.py", line 165, in _call_connection_lost
+
+[1789522982] [backend] ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
+
+[1789522984] [backend] INFO  [app.tasks.fetch_prices] fetch_prices_task: updated=2, failed=0, total=2 (watchlist updated=0, failed=0, total=0)
+
+[1789522984] [backend] INFO  [apscheduler.executors.default] Job "Fetch prices for all holdings (trigger: interval[0:05:00], next run at: 2026-09-16 01:48:02 UTC)" executed successfully
+
+[1789523042] [backend] INFO  [apscheduler.executors.default] Running job "Check all active alerts (trigger: interval[0:01:00], next run at: 2026-09-16 01:45:02 UTC)" (scheduled at 2026-09-16 01:44:02.730227+00:00)
+
+[1789523042] [backend] INFO  [app.tasks.check_alerts] check_alerts_task: starting alert evaluation
+
+[1789523042] [backend] INFO  [apscheduler.executors.default] Job "Check all active alerts (trigger: interval[0:01:00], next run at: 2026-09-16 01:45:02 UTC)" executed successfully
+
+[1789523102] [backend] INFO  [apscheduler.executors.default] Running job "Check all active alerts (trigger: interval[0:01:00], next run at: 2026-09-16 01:46:02 UTC)" (scheduled at 2026-09-16 01:45:02.730227+00:00)
+
+[1789523102] [backend] INFO  [app.tasks.check_alerts] check_alerts_task: starting alert evaluation
+
+[1789523102] [backend] INFO  [apscheduler.executors.default] Job "Check all active alerts (trigger: interval[0:01:00], next run at: 2026-09-16 01:46:02 UTC)" executed successfully
+
+[1789523162] [backend] INFO  [apscheduler.executors.default] Running job "Check all active alerts (trigger: interval[0:01:00], next run at: 2026-09-16 01:47:02 UTC)" (scheduled at 2026-09-16 01:46:02.730227+00:00)
+
+[1789523162] [backend] INFO  [app.tasks.check_alerts] check_alerts_task: starting alert evaluation
+
+[1789523162] [backend] INFO  [apscheduler.executors.default] Job "Check all active alerts (trigger: interval[0:01:00], next run at: 2026-09-16 01:47:02 UTC)" executed successfully
+
+[1789523222] [backend] INFO  [apscheduler.executors.default] Running job "Check all active alerts (trigger: interval[0:01:00], next run at: 2026-09-16 01:48:02 UTC)" (scheduled at 2026-09-16 01:47:02.730227+00:00)
+
+[1789523222] [backend] INFO  [app.tasks.check_alerts] check_alerts_task: starting alert evaluation
+
+[1789523222] [backend] INFO  [apscheduler.executors.default] Job "Check all active alerts (trigger: interval[0:01:00], next run at: 2026-09-16 01:48:02 UTC)" executed successfully
+
