@@ -86,13 +86,26 @@ macro_rules! dlog_e { ($($arg:tt)*) => { dlog(&format!($($arg)*)) }; }
 
 static LOG_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
+/// Size at which the log rotates. ~2 MB is roughly a week of continuous use
+/// (every HTTP request and scheduler tick is a line) — far more than any
+/// diagnosis needs, small enough to attach to a bug report.
+const LOG_ROTATE_BYTES: u64 = 2_000_000;
+
+/// Rotate `desktop.log` -> `desktop.log.1` (replacing any older `.1`).
+///
+/// ROTATE, never delete: the previous run's log is exactly what you want to
+/// read after a crash or a white screen, so one generation is always kept.
+/// Bounded to two files, so the total on disk can never exceed ~2x the cap.
+fn rotate_log(path: &std::path::Path) {
+    let prev = path.with_extension("log.1");
+    let _ = std::fs::remove_file(&prev);
+    let _ = std::fs::rename(path, &prev);
+}
+
 fn init_log(app_data_dir: &std::path::Path) {
     let path = app_data_dir.join("desktop.log");
-    // Keep the file from growing forever: start fresh past ~2 MB.
-    if let Ok(meta) = std::fs::metadata(&path) {
-        if meta.len() > 2_000_000 {
-            let _ = std::fs::remove_file(&path);
-        }
+    if std::fs::metadata(&path).map(|m| m.len() > LOG_ROTATE_BYTES).unwrap_or(false) {
+        rotate_log(&path);
     }
     let _ = LOG_PATH.set(path);
     dlog(&format!("==== FinanceTracker desktop start ({} {}) ====",
@@ -104,6 +117,12 @@ fn dlog(msg: &str) {
     println!("{}", msg);
     if let Some(path) = LOG_PATH.get() {
         use std::io::Write;
+        // Enforce the cap DURING the run too, not only at launch — a session
+        // left open for weeks would otherwise grow past it. The metadata call
+        // is a single stat; cheap next to the write it precedes.
+        if std::fs::metadata(path).map(|m| m.len() > LOG_ROTATE_BYTES).unwrap_or(false) {
+            rotate_log(path);
+        }
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -749,5 +768,52 @@ mod tests {
         // owner instance is still running.
         let name = own_process_name().expect("current_exe should resolve in tests");
         assert_eq!(process_matches(std::process::id(), &name), Some(true));
+    }
+}
+
+#[cfg(test)]
+mod log_rotation_tests {
+    use super::*;
+
+    #[test]
+    fn rotate_keeps_exactly_one_previous_generation() {
+        let dir = std::env::temp_dir().join(format!("ft-logtest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("desktop.log");
+        let prev = dir.join("desktop.log.1");
+
+        std::fs::write(&log, "run one").unwrap();
+        rotate_log(&log);
+        assert!(!log.exists(), "current log must be moved aside");
+        assert_eq!(std::fs::read_to_string(&prev).unwrap(), "run one");
+
+        // A second rotation REPLACES .1 rather than accumulating .2, .3, ...
+        std::fs::write(&log, "run two").unwrap();
+        rotate_log(&log);
+        assert_eq!(std::fs::read_to_string(&prev).unwrap(), "run two");
+        assert!(!dir.join("desktop.log.2").exists(), "must never grow a third file");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn oversized_log_is_rotated_not_deleted_at_init() {
+        let dir = std::env::temp_dir().join(format!("ft-loginit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("desktop.log");
+        // Just over the cap.
+        std::fs::write(&log, vec![b'x'; (LOG_ROTATE_BYTES + 1) as usize]).unwrap();
+
+        // init_log sets a process-global OnceLock, so exercise only the size
+        // decision it makes, the same way it makes it.
+        let oversized = std::fs::metadata(&log).map(|m| m.len() > LOG_ROTATE_BYTES).unwrap_or(false);
+        assert!(oversized);
+        rotate_log(&log);
+
+        let prev = dir.join("desktop.log.1");
+        assert!(prev.exists(), "the oversized log must be KEPT as .1, not deleted");
+        assert_eq!(std::fs::metadata(&prev).unwrap().len(), LOG_ROTATE_BYTES + 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
